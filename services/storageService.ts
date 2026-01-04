@@ -60,6 +60,21 @@ export const importSales = (sales: CarSale[]): void => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sales));
 }
 
+export const mergeSales = (newSales: CarSale[]): CarSale[] => {
+    const current = getStoredSales();
+    const updated = [...newSales, ...current];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+
+    // Automatically populate auxiliary databases (Dealers, Vehicles, Submodels) from imported data
+    newSales.forEach(s => {
+        if (s.dealer && s.dealer !== 'Unknown') addSavedDealer(s.dealer);
+        if (s.make && s.model) addVehicleData(s.make, s.model);
+        if (s.subModel && s.subModel !== 'Base' && s.subModel !== 'Unknown') addSavedSubModel(s.subModel);
+    });
+
+    return updated;
+};
+
 // --- Dealer Storage ---
 
 export const getSavedDealers = (): string[] => {

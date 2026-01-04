@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Download, Plus, LayoutDashboard, List, Car } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Download, Plus, LayoutDashboard, List, Car, Upload } from 'lucide-react';
 import { CarSale, Currency, CarStats } from './types';
-import { getStoredSales, saveSale, deleteSale } from './services/storageService';
+import { getStoredSales, saveSale, deleteSale, mergeSales } from './services/storageService';
 import CarForm from './components/CarForm';
 import Dashboard from './components/Dashboard';
 import CarTable from './components/CarTable';
+import { v4 as uuidv4 } from 'uuid';
 
 // Mock Exchange Rates (Base NGN)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -20,6 +21,8 @@ const App: React.FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingSale, setEditingSale] = useState<CarSale | null>(null);
   const [displayCurrency, setDisplayCurrency] = useState<Currency>(Currency.NGN);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setSales(getStoredSales());
@@ -51,6 +54,7 @@ const App: React.FC = () => {
     }
   };
 
+  // --- Export Logic ---
   const handleExport = () => {
     const headers = ['Make', 'Model', 'SubModel', 'Year', 'Price', 'Currency', 'Date Listed', 'Date Sold', 'Days to Sell', 'Dealer', 'Tags'];
     const csvContent = [
@@ -80,6 +84,78 @@ const App: React.FC = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  // --- Import Logic ---
+  const handleImportClick = () => {
+      if (fileInputRef.current) {
+          fileInputRef.current.value = ''; // Reset
+          fileInputRef.current.click();
+      }
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+          const content = e.target?.result as string;
+          if (content) {
+              try {
+                  const lines = content.split('\n');
+                  const newSales: CarSale[] = [];
+                  
+                  // Start from 1 to skip header
+                  for (let i = 1; i < lines.length; i++) {
+                      const line = lines[i].trim();
+                      if (!line) continue;
+                      
+                      // Our export format wraps everything in quotes: "Value","Value"
+                      // We strip the start/end quotes and split by ","
+                      if (line.startsWith('"') && line.endsWith('"')) {
+                          const rawValues = line.substring(1, line.length - 1).split('","');
+                          
+                          // Expected Indices: 
+                          // 0: Make, 1: Model, 2: Sub, 3: Year, 4: Price, 5: Currency, 
+                          // 6: Listed, 7: Sold, 8: Days, 9: Dealer, 10: Tags
+                          
+                          if (rawValues.length >= 6) {
+                             const sale: CarSale = {
+                                 id: uuidv4(), // Generate new ID for import
+                                 make: rawValues[0],
+                                 model: rawValues[1],
+                                 subModel: rawValues[2],
+                                 year: rawValues[3],
+                                 price: Number(rawValues[4]),
+                                 originalCurrency: rawValues[5] as Currency,
+                                 dateListed: rawValues[6],
+                                 dateSold: rawValues[7],
+                                 daysToSell: rawValues[8] ? Number(rawValues[8]) : undefined,
+                                 dealer: rawValues[9],
+                                 tags: rawValues[10] ? rawValues[10].split(';') : []
+                             };
+                             newSales.push(sale);
+                          }
+                      }
+                  }
+
+                  if (newSales.length > 0) {
+                      const updated = mergeSales(newSales);
+                      setSales(updated);
+                      alert(`Successfully imported ${newSales.length} records.`);
+                  } else {
+                      alert("No valid records found in the CSV file.");
+                  }
+
+              } catch (error) {
+                  console.error(error);
+                  alert("Failed to parse CSV file. Ensure it matches the export format.");
+              }
+          }
+      };
+      reader.readAsText(file);
+  };
+
 
   // Compute Stats
   const stats: CarStats = useMemo(() => {
@@ -181,13 +257,31 @@ const App: React.FC = () => {
                 {Object.values(Currency).map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               
-              <button 
-                onClick={handleExport}
-                className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                title="Export to Excel/CSV"
-              >
-                <Download className="w-5 h-5" />
-              </button>
+              <div className="flex items-center bg-gray-100 rounded-lg p-1">
+                  <button 
+                    onClick={handleImportClick}
+                    className="p-1.5 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-md transition-all shadow-sm"
+                    title="Import from CSV"
+                  >
+                    <Upload className="w-5 h-5" />
+                  </button>
+                  <div className="w-px h-5 bg-gray-300 mx-1"></div>
+                  <button 
+                    onClick={handleExport}
+                    className="p-1.5 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-md transition-all shadow-sm"
+                    title="Export to Excel/CSV"
+                  >
+                    <Download className="w-5 h-5" />
+                  </button>
+              </div>
+              
+              <input 
+                 type="file" 
+                 accept=".csv" 
+                 ref={fileInputRef} 
+                 className="hidden" 
+                 onChange={handleFileChange}
+              />
             </div>
           </div>
         </div>
