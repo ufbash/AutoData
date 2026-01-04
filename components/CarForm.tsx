@@ -51,7 +51,7 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
 
     return (
         <div className={`relative ${className}`} ref={wrapperRef}>
-            <label className="block text-xs font-semibold text-gray-500 uppercase">{label}</label>
+            <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">{label}</label>
             <div className="relative mt-1">
                 <input 
                     type="text" 
@@ -62,15 +62,15 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
                     }} 
                     onFocus={() => setIsOpen(true)}
                     placeholder={placeholder}
-                    className="w-full p-2 pr-8 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" 
+                    className="w-full p-2 pr-8 border rounded focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" 
                     autoComplete="off"
                     required={required}
                 />
-                <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2 top-3 pointer-events-none" />
+                <ChevronDown className="w-4 h-4 text-[#a58039] absolute right-2 top-3 pointer-events-none" />
             </div>
             
             {isOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-y-auto">
+                <div className="absolute z-50 w-full mt-1 bg-white border border-[#a58039]/20 rounded-md shadow-lg max-h-48 overflow-y-auto">
                     {value && filteredOptions.length === 0 && (
                         <div className="p-2 text-xs text-gray-400 italic">No existing matches. Will be saved as new.</div>
                     )}
@@ -81,7 +81,7 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
                                 onChange(opt);
                                 setIsOpen(false);
                             }}
-                            className="px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer flex justify-between items-center group"
+                            className="px-3 py-2 text-sm text-[#403f4c] hover:bg-[#F0EDDE] cursor-pointer flex justify-between items-center group"
                         >
                             <span>{opt}</span>
                             <button 
@@ -89,7 +89,7 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
                                     e.stopPropagation();
                                     onRemoveOption(opt);
                                 }}
-                                className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                                className="text-gray-300 hover:text-[#ba3b46] opacity-0 group-hover:opacity-100 transition-opacity p-1"
                                 title={`Remove ${opt} from saved list`}
                                 type="button"
                             >
@@ -290,19 +290,19 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
   };
 
   return (
-    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100 mb-8">
-      <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-        {initialData ? <Pencil className="w-5 h-5 text-indigo-600" /> : <Plus className="w-5 h-5 text-indigo-600" />}
+    <div className="bg-white p-6 rounded-xl shadow-lg border border-[#a58039]/20 mb-8">
+      <h2 className="text-xl font-bold text-[#403f4c] mb-4 flex items-center gap-2">
+        {initialData ? <Pencil className="w-5 h-5 text-[#a58039]" /> : <Plus className="w-5 h-5 text-[#a58039]" />}
         {initialData ? 'Edit Sale Record' : 'Record New Sale'}
       </h2>
 
       {step === 'input' && (
         <div className="space-y-4">
-          <div className="flex bg-gray-100 p-1 rounded-lg w-fit mb-2">
+          <div className="flex bg-[#F0EDDE] p-1 rounded-lg w-fit mb-2">
               <button
                 onClick={() => setFillMode('ai')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    fillMode === 'ai' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700'
+                    fillMode === 'ai' ? 'bg-white shadow-sm text-[#a58039]' : 'text-[#403f4c] hover:text-[#a58039]'
                 }`}
               >
                   <Bot className="w-3 h-3" />
@@ -311,7 +311,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
               <button
                 onClick={() => setFillMode('sequence')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    fillMode === 'sequence' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700'
+                    fillMode === 'sequence' ? 'bg-white shadow-sm text-[#a58039]' : 'text-[#403f4c] hover:text-[#a58039]'
                 }`}
               >
                   <List className="w-3 h-3" />
@@ -320,7 +320,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-[#403f4c] mb-1">
               {fillMode === 'ai' ? 'Describe the sale' : 'Vehicle Details (Comma Separated)'}
             </label>
             <div className="flex gap-2">
@@ -331,7 +331,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                 placeholder={fillMode === 'ai' 
                     ? "e.g. 2021 Toyota Camry LE sold by Abuja Cars for 5m NGN" 
                     : "Make, Model, SubModel, Year, Price, Dealer"}
-                className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none"
                 onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                         e.preventDefault();
@@ -343,7 +343,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                 type="button"
                 onClick={handleAutofill}
                 disabled={isProcessing || !rawInput}
-                className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 transition-colors min-w-[120px] justify-center"
+                className="bg-[#403f4c] text-[#F0EDDE] px-4 py-2 rounded-lg hover:bg-[#2d2c35] disabled:opacity-50 flex items-center gap-2 transition-colors min-w-[120px] justify-center"
               >
                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                 {fillMode === 'ai' ? 'Auto-Fill' : 'Parse'}
@@ -356,7 +356,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
             </p>
           </div>
           <div className="flex justify-end pt-2">
-             <button onClick={() => setStep('verify')} className="text-sm text-indigo-600 hover:underline">
+             <button onClick={() => setStep('verify')} className="text-sm text-[#a58039] hover:underline">
                 Skip and enter manually
              </button>
           </div>
@@ -372,8 +372,6 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                 value={make}
                 onChange={(val) => {
                     setMake(val);
-                    // If make changes, clear model if it's no longer valid? 
-                    // Actually, let's keep model unless user changes it, but dropdown will update.
                 }}
                 options={makeOptions}
                 onRemoveOption={handleRemoveMake}
@@ -401,36 +399,36 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
             />
 
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase">Year</label>
-              <input required type="text" value={year} onChange={e => setYear(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-indigo-500 outline-none" />
+              <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Year</label>
+              <input required type="text" value={year} onChange={e => setYear(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" />
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex gap-2">
                 <div className="w-24">
-                   <label className="block text-xs font-semibold text-gray-500 uppercase">Currency</label>
+                   <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Currency</label>
                    <select 
                      value={currency} 
                      onChange={(e) => setCurrency(e.target.value as Currency)}
-                     className="w-full p-2 border rounded mt-1 bg-gray-50"
+                     className="w-full p-2 border rounded mt-1 bg-[#F0EDDE] border-gray-300 focus:ring-2 focus:ring-[#a58039] outline-none"
                    >
                      {Object.values(Currency).map(c => <option key={c} value={c}>{c}</option>)}
                    </select>
                 </div>
                 <div className="flex-1">
-                    <label className="block text-xs font-semibold text-gray-500 uppercase">Sold Price</label>
-                    <input required type="number" min="0" value={price} onChange={e => setPrice(Number(e.target.value))} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="0.00" />
+                    <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Sold Price</label>
+                    <input required type="number" min="0" value={price} onChange={e => setPrice(Number(e.target.value))} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" placeholder="0.00" />
                 </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase">Date Listed</label>
-                    <input type="date" value={dateListed} onChange={e => setDateListed(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Date Listed</label>
+                    <input type="date" value={dateListed} onChange={e => setDateListed(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" />
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase">Date Sold</label>
-                    <input type="date" value={dateSold} onChange={e => setDateSold(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Date Sold</label>
+                    <input type="date" value={dateSold} onChange={e => setDateSold(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" />
                 </div>
             </div>
           </div>
@@ -448,7 +446,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
               />
               
               <div>
-                 <label className="block text-xs font-semibold text-gray-500 uppercase">Tags</label>
+                 <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Tags</label>
                  <div className="relative mt-1">
                     <div className="flex gap-2">
                         <input
@@ -457,19 +455,19 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                             onChange={(e) => setTagInput(e.target.value)}
                             onKeyDown={handleAddTag}
                             placeholder="Type tag & press enter"
-                            className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                            className="w-full p-2 border rounded focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300"
                         />
-                        <button type="button" onClick={() => handleAddTag()} className="px-3 py-2 bg-gray-100 rounded hover:bg-gray-200">
+                        <button type="button" onClick={() => handleAddTag()} className="px-3 py-2 bg-[#F0EDDE] rounded hover:bg-[#e0ddce] text-[#403f4c]">
                             <Plus className="w-4 h-4" />
                         </button>
                     </div>
                  </div>
                  <div className="flex flex-wrap gap-2 mt-2">
                     {tags.map(tag => (
-                        <span key={tag} className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full text-xs">
-                            <Tag className="w-3 h-3" />
+                        <span key={tag} className="inline-flex items-center gap-1 bg-[#F0EDDE] text-[#403f4c] px-2 py-1 rounded-full text-xs border border-[#a58039]/20">
+                            <Tag className="w-3 h-3 text-[#a58039]" />
                             {tag}
-                            <button type="button" onClick={() => removeTag(tag)} className="hover:text-indigo-900">
+                            <button type="button" onClick={() => removeTag(tag)} className="hover:text-[#ba3b46]">
                                 <X className="w-3 h-3" />
                             </button>
                         </span>
@@ -482,13 +480,13 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              className="px-4 py-2 text-[#403f4c] hover:bg-[#F0EDDE] rounded-lg"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 flex items-center gap-2"
+              className="px-6 py-2 bg-[#61988e] text-white font-medium rounded-lg hover:bg-[#4d7d74] flex items-center gap-2 shadow-sm"
             >
               <CheckCircle className="w-4 h-4" />
               {initialData ? 'Update Sale' : 'Save to Database'}

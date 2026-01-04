@@ -113,18 +113,19 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
     }
   };
 
-  const COLORS = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
+  // New Palette: Gunmetal #403f4c, Gold #a58039, Seagrass #61988e, Cherry #ba3b46
+  const COLORS = ['#a58039', '#403f4c', '#61988e', '#ba3b46', '#8c6d30'];
 
   return (
     <div className="space-y-6">
       
       {/* Top Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-500">Total Units Sold</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.totalSold}</p>
+              <p className="text-2xl font-bold text-[#403f4c] mt-1">{stats.totalSold}</p>
             </div>
             <div className="bg-blue-100 p-3 rounded-full">
               <TrendingUp className="w-6 h-6 text-blue-600" />
@@ -132,11 +133,11 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-500">Avg. Days to Sell</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.avgDaysToSell.toFixed(1)} <span className="text-sm text-gray-400 font-normal">days</span></p>
+              <p className="text-2xl font-bold text-[#403f4c] mt-1">{stats.avgDaysToSell.toFixed(1)} <span className="text-sm text-gray-400 font-normal">days</span></p>
             </div>
             <div className="bg-orange-100 p-3 rounded-full">
               <Clock className="w-6 h-6 text-orange-600" />
@@ -144,11 +145,11 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-500">Total Volume</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{formatMoney(stats.totalVolume)}</p>
+              <p className="text-2xl font-bold text-[#403f4c] mt-1">{formatMoney(stats.totalVolume)}</p>
             </div>
             <div className="bg-green-100 p-3 rounded-full">
               <DollarSign className="w-6 h-6 text-green-600" />
@@ -156,14 +157,14 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
             <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-500">Fastest Mover</p>
-              <p className="text-sm font-bold text-gray-900 mt-1 truncate max-w-[120px]" title={stats.fastestMoving ? `${stats.fastestMoving.make} ${stats.fastestMoving.model}` : 'N/A'}>
+              <p className="text-sm font-bold text-[#403f4c] mt-1 truncate max-w-[120px]" title={stats.fastestMoving ? `${stats.fastestMoving.make} ${stats.fastestMoving.model}` : 'N/A'}>
                   {stats.fastestMoving ? `${stats.fastestMoving.make} ${stats.fastestMoving.model}` : 'N/A'}
               </p>
-              <p className="text-xs text-green-600">
+              <p className="text-xs text-[#61988e]">
                   {stats.fastestMoving && stats.fastestMoving.daysToSell !== undefined ? `${stats.fastestMoving.daysToSell} days` : '-'}
               </p>
             </div>
@@ -178,16 +179,16 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
           {/* Sales Over Time (Span 2 cols) */}
-          <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
             <div className="flex justify-between items-center mb-6">
-                <h3 className="text-lg font-semibold text-gray-800">Sales Trends</h3>
-                <div className="flex bg-gray-100 rounded-lg p-1">
+                <h3 className="text-lg font-bold text-[#403f4c]">Sales Trends</h3>
+                <div className="flex bg-[#F0EDDE] rounded-lg p-1">
                     {(['weekly', 'monthly', 'yearly'] as TimeFrame[]).map(t => (
                         <button
                             key={t}
                             onClick={() => setTimeFrame(t)}
                             className={`px-3 py-1 text-xs font-medium rounded-md capitalize transition-colors ${
-                                timeFrame === t ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-900'
+                                timeFrame === t ? 'bg-white shadow text-[#a58039]' : 'text-[#403f4c] hover:text-[#a58039]'
                             }`}
                         >
                             {t}
@@ -200,13 +201,13 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
                     <AreaChart data={timeSeriesData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                         <defs>
                             <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.1}/>
-                                <stop offset="95%" stopColor="#4F46E5" stopOpacity={0}/>
+                                <stop offset="5%" stopColor="#a58039" stopOpacity={0.1}/>
+                                <stop offset="95%" stopColor="#a58039" stopOpacity={0}/>
                             </linearGradient>
                         </defs>
                         <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12}} />
                         <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12}} />
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E5E5" />
                         <Tooltip 
                             contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                             formatter={(value: any, name: string) => [
@@ -214,14 +215,14 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
                                 name === 'revenue' ? 'Revenue' : 'Units Sold'
                             ]}
                         />
-                        <Area type="monotone" dataKey="sales" stroke="#4F46E5" fillOpacity={1} fill="url(#colorSales)" strokeWidth={2} />
+                        <Area type="monotone" dataKey="sales" stroke="#a58039" fillOpacity={1} fill="url(#colorSales)" strokeWidth={2} />
                     </AreaChart>
                 </ResponsiveContainer>
             </div>
           </div>
 
           {/* AI Prediction Card */}
-          <div className="bg-gradient-to-br from-indigo-900 to-violet-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden">
+          <div className="bg-[#403f4c] p-6 rounded-xl shadow-lg text-[#F0EDDE] relative overflow-hidden">
              <div className="absolute top-0 right-0 p-3 opacity-10">
                  <Brain className="w-32 h-32" />
              </div>
@@ -232,12 +233,12 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
              
              {!forecast && !loadingForecast && (
                  <div className="h-64 flex flex-col items-center justify-center text-center">
-                     <p className="text-indigo-200 mb-4 text-sm">
+                     <p className="text-[#F0EDDE]/80 mb-4 text-sm">
                          Analyze historical sales data to predict next quarter's demand.
                      </p>
                      <button 
                         onClick={handleGenerateForecast}
-                        className="bg-white text-indigo-900 px-4 py-2 rounded-lg font-medium hover:bg-indigo-50 transition-colors"
+                        className="bg-[#a58039] text-white px-4 py-2 rounded-lg font-medium hover:bg-[#8c6d30] transition-colors"
                      >
                          Generate Forecast
                      </button>
@@ -246,31 +247,31 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
 
              {loadingForecast && (
                  <div className="h-64 flex flex-col items-center justify-center">
-                     <Loader2 className="w-8 h-8 animate-spin text-white mb-2" />
-                     <p className="text-indigo-200 text-sm">Analyzing market trends...</p>
+                     <Loader2 className="w-8 h-8 animate-spin text-[#F0EDDE] mb-2" />
+                     <p className="text-[#F0EDDE]/80 text-sm">Analyzing market trends...</p>
                  </div>
              )}
 
              {forecast && (
                  <div className="space-y-4 animate-in fade-in">
                      <div>
-                         <p className="text-xs uppercase text-indigo-300 font-bold mb-1">Sentiment</p>
+                         <p className="text-xs uppercase text-[#F0EDDE]/60 font-bold mb-1">Sentiment</p>
                          <span className={`inline-block px-2 py-1 rounded text-xs font-bold uppercase ${
-                             forecast.marketSentiment === 'bullish' ? 'bg-green-500/20 text-green-200' :
-                             forecast.marketSentiment === 'bearish' ? 'bg-red-500/20 text-red-200' :
+                             forecast.marketSentiment === 'bullish' ? 'bg-[#61988e]/30 text-[#61988e]' :
+                             forecast.marketSentiment === 'bearish' ? 'bg-[#ba3b46]/30 text-[#ba3b46]' :
                              'bg-yellow-500/20 text-yellow-200'
                          }`}>
                              {forecast.marketSentiment}
                          </span>
                      </div>
                      <div>
-                         <p className="text-xs uppercase text-indigo-300 font-bold mb-1">Recommendation</p>
-                         <p className="text-sm leading-relaxed text-indigo-50">
+                         <p className="text-xs uppercase text-[#F0EDDE]/60 font-bold mb-1">Recommendation</p>
+                         <p className="text-sm leading-relaxed text-[#F0EDDE]">
                              {forecast.prediction}
                          </p>
                      </div>
                      <div>
-                         <p className="text-xs uppercase text-indigo-300 font-bold mb-2">Acquire Now</p>
+                         <p className="text-xs uppercase text-[#F0EDDE]/60 font-bold mb-2">Acquire Now</p>
                          <div className="flex flex-wrap gap-2">
                              {forecast.recommendedModels.map(m => (
                                  <span key={m} className="bg-white/10 px-2 py-1 rounded text-xs border border-white/20">
@@ -286,12 +287,12 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Top Models Chart */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-800 mb-6">Top Selling Models</h3>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
+            <h3 className="text-lg font-bold text-[#403f4c] mb-6">Top Selling Models</h3>
             <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={modelData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E5E5" />
                 <XAxis type="number" hide />
                 <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 11}} />
                 <Tooltip />
@@ -306,19 +307,19 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
         </div>
 
         {/* Top Dealers Chart */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
             <div className="flex items-center gap-2 mb-6">
                 <Briefcase className="w-5 h-5 text-gray-500" />
-                <h3 className="text-lg font-semibold text-gray-800">Top Performing Dealers</h3>
+                <h3 className="text-lg font-bold text-[#403f4c]">Top Performing Dealers</h3>
             </div>
             <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dealerData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E5E5" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 11}} />
                 <YAxis axisLine={false} tickLine={false} />
                 <Tooltip />
-                <Bar dataKey="Sales" fill="#10B981" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Sales" fill="#61988e" radius={[4, 4, 0, 0]} />
                 </BarChart>
             </ResponsiveContainer>
             </div>

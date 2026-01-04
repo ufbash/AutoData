@@ -1,5 +1,5 @@
 {
-  "name": "AutoTrend Tracker",
+  "name": "AutoData",
   "description": "A smart car sales database that uses AI to standardize vehicle details, tracks market demand, calculates sales velocity, and helps determine inventory acquisition strategies with NGN currency focus.",
   "requestFramePermissions": []
 }

@@ -78,7 +78,7 @@ const App: React.FC = () => {
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `autotrend_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `autodata_export_${new Date().toISOString().slice(0, 10)}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -234,41 +234,46 @@ const App: React.FC = () => {
   }, [sales, displayCurrency]);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-[#F0EDDE] text-[#403f4c] font-sans">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white/80 backdrop-blur-sm border-b border-[#a58039]/20 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-2">
-              <div className="bg-indigo-600 p-2 rounded-lg">
-                <Car className="w-6 h-6 text-white" />
+            <div className="flex items-center gap-3">
+              <div className="bg-[#a58039] p-2 rounded-lg shadow-sm">
+                <Car className="w-6 h-6 text-[#F0EDDE]" />
               </div>
-              <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-violet-600">
-                AutoTrend Tracker
-              </h1>
+              <div className="flex flex-col">
+                <h1 className="text-2xl font-bold text-[#a58039] leading-none tracking-tight">
+                  AutoData
+                </h1>
+                <span className="text-[10px] font-semibold text-[#403f4c] tracking-[0.2em] uppercase mt-0.5">
+                  by caplimo
+                </span>
+              </div>
             </div>
             
             <div className="flex items-center gap-4">
               <select 
                 value={displayCurrency} 
                 onChange={(e) => setDisplayCurrency(e.target.value as Currency)}
-                className="bg-gray-100 border-none text-sm font-medium rounded-lg py-2 pl-3 pr-8 focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                className="bg-[#F0EDDE] border-none text-sm font-medium rounded-lg py-2 pl-3 pr-8 focus:ring-2 focus:ring-[#a58039] cursor-pointer text-[#403f4c]"
               >
                 {Object.values(Currency).map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               
-              <div className="flex items-center bg-gray-100 rounded-lg p-1">
+              <div className="flex items-center bg-[#F0EDDE] rounded-lg p-1">
                   <button 
                     onClick={handleImportClick}
-                    className="p-1.5 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-md transition-all shadow-sm"
+                    className="p-1.5 text-[#403f4c]/70 hover:text-[#a58039] hover:bg-white rounded-md transition-all shadow-sm"
                     title="Import from CSV"
                   >
                     <Upload className="w-5 h-5" />
                   </button>
-                  <div className="w-px h-5 bg-gray-300 mx-1"></div>
+                  <div className="w-px h-5 bg-[#a58039]/20 mx-1"></div>
                   <button 
                     onClick={handleExport}
-                    className="p-1.5 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-md transition-all shadow-sm"
+                    className="p-1.5 text-[#403f4c]/70 hover:text-[#a58039] hover:bg-white rounded-md transition-all shadow-sm"
                     title="Export to Excel/CSV"
                   >
                     <Download className="w-5 h-5" />
@@ -292,13 +297,13 @@ const App: React.FC = () => {
         
         {/* Actions Bar */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-          <div className="flex bg-white rounded-lg p-1 shadow-sm border border-gray-200">
+          <div className="flex bg-white rounded-lg p-1 shadow-sm border border-[#a58039]/20">
             <button
               onClick={() => setView('dashboard')}
               className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
                 view === 'dashboard' 
-                  ? 'bg-indigo-600 text-white shadow-sm' 
-                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' 
+                  : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'
               }`}
             >
               <LayoutDashboard className="w-4 h-4" />
@@ -308,8 +313,8 @@ const App: React.FC = () => {
               onClick={() => setView('list')}
               className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
                 view === 'list' 
-                  ? 'bg-indigo-600 text-white shadow-sm' 
-                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' 
+                  : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'
               }`}
             >
               <List className="w-4 h-4" />
@@ -322,7 +327,7 @@ const App: React.FC = () => {
                 setShowForm(!showForm);
                 setEditingSale(null);
             }}
-            className="flex items-center gap-2 bg-gray-900 text-white px-5 py-2.5 rounded-lg hover:bg-gray-800 transition-all shadow-lg shadow-gray-900/20 active:scale-95"
+            className="flex items-center gap-2 bg-[#403f4c] text-[#F0EDDE] px-5 py-2.5 rounded-lg hover:bg-[#403f4c]/90 transition-all shadow-lg shadow-[#403f4c]/20 active:scale-95 border border-[#403f4c]"
           >
             <Plus className="w-5 h-5" />
             {showForm && !editingSale ? 'Cancel Entry' : 'Add Sold Car'}
