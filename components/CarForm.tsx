@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Plus, Sparkles, CheckCircle, X, Tag, List, Trash2, ChevronDown, Bot, Pencil } from 'lucide-react';
+import { Loader2, Plus, Sparkles, CheckCircle, X, Tag, List, Trash2, ChevronDown, Bot, Pencil, Globe, CalendarOff } from 'lucide-react';
 import { standardizeVehicleString } from '../services/geminiService';
 import { 
     addSavedDealer, getSavedDealers, removeSavedDealer,
@@ -8,11 +8,13 @@ import {
 } from '../services/storageService';
 import { CarSale, Currency } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { convertToUSD } from '../services/currencyService';
 
 interface CarFormProps {
   onSaleAdded: (sale: CarSale) => void;
   onCancel: () => void;
   initialData?: CarSale | null;
+  currentRates: Record<string, number>;
 }
 
 type FillMode = 'ai' | 'sequence';
@@ -27,10 +29,11 @@ interface AutocompleteInputProps {
     onRemoveOption: (opt: string) => void;
     required?: boolean;
     className?: string;
+    error?: string;
 }
 
 const AutocompleteInput: React.FC<AutocompleteInputProps> = ({ 
-    label, value, onChange, options, placeholder, onRemoveOption, required, className 
+    label, value, onChange, options, placeholder, onRemoveOption, required, className, error 
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef<HTMLDivElement>(null);
@@ -62,12 +65,17 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
                     }} 
                     onFocus={() => setIsOpen(true)}
                     placeholder={placeholder}
-                    className="w-full p-2 pr-8 border rounded focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" 
+                    className={`w-full p-2 pr-8 border rounded focus:ring-2 outline-none ${
+                        error 
+                        ? 'border-[#ba3b46] focus:ring-[#ba3b46] focus:border-[#ba3b46]' 
+                        : 'border-gray-300 focus:ring-[#a58039] focus:border-[#a58039]'
+                    }`}
                     autoComplete="off"
                     required={required}
                 />
                 <ChevronDown className="w-4 h-4 text-[#a58039] absolute right-2 top-3 pointer-events-none" />
             </div>
+            {error && <p className="text-[#ba3b46] text-xs mt-1">{error}</p>}
             
             {isOpen && (
                 <div className="absolute z-50 w-full mt-1 bg-white border border-[#a58039]/20 rounded-md shadow-lg max-h-48 overflow-y-auto">
@@ -107,7 +115,7 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
 };
 
 
-const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData }) => {
+const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, currentRates }) => {
   const [fillMode, setFillMode] = useState<FillMode>('ai');
   const [rawInput, setRawInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -132,6 +140,12 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
   // Tag State
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState<string[]>([]);
+  
+  // External Data Mode
+  const [isExternalData, setIsExternalData] = useState(false);
+
+  // Validation State
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     // Load saved data
@@ -151,6 +165,11 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
         setDateSold(initialData.dateSold || '');
         setDealer(initialData.dealer);
         setTags(initialData.tags || []);
+        
+        // Check if it was external data
+        if (initialData.tags?.includes('External Data')) {
+            setIsExternalData(true);
+        }
     }
   }, [initialData]);
 
@@ -159,6 +178,18 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
   // Find key case-insensitive to get models
   const matchedMakeKey = Object.keys(vehicleDB).find(k => k.toLowerCase() === make.toLowerCase());
   const modelOptions = matchedMakeKey ? vehicleDB[matchedMakeKey] : [];
+
+  // Toggle External Data
+  const handleExternalDataToggle = (active: boolean) => {
+      setIsExternalData(active);
+      if (active) {
+          if (!tags.includes('External Data')) {
+              setTags(prev => [...prev, 'External Data']);
+          }
+      } else {
+          setTags(prev => prev.filter(t => t !== 'External Data'));
+      }
+  };
 
   // --- Handlers ---
 
@@ -205,15 +236,22 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
   };
 
   const handleAddTag = (e?: React.KeyboardEvent) => {
-    if (e && e.key !== 'Enter') return;
-    e?.preventDefault();
-    if (tagInput.trim() && !tags.includes(tagInput.trim())) {
-      setTags([...tags, tagInput.trim()]);
+    // Allow 'Enter' or ',' to add tag
+    if (e && e.key !== 'Enter' && e.key !== ',') return;
+    
+    e?.preventDefault(); // Prevent comma from entering field
+    
+    const cleanTag = tagInput.replace(',', '').trim();
+    if (cleanTag && !tags.includes(cleanTag)) {
+      setTags([...tags, cleanTag]);
       setTagInput('');
     }
   };
 
   const removeTag = (tagToRemove: string) => {
+    if (tagToRemove === 'External Data') {
+        setIsExternalData(false);
+    }
     setTags(tags.filter(t => t !== tagToRemove));
   };
 
@@ -244,12 +282,31 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
       setSavedSubModels(getSavedSubModels());
   };
 
+  const validate = (): boolean => {
+      const newErrors: Record<string, string> = {};
+      let isValid = true;
+
+      // Validate Year: 4 digits, reasonable range
+      const yearNum = parseInt(year);
+      if (!/^\d{4}$/.test(year) || isNaN(yearNum) || yearNum < 1900 || yearNum > new Date().getFullYear() + 2) {
+          newErrors.year = "Enter a valid 4-digit year";
+          isValid = false;
+      }
+
+      // Validate Price: Positive Number
+      if (!price || Number(price) <= 0) {
+          newErrors.price = "Price must be a positive number";
+          isValid = false;
+      }
+
+      setErrors(newErrors);
+      return isValid;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!price) {
-        alert("Price is required");
-        return;
-    }
+    
+    if (!validate()) return;
 
     // Auto-Save New Data
     if (make && model) {
@@ -264,6 +321,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
     }
 
     let daysToSell: number | undefined = undefined;
+    
     if (dateListed && dateSold) {
         const listed = new Date(dateListed);
         const sold = new Date(dateSold);
@@ -271,19 +329,31 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
         daysToSell = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     }
 
+    // Ensure External Data tag is present if mode is active
+    let finalTags = [...tags];
+    if (isExternalData && !finalTags.includes('External Data')) {
+        finalTags.push('External Data');
+    }
+
+    // Convert to USD for storage (Truth Source)
+    const numericPrice = Number(price);
+    const usdValue = convertToUSD(numericPrice, currency, currentRates);
+
     const saleData: CarSale = {
       id: initialData ? initialData.id : uuidv4(),
       make,
       model,
       subModel: subModel || 'Base',
       year,
-      price: Number(price),
+      price: numericPrice,
       originalCurrency: currency,
-      dateListed,
+      priceUSD: usdValue, // Stored Truth
+      exchangeRate: currentRates[currency] || 1, // Store rate at time of entry
+      dateListed: dateListed || undefined,
       dateSold,
       daysToSell,
       dealer: finalDealer,
-      tags
+      tags: finalTags
     };
 
     onSaleAdded(saleData);
@@ -365,6 +435,26 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
 
       {step === 'verify' && (
         <form onSubmit={handleSubmit} className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          
+          {/* External Data Toggle */}
+          <div 
+             className={`flex items-center justify-between p-3 rounded-lg border transition-colors cursor-pointer ${isExternalData ? 'bg-[#61988e]/10 border-[#61988e]/30' : 'bg-gray-50 border-gray-200'}`}
+             onClick={() => handleExternalDataToggle(!isExternalData)}
+          >
+             <div className="flex items-center gap-3">
+                 <div className={`p-2 rounded-full ${isExternalData ? 'bg-[#61988e] text-white' : 'bg-gray-200 text-gray-500'}`}>
+                     <Globe className="w-5 h-5" />
+                 </div>
+                 <div>
+                     <p className={`text-sm font-bold ${isExternalData ? 'text-[#61988e]' : 'text-[#403f4c]'}`}>External Market Data Mode</p>
+                     <p className="text-xs text-gray-500">Enable if this isn't your inventory. Use accurate dates if available for Market Analysis.</p>
+                 </div>
+             </div>
+             <div className={`w-12 h-6 rounded-full relative transition-colors ${isExternalData ? 'bg-[#61988e]' : 'bg-gray-300'}`}>
+                 <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${isExternalData ? 'left-7' : 'left-1'}`}></div>
+             </div>
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             
             <AutocompleteInput 
@@ -400,7 +490,17 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
 
             <div>
               <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Year</label>
-              <input required type="text" value={year} onChange={e => setYear(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" />
+              <input 
+                  type="text" 
+                  value={year} 
+                  onChange={e => {
+                      setYear(e.target.value);
+                      if (errors.year) setErrors({...errors, year: ''});
+                  }} 
+                  className={`w-full p-2 border rounded mt-1 outline-none ${errors.year ? 'border-[#ba3b46] focus:ring-[#ba3b46]' : 'border-gray-300 focus:ring-[#a58039] focus:border-[#a58039]'}`}
+                  maxLength={4}
+              />
+              {errors.year && <p className="text-[#ba3b46] text-xs mt-1">{errors.year}</p>}
             </div>
           </div>
 
@@ -418,13 +518,25 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                 </div>
                 <div className="flex-1">
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Sold Price</label>
-                    <input required type="number" min="0" value={price} onChange={e => setPrice(Number(e.target.value))} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" placeholder="0.00" />
+                    <input 
+                        type="number" 
+                        min="0" 
+                        value={price} 
+                        onChange={e => {
+                            setPrice(Number(e.target.value));
+                            if (errors.price) setErrors({...errors, price: ''});
+                        }} 
+                        className={`w-full p-2 border rounded mt-1 outline-none ${errors.price ? 'border-[#ba3b46] focus:ring-[#ba3b46]' : 'border-gray-300 focus:ring-[#a58039] focus:border-[#a58039]'}`}
+                        placeholder="0.00" 
+                    />
+                    {errors.price && <p className="text-[#ba3b46] text-xs mt-1">{errors.price}</p>}
                 </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
                 <div>
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Date Listed</label>
                     <input type="date" value={dateListed} onChange={e => setDateListed(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" />
+                    {isExternalData && <p className="text-[10px] text-gray-400 mt-1">Leave blank if unknown.</p>}
                 </div>
                 <div>
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Date Sold</label>
@@ -454,7 +566,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                             value={tagInput}
                             onChange={(e) => setTagInput(e.target.value)}
                             onKeyDown={handleAddTag}
-                            placeholder="Type tag & press enter"
+                            placeholder="Type tag & press enter or comma"
                             className="w-full p-2 border rounded focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300"
                         />
                         <button type="button" onClick={() => handleAddTag()} className="px-3 py-2 bg-[#F0EDDE] rounded hover:bg-[#e0ddce] text-[#403f4c]">
@@ -464,10 +576,10 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData })
                  </div>
                  <div className="flex flex-wrap gap-2 mt-2">
                     {tags.map(tag => (
-                        <span key={tag} className="inline-flex items-center gap-1 bg-[#F0EDDE] text-[#403f4c] px-2 py-1 rounded-full text-xs border border-[#a58039]/20">
-                            <Tag className="w-3 h-3 text-[#a58039]" />
+                        <span key={tag} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border ${tag === 'External Data' ? 'bg-[#61988e]/10 text-[#61988e] border-[#61988e]/30' : 'bg-[#F0EDDE] text-[#403f4c] border-[#a58039]/20'}`}>
+                            {tag === 'External Data' ? <Globe className="w-3 h-3" /> : <Tag className="w-3 h-3 text-[#a58039]" />}
                             {tag}
-                            <button type="button" onClick={() => removeTag(tag)} className="hover:text-[#ba3b46]">
+                            <button type="button" onClick={() => removeTag(tag)} className={`hover:text-[#ba3b46] ${tag === 'External Data' ? 'ml-1' : ''}`}>
                                 <X className="w-3 h-3" />
                             </button>
                         </span>

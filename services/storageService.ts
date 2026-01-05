@@ -56,6 +56,14 @@ export const deleteSale = (id: string): CarSale[] => {
   return updated;
 };
 
+export const deleteSales = (ids: string[]): CarSale[] => {
+  const current = getStoredSales();
+  const idsSet = new Set(ids);
+  const updated = current.filter(s => !idsSet.has(s.id));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  return updated;
+};
+
 export const importSales = (sales: CarSale[]): void => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sales));
 }

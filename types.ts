@@ -4,8 +4,10 @@ export interface CarSale {
   model: string;
   subModel: string;
   year: string;
-  price: number;
-  originalCurrency: string;
+  price: number; // Original input price
+  originalCurrency: string; // The currency selected during input
+  priceUSD: number; // The calculated USD value (Source of Truth for value)
+  exchangeRate: number; // The rate used at time of entry (Original -> USD)
   dateListed?: string;
   dateSold?: string;
   daysToSell?: number;

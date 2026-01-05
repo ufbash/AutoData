@@ -1,16 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CarSale, Currency, SortDirection, SortField } from '../types';
-import { ArrowUpDown, ArrowUp, ArrowDown, Trash2, Tag, Filter, User, Pencil } from 'lucide-react';
+import { ArrowUpDown, ArrowUp, ArrowDown, Trash2, Tag, Filter, User, Pencil, AlertCircle, CheckSquare, Square } from 'lucide-react';
+import { convertFromUSD } from '../services/currencyService';
 
 interface CarTableProps {
   sales: CarSale[];
   onDelete: (id: string) => void;
+  onBulkDelete?: (ids: string[]) => void;
   onEdit: (sale: CarSale) => void;
   displayCurrency: Currency;
   exchangeRates: Record<string, number>;
 }
 
-const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCurrency, exchangeRates }) => {
+const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEdit, displayCurrency, exchangeRates }) => {
   const [sortField, setSortField] = useState<SortField>('dateSold');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   
@@ -18,8 +20,21 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
   const [filterDealer, setFilterDealer] = useState('');
   const [filterTag, setFilterTag] = useState('');
 
+  // Delete Modal State
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [saleToDelete, setSaleToDelete] = useState<string | null>(null);
+  const [isBulkDelete, setIsBulkDelete] = useState(false);
+
+  // Selection State
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   const uniqueDealers = Array.from(new Set(sales.map(s => s.dealer))).filter(Boolean);
   const uniqueTags = Array.from(new Set(sales.flatMap(s => s.tags || [])));
+
+  // Clear selections when filters change
+  useEffect(() => {
+      setSelectedIds(new Set());
+  }, [filterDealer, filterTag]);
 
   const handleSort = (field: SortField) => {
     if (field === sortField) {
@@ -37,10 +52,14 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
       <ArrowDown className="w-3 h-3 text-[#a58039]" />;
   };
 
-  const convertPrice = (price: number, fromCurrency: string) => {
-    if (fromCurrency === displayCurrency) return price;
-    const priceInNGN = fromCurrency === 'NGN' ? price : price * (exchangeRates[fromCurrency] || 1);
-    return displayCurrency === 'NGN' ? priceInNGN : priceInNGN / (exchangeRates[displayCurrency] || 1);
+  const getDisplayPrice = (sale: CarSale) => {
+      // Use stored USD value as truth, convert to display currency using current rates
+      if (sale.priceUSD) {
+          return convertFromUSD(sale.priceUSD, displayCurrency, exchangeRates);
+      }
+      // Fallback for legacy data (should be migrated, but just in case)
+      // This part is likely unreachable if migration works
+      return sale.price; 
   };
 
   const filteredSales = sales.filter(sale => {
@@ -57,8 +76,8 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
         const dateB = b.dateSold ? new Date(b.dateSold).getTime() : 0;
         return multiplier * (dateA - dateB);
       case 'price':
-        const priceA = convertPrice(a.price, a.originalCurrency);
-        const priceB = convertPrice(b.price, b.originalCurrency);
+        const priceA = getDisplayPrice(a);
+        const priceB = getDisplayPrice(b);
         return multiplier * (priceA - priceB);
       case 'daysToSell':
         const daysA = a.daysToSell !== undefined ? a.daysToSell : -1;
@@ -71,8 +90,90 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
     }
   });
 
+  // Modal handlers
+  const openDeleteModal = (id: string) => {
+      setSaleToDelete(id);
+      setIsBulkDelete(false);
+      setDeleteModalOpen(true);
+  };
+
+  const openBulkDeleteModal = () => {
+      setIsBulkDelete(true);
+      setDeleteModalOpen(true);
+  };
+
+  const closeDeleteModal = () => {
+      setDeleteModalOpen(false);
+      setSaleToDelete(null);
+      setIsBulkDelete(false);
+  };
+
+  const confirmDelete = () => {
+      if (isBulkDelete && onBulkDelete) {
+          onBulkDelete(Array.from(selectedIds));
+          setSelectedIds(new Set());
+      } else if (saleToDelete) {
+          onDelete(saleToDelete);
+      }
+      closeDeleteModal();
+  };
+
+  // Selection Handlers
+  const toggleSelectAll = () => {
+      if (selectedIds.size === sortedSales.length && sortedSales.length > 0) {
+          setSelectedIds(new Set());
+      } else {
+          setSelectedIds(new Set(sortedSales.map(s => s.id)));
+      }
+  };
+
+  const toggleSelectRow = (id: string) => {
+      const newSelection = new Set(selectedIds);
+      if (newSelection.has(id)) {
+          newSelection.delete(id);
+      } else {
+          newSelection.add(id);
+      }
+      setSelectedIds(newSelection);
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
+      {/* Confirmation Modal */}
+      {deleteModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100 animate-in zoom-in-95 duration-200">
+                  <div className="flex flex-col items-center text-center">
+                      <div className="w-12 h-12 rounded-full bg-[#ba3b46]/10 flex items-center justify-center mb-4">
+                          <AlertCircle className="w-6 h-6 text-[#ba3b46]" />
+                      </div>
+                      <h3 className="text-lg font-bold text-[#403f4c] mb-2">
+                          {isBulkDelete ? `Delete ${selectedIds.size} Records?` : 'Delete Sale Record?'}
+                      </h3>
+                      <p className="text-sm text-gray-500 mb-6">
+                          {isBulkDelete 
+                             ? "Are you sure you want to delete all selected records? This cannot be undone."
+                             : "Are you sure you want to remove this sale from your database? This action cannot be undone."}
+                      </p>
+                      <div className="flex w-full gap-3">
+                          <button 
+                              onClick={closeDeleteModal}
+                              className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-[#403f4c] rounded-lg font-medium transition-colors"
+                          >
+                              Cancel
+                          </button>
+                          <button 
+                              onClick={confirmDelete}
+                              className="flex-1 px-4 py-2 bg-[#ba3b46] hover:bg-[#a12f3a] text-white rounded-lg font-medium transition-colors shadow-sm"
+                          >
+                              Delete
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Filter Bar */}
       <div className="bg-white p-4 rounded-xl border border-[#a58039]/20 flex flex-wrap gap-4 items-center">
           <div className="flex items-center gap-2 text-[#403f4c]">
@@ -104,14 +205,26 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
              </select>
           </div>
 
-          {(filterDealer || filterTag) && (
-              <button 
-                onClick={() => { setFilterDealer(''); setFilterTag(''); }}
-                className="text-xs text-[#ba3b46] hover:text-red-700 underline ml-auto"
-              >
-                  Clear Filters
-              </button>
-          )}
+          <div className="ml-auto flex items-center gap-3">
+              {(filterDealer || filterTag) && (
+                  <button 
+                    onClick={() => { setFilterDealer(''); setFilterTag(''); }}
+                    className="text-xs text-[#ba3b46] hover:text-red-700 underline"
+                  >
+                      Clear Filters
+                  </button>
+              )}
+              
+              {selectedIds.size > 0 && onBulkDelete && (
+                  <button
+                    onClick={openBulkDeleteModal}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-[#ba3b46] text-white text-xs font-bold rounded-lg hover:bg-[#a12f3a] transition-all shadow-sm animate-in fade-in"
+                  >
+                      <Trash2 className="w-3 h-3" />
+                      Bulk Delete ({selectedIds.size})
+                  </button>
+              )}
+          </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-[#a58039]/20 overflow-hidden">
@@ -119,6 +232,18 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
             <table className="w-full text-sm text-left">
             <thead className="bg-[#a58039]/10 text-[#403f4c] uppercase font-bold tracking-wider">
                 <tr>
+                <th className="px-4 py-3 w-10">
+                    <button 
+                        onClick={toggleSelectAll} 
+                        className="text-[#403f4c] hover:text-[#a58039] transition-colors"
+                        title={selectedIds.size === sortedSales.length ? "Deselect All" : "Select All"}
+                    >
+                        {selectedIds.size > 0 && selectedIds.size === sortedSales.length ? 
+                            <CheckSquare className="w-5 h-5 text-[#a58039]" /> : 
+                            <Square className="w-5 h-5 text-gray-400" />
+                        }
+                    </button>
+                </th>
                 <th onClick={() => handleSort('make')} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20">
                     <div className="flex items-center gap-1">Vehicle {getSortIcon('make')}</div>
                 </th>
@@ -138,13 +263,24 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
             <tbody className="divide-y divide-[#F0EDDE]">
                 {sortedSales.length === 0 ? (
                     <tr>
-                        <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
+                        <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
                             No records found matching your filters.
                         </td>
                     </tr>
                 ) : (
                     sortedSales.map((sale) => (
-                    <tr key={sale.id} className="hover:bg-[#F0EDDE]/50 transition-colors">
+                    <tr key={sale.id} className={`hover:bg-[#F0EDDE]/50 transition-colors ${selectedIds.has(sale.id) ? 'bg-[#F0EDDE]/60' : ''}`}>
+                        <td className="px-4 py-4">
+                            <button 
+                                onClick={() => toggleSelectRow(sale.id)} 
+                                className="text-[#403f4c] hover:text-[#a58039] transition-colors"
+                            >
+                                {selectedIds.has(sale.id) ? 
+                                    <CheckSquare className="w-5 h-5 text-[#a58039]" /> : 
+                                    <Square className="w-5 h-5 text-gray-300" />
+                                }
+                            </button>
+                        </td>
                         <td className="px-6 py-4">
                             <div className="font-medium text-[#403f4c]">{sale.year} {sale.make} {sale.model}</div>
                             <div className="text-xs text-[#a58039]">{sale.subModel !== 'Unknown' ? sale.subModel : ''}</div>
@@ -168,7 +304,7 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
                             </div>
                         </td>
                         <td className="px-6 py-4 text-right font-medium text-[#403f4c]">
-                            {new Intl.NumberFormat('en-US', { style: 'decimal', maximumFractionDigits: 0 }).format(convertPrice(sale.price, sale.originalCurrency))}
+                            {new Intl.NumberFormat('en-US', { style: 'decimal', maximumFractionDigits: 0 }).format(getDisplayPrice(sale))}
                             <span className="text-xs text-gray-400 ml-1">{displayCurrency}</span>
                         </td>
                         <td className="px-6 py-4 text-gray-600">
@@ -195,7 +331,7 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onEdit, displayCur
                                 <Pencil className="w-4 h-4" />
                             </button>
                             <button 
-                                onClick={() => onDelete(sale.id)}
+                                onClick={() => openDeleteModal(sale.id)}
                                 className="text-gray-400 hover:text-[#ba3b46] transition-colors"
                                 title="Delete Sale"
                             >

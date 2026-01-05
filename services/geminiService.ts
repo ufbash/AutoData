@@ -64,9 +64,13 @@ export const generateMarketForecast = async (salesSummary: any): Promise<MarketF
     Analyze the following car sales data summary to forecast demand for the next quarter.
     Data Summary: ${JSON.stringify(salesSummary)}
     
+    Context: 
+    - Some data might be "External Data". This represents general market sales observed from other dealers, useful for Volume and Price demand analysis.
+    - Data with "avgDaysToSell" > 0 represents your direct inventory performance.
+    
     Identify trends in:
-    1. Which models are selling the fastest (days on market).
-    2. Which models have the highest volume.
+    1. Which models are selling the fastest (days on market) based on inventory data.
+    2. Which models have the highest volume (combining internal and external data).
     
     Provide a concise prediction for what cars I should acquire to sell next.
   `;

@@ -1,19 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Download, Plus, LayoutDashboard, List, Car, Upload } from 'lucide-react';
+import { Download, Plus, LayoutDashboard, List, Car, Upload, DollarSign, X } from 'lucide-react';
 import { CarSale, Currency, CarStats } from './types';
-import { getStoredSales, saveSale, deleteSale, mergeSales } from './services/storageService';
+import { getStoredSales, saveSale, deleteSale, deleteSales, mergeSales, importSales } from './services/storageService';
+import { fetchExchangeRates, convertToUSD, convertFromUSD } from './services/currencyService';
 import CarForm from './components/CarForm';
 import Dashboard from './components/Dashboard';
 import CarTable from './components/CarTable';
 import { v4 as uuidv4 } from 'uuid';
-
-// Mock Exchange Rates (Base NGN)
-const EXCHANGE_RATES: Record<string, number> = {
-  'NGN': 1,
-  'USD': 1500, // 1 USD = 1500 NGN
-  'EUR': 1650,
-  'GBP': 1900
-};
 
 const App: React.FC = () => {
   const [sales, setSales] = useState<CarSale[]>([]);
@@ -21,11 +14,45 @@ const App: React.FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingSale, setEditingSale] = useState<CarSale | null>(null);
   const [displayCurrency, setDisplayCurrency] = useState<Currency>(Currency.NGN);
+  const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({'USD': 1});
   
+  // Export Modal State
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportCurrency, setExportCurrency] = useState<Currency>(Currency.NGN);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setSales(getStoredSales());
+    // 1. Fetch Rates
+    const initRates = async () => {
+        const rates = await fetchExchangeRates();
+        setExchangeRates(rates);
+        return rates;
+    };
+
+    // 2. Load Sales & Migrate if needed
+    initRates().then((rates) => {
+        const stored = getStoredSales();
+        let needsSave = false;
+        
+        // Migration: If old data lacks priceUSD, add it using current rates (best effort)
+        const migrated = stored.map(s => {
+            if (s.priceUSD === undefined) {
+                needsSave = true;
+                return {
+                    ...s,
+                    priceUSD: convertToUSD(s.price, s.originalCurrency, rates),
+                    exchangeRate: rates[s.originalCurrency] || 1
+                };
+            }
+            return s;
+        });
+
+        if (needsSave) {
+            importSales(migrated); // Save back to local storage
+        }
+        setSales(migrated);
+    });
   }, []);
 
   const handleAddSale = (newSale: CarSale) => {
@@ -38,7 +65,6 @@ const App: React.FC = () => {
   const handleEditSale = (sale: CarSale) => {
       setEditingSale(sale);
       setShowForm(true);
-      // Optional: scroll to top
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -48,47 +74,66 @@ const App: React.FC = () => {
   };
 
   const handleDeleteSale = (id: string) => {
-    if (window.confirm('Are you sure you want to permanently delete this sale record?')) {
-      const updatedSales = deleteSale(id);
+    const updatedSales = deleteSale(id);
+    setSales(updatedSales);
+  };
+
+  const handleBulkDelete = (ids: string[]) => {
+      const updatedSales = deleteSales(ids);
       setSales(updatedSales);
-    }
   };
 
   // --- Export Logic ---
-  const handleExport = () => {
+  const triggerExport = () => {
     const headers = ['Make', 'Model', 'SubModel', 'Year', 'Price', 'Currency', 'Date Listed', 'Date Sold', 'Days to Sell', 'Dealer', 'Tags'];
+    
     const csvContent = [
       headers.join(','),
-      ...sales.map(s => [
-        s.make,
-        s.model,
-        s.subModel,
-        s.year,
-        s.price,
-        s.originalCurrency,
-        s.dateListed || '',
-        s.dateSold || '',
-        s.daysToSell !== undefined ? s.daysToSell : '',
-        s.dealer || 'Unknown',
-        (s.tags || []).join(';') // Use ; as separator for tags
-      ].map(field => `"${field}"`).join(',')) // Quote fields to handle commas in data
+      ...sales.map(s => {
+        // Decide what price to export based on user selection in modal
+        let exportPrice = s.price;
+        if (exportCurrency === Currency.USD) {
+            exportPrice = s.priceUSD || convertToUSD(s.price, s.originalCurrency, exchangeRates);
+        } else if (exportCurrency !== s.originalCurrency) {
+            // If user wants NGN but item was USD, convert USD -> NGN
+            if (s.priceUSD) {
+                exportPrice = convertFromUSD(s.priceUSD, exportCurrency, exchangeRates);
+            }
+        }
+
+        return [
+          s.make,
+          s.model,
+          s.subModel,
+          s.year,
+          exportPrice.toFixed(2),
+          exportCurrency, // Column says currency chosen
+          s.dateListed || '',
+          s.dateSold || '',
+          s.daysToSell !== undefined ? s.daysToSell : '',
+          s.dealer || 'Unknown',
+          (s.tags || []).join(';')
+        ].map(field => `"${field}"`).join(',');
+      })
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `autodata_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `autodata_export_${exportCurrency}_${new Date().toISOString().slice(0, 10)}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    
+    setShowExportModal(false);
   };
 
   // --- Import Logic ---
   const handleImportClick = () => {
       if (fileInputRef.current) {
-          fileInputRef.current.value = ''; // Reset
+          fileInputRef.current.value = ''; 
           fileInputRef.current.click();
       }
   };
@@ -105,29 +150,30 @@ const App: React.FC = () => {
                   const lines = content.split('\n');
                   const newSales: CarSale[] = [];
                   
-                  // Start from 1 to skip header
                   for (let i = 1; i < lines.length; i++) {
                       const line = lines[i].trim();
                       if (!line) continue;
                       
-                      // Our export format wraps everything in quotes: "Value","Value"
-                      // We strip the start/end quotes and split by ","
                       if (line.startsWith('"') && line.endsWith('"')) {
                           const rawValues = line.substring(1, line.length - 1).split('","');
                           
-                          // Expected Indices: 
-                          // 0: Make, 1: Model, 2: Sub, 3: Year, 4: Price, 5: Currency, 
-                          // 6: Listed, 7: Sold, 8: Days, 9: Dealer, 10: Tags
-                          
                           if (rawValues.length >= 6) {
+                             const importedPrice = Number(rawValues[4]);
+                             const importedCurrency = rawValues[5] as Currency;
+                             
+                             // Calculate USD value using CURRENT rates for incoming data
+                             const usdValue = convertToUSD(importedPrice, importedCurrency, exchangeRates);
+
                              const sale: CarSale = {
-                                 id: uuidv4(), // Generate new ID for import
+                                 id: uuidv4(),
                                  make: rawValues[0],
                                  model: rawValues[1],
                                  subModel: rawValues[2],
                                  year: rawValues[3],
-                                 price: Number(rawValues[4]),
-                                 originalCurrency: rawValues[5] as Currency,
+                                 price: importedPrice,
+                                 originalCurrency: importedCurrency,
+                                 priceUSD: usdValue,
+                                 exchangeRate: exchangeRates[importedCurrency] || 1,
                                  dateListed: rawValues[6],
                                  dateSold: rawValues[7],
                                  daysToSell: rawValues[8] ? Number(rawValues[8]) : undefined,
@@ -171,13 +217,15 @@ const App: React.FC = () => {
     const dealerCounts: Record<string, { count: number; totalNGN: number }> = {};
 
     sales.forEach(sale => {
-      // Convert to NGN for standardized volume stats
-      const rate = EXCHANGE_RATES[sale.originalCurrency] || 1;
-      const amountInNGN = sale.price * rate;
+      const isExternalData = (sale.tags || []).includes('External Data');
+
+      // Use priceUSD as base for all calculations, then convert to NGN for standardized internal summing
+      const priceUSD = sale.priceUSD || convertToUSD(sale.price, sale.originalCurrency, exchangeRates);
+      const amountInNGN = convertFromUSD(priceUSD, 'NGN', exchangeRates);
 
       totalVolumeNGN += amountInNGN;
       
-      if (sale.daysToSell !== undefined) {
+      if (!isExternalData && sale.daysToSell !== undefined) {
           totalDays += sale.daysToSell;
           countDays++;
 
@@ -204,14 +252,18 @@ const App: React.FC = () => {
     });
 
     // Convert total volume back to display currency for the dashboard card
-    const displayRate = EXCHANGE_RATES[displayCurrency] || 1;
-    const totalVolumeDisplay = totalVolumeNGN / displayRate;
+    // Note: totalVolumeNGN is in NGN. If displayCurrency is USD, convert NGN -> USD
+    const totalVolumeDisplay = displayCurrency === 'NGN' 
+        ? totalVolumeNGN 
+        : convertToUSD(totalVolumeNGN, 'NGN', exchangeRates);
 
     const topModels = Object.entries(modelCounts)
       .map(([name, data]) => ({
         name,
         count: data.count,
-        avgPrice: (data.totalNGN / data.count) / displayRate
+        avgPrice: displayCurrency === 'NGN' 
+            ? data.totalNGN / data.count 
+            : convertToUSD(data.totalNGN / data.count, 'NGN', exchangeRates)
       }))
       .sort((a, b) => b.count - a.count);
 
@@ -219,7 +271,9 @@ const App: React.FC = () => {
       .map(([name, data]) => ({
         name,
         count: data.count,
-        volume: data.totalNGN / displayRate
+        volume: displayCurrency === 'NGN' 
+            ? data.totalNGN 
+            : convertToUSD(data.totalNGN, 'NGN', exchangeRates)
       }))
       .sort((a, b) => b.count - a.count);
 
@@ -231,10 +285,61 @@ const App: React.FC = () => {
       topModels,
       topDealers
     };
-  }, [sales, displayCurrency]);
+  }, [sales, displayCurrency, exchangeRates]);
 
   return (
-    <div className="min-h-screen bg-[#F0EDDE] text-[#403f4c] font-sans">
+    <div className="min-h-screen bg-[#F0EDDE] text-[#403f4c] font-sans relative">
+      
+      {/* Export Currency Modal */}
+      {showExportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
+                  <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-[#403f4c]">Export Data</h3>
+                      <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-[#ba3b46]">
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+                  <p className="text-sm text-gray-500 mb-4">
+                      Select the currency for the price column in the exported CSV file.
+                  </p>
+                  
+                  <div className="space-y-3 mb-6">
+                      <button 
+                          onClick={() => setExportCurrency(Currency.NGN)}
+                          className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${
+                              exportCurrency === Currency.NGN 
+                              ? 'border-[#a58039] bg-[#a58039]/10 text-[#a58039]' 
+                              : 'border-gray-200 hover:bg-gray-50'
+                          }`}
+                      >
+                          <span className="font-bold">Nigerian Naira (NGN)</span>
+                          {exportCurrency === Currency.NGN && <div className="w-3 h-3 rounded-full bg-[#a58039]" />}
+                      </button>
+                      <button 
+                          onClick={() => setExportCurrency(Currency.USD)}
+                          className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${
+                              exportCurrency === Currency.USD 
+                              ? 'border-[#a58039] bg-[#a58039]/10 text-[#a58039]' 
+                              : 'border-gray-200 hover:bg-gray-50'
+                          }`}
+                      >
+                          <span className="font-bold">US Dollar (USD)</span>
+                          {exportCurrency === Currency.USD && <div className="w-3 h-3 rounded-full bg-[#a58039]" />}
+                      </button>
+                  </div>
+
+                  <button 
+                      onClick={triggerExport}
+                      className="w-full py-3 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors flex items-center justify-center gap-2"
+                  >
+                      <Download className="w-4 h-4" />
+                      Download CSV
+                  </button>
+              </div>
+          </div>
+      )}
+
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-sm border-b border-[#a58039]/20 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -272,7 +377,7 @@ const App: React.FC = () => {
                   </button>
                   <div className="w-px h-5 bg-[#a58039]/20 mx-1"></div>
                   <button 
-                    onClick={handleExport}
+                    onClick={() => setShowExportModal(true)}
                     className="p-1.5 text-[#403f4c]/70 hover:text-[#a58039] hover:bg-white rounded-md transition-all shadow-sm"
                     title="Export to Excel/CSV"
                   >
@@ -340,21 +445,23 @@ const App: React.FC = () => {
             <CarForm 
                 initialData={editingSale}
                 onSaleAdded={handleAddSale} 
-                onCancel={handleCancelForm} 
+                onCancel={handleCancelForm}
+                currentRates={exchangeRates} 
             />
           </div>
         )}
 
         {/* Views */}
         {view === 'dashboard' ? (
-          <Dashboard stats={stats} currency={displayCurrency} exchangeRates={EXCHANGE_RATES} allSales={sales} />
+          <Dashboard stats={stats} currency={displayCurrency} exchangeRates={exchangeRates} allSales={sales} />
         ) : (
           <CarTable 
             sales={sales} 
             onDelete={handleDeleteSale} 
+            onBulkDelete={handleBulkDelete}
             onEdit={handleEditSale}
             displayCurrency={displayCurrency}
-            exchangeRates={EXCHANGE_RATES}
+            exchangeRates={exchangeRates}
           />
         )}
       </main>

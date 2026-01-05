@@ -6,6 +6,7 @@ import {
 import { CarStats, Currency, CarSale, MarketForecast } from '../types';
 import { TrendingUp, Clock, DollarSign, Award, Brain, Briefcase } from 'lucide-react';
 import { generateMarketForecast } from '../services/geminiService';
+import { convertFromUSD } from '../services/currencyService';
 
 interface DashboardProps {
   stats: CarStats;
@@ -29,11 +30,13 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
     }).format(amount);
   };
 
-  const convertPrice = (price: number, fromCurrency: string) => {
-    if (fromCurrency === currency) return price;
-    const priceInNGN = fromCurrency === 'NGN' ? price : price * (exchangeRates[fromCurrency] || 1);
-    return currency === 'NGN' ? priceInNGN : priceInNGN / (exchangeRates[currency] || 1);
-  };
+  const getPriceInDisplayCurrency = (sale: CarSale) => {
+      // Use priceUSD as base truth, calculate live value
+      if (sale.priceUSD) {
+          return convertFromUSD(sale.priceUSD, currency, exchangeRates);
+      }
+      return sale.price;
+  }
 
   // --- Aggregate Data for Charts ---
   const timeSeriesData = useMemo(() => {
@@ -70,7 +73,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
         data[key] = { name: label, sales: 0, revenue: 0, order };
       }
       data[key].sales += 1;
-      data[key].revenue += convertPrice(sale.price, sale.originalCurrency);
+      data[key].revenue += getPriceInDisplayCurrency(sale);
     });
 
     return Object.values(data).sort((a, b) => a.order - b.order);
