@@ -3,7 +3,7 @@ import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
-import { CarStats, Currency, CarSale, MarketForecast } from '../types';
+import { CarStats, Currency, CarSale, MarketForecast, RecordType } from '../types';
 import { TrendingUp, Clock, DollarSign, Award, Brain, Briefcase } from 'lucide-react';
 import { generateMarketForecast } from '../services/geminiService';
 import { convertFromUSD } from '../services/currencyService';
@@ -32,10 +32,11 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
 
   const getPriceInDisplayCurrency = (sale: CarSale) => {
       // Use priceUSD as base truth, calculate live value
-      if (sale.priceUSD) {
+      if (sale.priceUSD !== null) {
           return convertFromUSD(sale.priceUSD, currency, exchangeRates);
       }
-      return sale.price;
+      if (sale.price !== null && sale.originalCurrency === currency) return sale.price;
+      return null;
   }
 
   // --- Aggregate Data for Charts ---
@@ -73,7 +74,12 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
         data[key] = { name: label, sales: 0, revenue: 0, order };
       }
       data[key].sales += 1;
-      data[key].revenue += getPriceInDisplayCurrency(sale);
+
+      // Revenue is inventory-only and requires a known price
+      if (sale.recordType === RecordType.INVENTORY) {
+        const displayPrice = getPriceInDisplayCurrency(sale);
+        if (displayPrice !== null) data[key].revenue += displayPrice;
+      }
     });
 
     return Object.values(data).sort((a, b) => a.order - b.order);
@@ -95,7 +101,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
     setLoadingForecast(true);
     try {
         const summary = stats.topModels.map(m => {
-            const modelSales = allSales.filter(s => `${s.make} ${s.model}` === m.name && s.daysToSell !== undefined);
+            const modelSales = allSales.filter(s => `${s.make} ${s.model}` === m.name && s.daysToSell !== null);
             const totalDays = modelSales.reduce((acc, curr) => acc + (curr.daysToSell || 0), 0);
             const avgDays = modelSales.length ? Math.round(totalDays / modelSales.length) : 0;
 
@@ -168,7 +174,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
                   {stats.fastestMoving ? `${stats.fastestMoving.make} ${stats.fastestMoving.model}` : 'N/A'}
               </p>
               <p className="text-xs text-[#61988e]">
-                  {stats.fastestMoving && stats.fastestMoving.daysToSell !== undefined ? `${stats.fastestMoving.daysToSell} days` : '-'}
+                  {stats.fastestMoving && stats.fastestMoving.daysToSell !== null ? `${stats.fastestMoving.daysToSell} days` : '-'}
               </p>
             </div>
             <div className="bg-purple-100 p-3 rounded-full">

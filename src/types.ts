@@ -4,16 +4,23 @@ export interface CarSale {
   model: string;
   subModel: string;
   year: string;
-  price: number; // Original input price
+  price: number | null; // Original input price (nullable for market records / unknown)
   originalCurrency: string; // The currency selected during input
-  priceUSD: number; // The calculated USD value (Source of Truth for value)
+  priceUSD: number | null; // The calculated USD value (Source of Truth for value)
   exchangeRate: number; // The rate used at time of entry (Original -> USD)
   dateListed?: string;
   dateSold?: string;
-  daysToSell?: number;
+  daysToSell: number | null; // Explicitly nullable; never undefined/NaN
+  mileage: number | null; // Vehicle mileage (nullable if unknown)
   dealer: string;
   tags: string[];
   notes?: string;
+  recordType: RecordType;
+}
+
+export enum RecordType {
+  INVENTORY = 'INVENTORY',
+  MARKET_DATA = 'MARKET_DATA',
 }
 
 export interface StandardizedCarData {
@@ -34,7 +41,7 @@ export enum Currency {
   GBP = 'GBP'
 }
 
-export type SortField = 'dateSold' | 'price' | 'daysToSell' | 'make';
+export type SortField = 'dateSold' | 'price' | 'daysToSell' | 'make' | 'mileage';
 export type SortDirection = 'asc' | 'desc';
 
 export interface CarStats {

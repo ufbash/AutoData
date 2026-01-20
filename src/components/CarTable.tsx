@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CarSale, Currency, SortDirection, SortField } from '../types';
+import { CarSale, Currency, RecordType, SortDirection, SortField } from '../types';
 import { ArrowUpDown, ArrowUp, ArrowDown, Trash2, Tag, Filter, User, Pencil, AlertCircle, CheckSquare, Square } from 'lucide-react';
 import { convertFromUSD } from '../services/currencyService';
 
@@ -54,12 +54,12 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
 
   const getDisplayPrice = (sale: CarSale) => {
       // Use stored USD value as truth, convert to display currency using current rates
-      if (sale.priceUSD) {
+      if (sale.priceUSD !== null) {
           return convertFromUSD(sale.priceUSD, displayCurrency, exchangeRates);
       }
-      // Fallback for legacy data (should be migrated, but just in case)
-      // This part is likely unreachable if migration works
-      return sale.price; 
+      // Fallback: if we only have original price and it's already in display currency, show it; otherwise N/A
+      if (sale.price !== null && sale.originalCurrency === displayCurrency) return sale.price;
+      return null;
   };
 
   const filteredSales = sales.filter(sale => {
@@ -78,11 +78,19 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
       case 'price':
         const priceA = getDisplayPrice(a);
         const priceB = getDisplayPrice(b);
+        if (priceA === null && priceB === null) return 0;
+        if (priceA === null) return 1; // nulls last
+        if (priceB === null) return -1;
         return multiplier * (priceA - priceB);
       case 'daysToSell':
-        const daysA = a.daysToSell !== undefined ? a.daysToSell : -1;
-        const daysB = b.daysToSell !== undefined ? b.daysToSell : -1;
+        const daysA = a.daysToSell !== null ? a.daysToSell : -1;
+        const daysB = b.daysToSell !== null ? b.daysToSell : -1;
         return multiplier * (daysA - daysB);
+      case 'mileage':
+        // Treat null as Infinity (push to bottom when sorting ascending)
+        const mileageA = a.mileage !== null ? a.mileage : Infinity;
+        const mileageB = b.mileage !== null ? b.mileage : Infinity;
+        return multiplier * (mileageA - mileageB);
       case 'make':
         return multiplier * a.make.localeCompare(b.make);
       default:
@@ -257,13 +265,16 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
                 <th onClick={() => handleSort('daysToSell')} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20 text-center">
                     <div className="flex items-center justify-center gap-1">Days {getSortIcon('daysToSell')}</div>
                 </th>
+                <th onClick={() => handleSort('mileage')} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20 text-right">
+                    <div className="flex items-center justify-end gap-1">Mileage {getSortIcon('mileage')}</div>
+                </th>
                 <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
             </thead>
             <tbody className="divide-y divide-[#F0EDDE]">
                 {sortedSales.length === 0 ? (
                     <tr>
-                        <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
+                        <td colSpan={8} className="px-6 py-8 text-center text-gray-500">
                             No records found matching your filters.
                         </td>
                     </tr>
@@ -304,20 +315,40 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
                             </div>
                         </td>
                         <td className="px-6 py-4 text-right font-medium text-[#403f4c]">
-                            {new Intl.NumberFormat('en-US', { style: 'decimal', maximumFractionDigits: 0 }).format(getDisplayPrice(sale))}
-                            <span className="text-xs text-gray-400 ml-1">{displayCurrency}</span>
+                            {(() => {
+                              const p = getDisplayPrice(sale);
+                              if (p === null) return <span className="text-gray-400">N/A</span>;
+                              return (
+                                <>
+                                  {new Intl.NumberFormat('en-US', { style: 'decimal', maximumFractionDigits: 0 }).format(p)}
+                                  <span className="text-xs text-gray-400 ml-1">{displayCurrency}</span>
+                                </>
+                              );
+                            })()}
+                            {sale.recordType === RecordType.MARKET_DATA && (
+                              <span className="ml-2 text-[10px] font-bold uppercase tracking-wide bg-[#61988e]/10 text-[#61988e] px-2 py-0.5 rounded-full border border-[#61988e]/30">
+                                External
+                              </span>
+                            )}
                         </td>
                         <td className="px-6 py-4 text-gray-600">
                             {sale.dateSold || '-'}
                         </td>
                         <td className="px-6 py-4 text-center">
-                            {sale.daysToSell !== undefined ? (
+                            {sale.daysToSell !== null ? (
                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                                     sale.daysToSell < 14 ? 'bg-[#61988e]/20 text-[#61988e]' : 
                                     sale.daysToSell < 45 ? 'bg-yellow-100 text-yellow-800' : 'bg-[#ba3b46]/10 text-[#ba3b46]'
                                 }`}>
                                     {sale.daysToSell}
                                 </span>
+                            ) : (
+                                <span className="text-gray-400">-</span>
+                            )}
+                        </td>
+                        <td className="px-6 py-4 text-right font-medium text-[#403f4c]">
+                            {sale.mileage !== null ? (
+                                new Intl.NumberFormat('en-US', { style: 'decimal', maximumFractionDigits: 0 }).format(sale.mileage)
                             ) : (
                                 <span className="text-gray-400">-</span>
                             )}

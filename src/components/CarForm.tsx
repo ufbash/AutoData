@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Plus, Sparkles, CheckCircle, X, Tag, List, Trash2, ChevronDown, Bot, Pencil, Globe, CalendarOff } from 'lucide-react';
+import { Loader2, Plus, Sparkles, CheckCircle, X, Tag, List, Trash2, ChevronDown, Bot, Pencil, Globe, CalendarOff, Gauge } from 'lucide-react';
 import { standardizeVehicleString } from '../services/geminiService';
 import { 
     addSavedDealer, getSavedDealers, removeSavedDealer,
     getVehicleDB, addVehicleData, removeMake, removeModel,
     getSavedSubModels, addSavedSubModel, removeSavedSubModel
 } from '../services/storageService';
-import { CarSale, Currency } from '../types';
+import { CarSale, Currency, RecordType } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { convertToUSD } from '../services/currencyService';
 
@@ -126,11 +126,13 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   const [model, setModel] = useState('');
   const [subModel, setSubModel] = useState('');
   const [year, setYear] = useState('');
-  const [price, setPrice] = useState<number | ''>('');
+  const [price, setPrice] = useState<number | null>(null); // Internal numeric value (not used for display)
   const [currency, setCurrency] = useState<Currency>(Currency.NGN);
   const [dateListed, setDateListed] = useState('');
   const [dateSold, setDateSold] = useState(new Date().toISOString().split('T')[0]);
   const [dealer, setDealer] = useState('');
+  const [mileage, setMileage] = useState<number | null>(null);
+  const [priceDisplay, setPriceDisplay] = useState(''); // Text display with commas
   
   // Saved Data State
   const [savedDealers, setSavedDealers] = useState<string[]>([]);
@@ -141,8 +143,33 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   
-  // External Data Mode
-  const [isExternalData, setIsExternalData] = useState(false);
+  // Helper: Format number with commas
+  const formatNumberWithCommas = (num: number | null | ''): string => {
+    if (num === null || num === '') return '';
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(num));
+  };
+  
+  // Helper: Strip commas and parse number
+  const parseNumberFromFormatted = (str: string): number | null => {
+    const cleaned = str.replace(/,/g, '').trim();
+    if (cleaned === '') return null;
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+  
+  // Record Type (Inventory vs Market Data) - with sticky preference
+  const getStickyRecordType = (): RecordType => {
+    try {
+      const saved = localStorage.getItem('autoData_pref_recordType');
+      if (saved === RecordType.MARKET_DATA || saved === RecordType.INVENTORY) {
+        return saved as RecordType;
+      }
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+    return RecordType.INVENTORY;
+  };
+  const [recordType, setRecordType] = useState<RecordType>(getStickyRecordType());
 
   // Validation State
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -159,17 +186,23 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         setModel(initialData.model);
         setSubModel(initialData.subModel);
         setYear(initialData.year);
-        setPrice(initialData.price);
+        setPrice(initialData.price ?? null);
+        setPriceDisplay(initialData.price !== null ? formatNumberWithCommas(initialData.price) : '');
         setCurrency(initialData.originalCurrency as Currency);
         setDateListed(initialData.dateListed || '');
         setDateSold(initialData.dateSold || '');
         setDealer(initialData.dealer);
         setTags(initialData.tags || []);
-        
-        // Check if it was external data
-        if (initialData.tags?.includes('External Data')) {
-            setIsExternalData(true);
-        }
+        setMileage(initialData.mileage ?? null);
+        setRecordType(
+            initialData.recordType ||
+              ((initialData.tags || []).includes('External Data')
+                ? RecordType.MARKET_DATA
+                : RecordType.INVENTORY)
+        );
+    } else {
+        // New entry mode: load sticky preference
+        setRecordType(getStickyRecordType());
     }
   }, [initialData]);
 
@@ -179,15 +212,15 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   const matchedMakeKey = Object.keys(vehicleDB).find(k => k.toLowerCase() === make.toLowerCase());
   const modelOptions = matchedMakeKey ? vehicleDB[matchedMakeKey] : [];
 
-  // Toggle External Data
+  // Toggle External Data (repurposed to switch recordType) - with sticky save
   const handleExternalDataToggle = (active: boolean) => {
-      setIsExternalData(active);
-      if (active) {
-          if (!tags.includes('External Data')) {
-              setTags(prev => [...prev, 'External Data']);
-          }
-      } else {
-          setTags(prev => prev.filter(t => t !== 'External Data'));
+      const newType = active ? RecordType.MARKET_DATA : RecordType.INVENTORY;
+      setRecordType(newType);
+      // Save preference to localStorage for sticky mode
+      try {
+        localStorage.setItem('autoData_pref_recordType', newType);
+      } catch (e) {
+        // Ignore localStorage errors
       }
   };
 
@@ -217,7 +250,10 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       setModel(result.model);
       setSubModel(result.subModel);
       setYear(result.year);
-      if (result.price) setPrice(result.price);
+      if (result.price) {
+        setPrice(result.price);
+        setPriceDisplay(formatNumberWithCommas(result.price));
+      }
       if (result.currency) setCurrency(result.currency as Currency);
       if (result.dealer) setDealer(result.dealer);
       if (result.dateSold) setDateSold(result.dateSold);
@@ -242,6 +278,34 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
     e?.preventDefault(); // Prevent comma from entering field
     
     const cleanTag = tagInput.replace(',', '').trim();
+    
+    // Smart Tag: Check for mileage pattern (e.g., "14000m", "14000mi", "14000k", "14000km")
+    const mileagePattern = /^(\d[\d,.]*)\s*(k|m|km|mi)$/i;
+    const match = cleanTag.match(mileagePattern);
+    
+    if (match) {
+      const numericValue = parseFloat(match[1].replace(/,/g, ''));
+      const unit = match[2].toLowerCase();
+      
+      if (!isNaN(numericValue) && numericValue >= 0) {
+        let miles: number;
+        
+        // Convert to miles
+        if (unit === 'k' || unit === 'km') {
+          // Kilometers to miles
+          miles = Math.round(numericValue * 0.621371);
+        } else {
+          // Already in miles
+          miles = Math.round(numericValue);
+        }
+        
+        setMileage(miles);
+        setTagInput(''); // Clear the input
+        return; // Don't add to tags array
+      }
+    }
+    
+    // Regular tag
     if (cleanTag && !tags.includes(cleanTag)) {
       setTags([...tags, cleanTag]);
       setTagInput('');
@@ -249,9 +313,6 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   };
 
   const removeTag = (tagToRemove: string) => {
-    if (tagToRemove === 'External Data') {
-        setIsExternalData(false);
-    }
     setTags(tags.filter(t => t !== tagToRemove));
   };
 
@@ -294,9 +355,11 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       }
 
       // Validate Price: Positive Number
-      if (!price || Number(price) <= 0) {
-          newErrors.price = "Price must be a positive number";
-          isValid = false;
+      // Price is optional: if provided, must be a positive number
+      const parsedPrice = parseNumberFromFormatted(priceDisplay);
+      if (priceDisplay !== '' && (parsedPrice === null || parsedPrice <= 0)) {
+        newErrors.price = "Price must be a positive number";
+        isValid = false;
       }
 
       setErrors(newErrors);
@@ -320,24 +383,24 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         addSavedDealer(finalDealer);
     }
 
-    let daysToSell: number | undefined = undefined;
-    
+    let daysToSell: number | null = null;
     if (dateListed && dateSold) {
-        const listed = new Date(dateListed);
-        const sold = new Date(dateSold);
-        const diffTime = Math.abs(sold.getTime() - listed.getTime());
-        daysToSell = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const listedMs = Date.parse(dateListed);
+        const soldMs = Date.parse(dateSold);
+        if (Number.isFinite(listedMs) && Number.isFinite(soldMs)) {
+            const diffTime = Math.abs(soldMs - listedMs);
+            daysToSell = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        }
     }
 
-    // Ensure External Data tag is present if mode is active
-    let finalTags = [...tags];
-    if (isExternalData && !finalTags.includes('External Data')) {
-        finalTags.push('External Data');
-    }
+    const finalTags = [...tags];
 
     // Convert to USD for storage (Truth Source)
-    const numericPrice = Number(price);
-    const usdValue = convertToUSD(numericPrice, currency, currentRates);
+    const numericPrice = parseNumberFromFormatted(priceDisplay);
+    const usdValue = numericPrice === null ? null : convertToUSD(numericPrice, currency, currentRates);
+    
+    // Mileage: already a number or null
+    const numericMileage = mileage;
 
     const saleData: CarSale = {
       id: initialData ? initialData.id : uuidv4(),
@@ -352,8 +415,10 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       dateListed: dateListed || undefined,
       dateSold,
       daysToSell,
+      mileage: numericMileage,
       dealer: finalDealer,
-      tags: finalTags
+      tags: finalTags,
+      recordType
     };
 
     onSaleAdded(saleData);
@@ -438,20 +503,20 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
           
           {/* External Data Toggle */}
           <div 
-             className={`flex items-center justify-between p-3 rounded-lg border transition-colors cursor-pointer ${isExternalData ? 'bg-[#61988e]/10 border-[#61988e]/30' : 'bg-gray-50 border-gray-200'}`}
-             onClick={() => handleExternalDataToggle(!isExternalData)}
+             className={`flex items-center justify-between p-3 rounded-lg border transition-colors cursor-pointer ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e]/10 border-[#61988e]/30' : 'bg-gray-50 border-gray-200'}`}
+             onClick={() => handleExternalDataToggle(recordType !== RecordType.MARKET_DATA)}
           >
              <div className="flex items-center gap-3">
-                 <div className={`p-2 rounded-full ${isExternalData ? 'bg-[#61988e] text-white' : 'bg-gray-200 text-gray-500'}`}>
+                 <div className={`p-2 rounded-full ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e] text-white' : 'bg-gray-200 text-gray-500'}`}>
                      <Globe className="w-5 h-5" />
                  </div>
                  <div>
-                     <p className={`text-sm font-bold ${isExternalData ? 'text-[#61988e]' : 'text-[#403f4c]'}`}>External Market Data Mode</p>
+                     <p className={`text-sm font-bold ${recordType === RecordType.MARKET_DATA ? 'text-[#61988e]' : 'text-[#403f4c]'}`}>External Market Data Mode</p>
                      <p className="text-xs text-gray-500">Enable if this isn't your inventory. Use accurate dates if available for Market Analysis.</p>
                  </div>
              </div>
-             <div className={`w-12 h-6 rounded-full relative transition-colors ${isExternalData ? 'bg-[#61988e]' : 'bg-gray-300'}`}>
-                 <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${isExternalData ? 'left-7' : 'left-1'}`}></div>
+             <div className={`w-12 h-6 rounded-full relative transition-colors ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e]' : 'bg-gray-300'}`}>
+                 <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${recordType === RecordType.MARKET_DATA ? 'left-7' : 'left-1'}`}></div>
              </div>
           </div>
 
@@ -519,15 +584,29 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
                 <div className="flex-1">
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Sold Price</label>
                     <input 
-                        type="number" 
-                        min="0" 
-                        value={price} 
+                        type="text" 
+                        value={priceDisplay} 
                         onChange={e => {
-                            setPrice(Number(e.target.value));
+                            const inputValue = e.target.value;
+                            // Allow only digits and commas
+                            const cleaned = inputValue.replace(/[^\d,]/g, '');
+                            setPriceDisplay(cleaned);
+                            // Update internal price state (strip commas)
+                            const parsed = parseNumberFromFormatted(cleaned);
+                            setPrice(parsed);
                             if (errors.price) setErrors({...errors, price: ''});
-                        }} 
+                        }}
+                        onBlur={e => {
+                            // Format on blur to ensure consistent display
+                            const parsed = parseNumberFromFormatted(e.target.value);
+                            if (parsed !== null) {
+                                setPriceDisplay(formatNumberWithCommas(parsed));
+                            } else {
+                                setPriceDisplay('');
+                            }
+                        }}
                         className={`w-full p-2 border rounded mt-1 outline-none ${errors.price ? 'border-[#ba3b46] focus:ring-[#ba3b46]' : 'border-gray-300 focus:ring-[#a58039] focus:border-[#a58039]'}`}
-                        placeholder="0.00" 
+                        placeholder="0" 
                     />
                     {errors.price && <p className="text-[#ba3b46] text-xs mt-1">{errors.price}</p>}
                 </div>
@@ -536,7 +615,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
                 <div>
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Date Listed</label>
                     <input type="date" value={dateListed} onChange={e => setDateListed(e.target.value)} className="w-full p-2 border rounded mt-1 focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300" />
-                    {isExternalData && <p className="text-[10px] text-gray-400 mt-1">Leave blank if unknown.</p>}
+                    {recordType === RecordType.MARKET_DATA && <p className="text-[10px] text-gray-400 mt-1">Leave blank if unknown.</p>}
                 </div>
                 <div>
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Date Sold</label>
@@ -566,7 +645,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
                             value={tagInput}
                             onChange={(e) => setTagInput(e.target.value)}
                             onKeyDown={handleAddTag}
-                            placeholder="Type tag & press enter or comma"
+                            placeholder="Type tag & press enter or comma (e.g., '14000km' for mileage)"
                             className="w-full p-2 border rounded focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300"
                         />
                         <button type="button" onClick={() => handleAddTag()} className="px-3 py-2 bg-[#F0EDDE] rounded hover:bg-[#e0ddce] text-[#403f4c]">
@@ -575,11 +654,22 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
                     </div>
                  </div>
                  <div className="flex flex-wrap gap-2 mt-2">
+                    {/* Mileage Badge */}
+                    {mileage !== null && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border bg-blue-50 text-blue-700 border-blue-200">
+                            <Gauge className="w-3 h-3" />
+                            {formatNumberWithCommas(mileage)} mi
+                            <button type="button" onClick={() => setMileage(null)} className="hover:text-blue-900">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+                    {/* Regular Tags */}
                     {tags.map(tag => (
-                        <span key={tag} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border ${tag === 'External Data' ? 'bg-[#61988e]/10 text-[#61988e] border-[#61988e]/30' : 'bg-[#F0EDDE] text-[#403f4c] border-[#a58039]/20'}`}>
-                            {tag === 'External Data' ? <Globe className="w-3 h-3" /> : <Tag className="w-3 h-3 text-[#a58039]" />}
+                        <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border bg-[#F0EDDE] text-[#403f4c] border-[#a58039]/20">
+                            <Tag className="w-3 h-3 text-[#a58039]" />
                             {tag}
-                            <button type="button" onClick={() => removeTag(tag)} className={`hover:text-[#ba3b46] ${tag === 'External Data' ? 'ml-1' : ''}`}>
+                            <button type="button" onClick={() => removeTag(tag)} className="hover:text-[#ba3b46]">
                                 <X className="w-3 h-3" />
                             </button>
                         </span>

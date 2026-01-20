@@ -1,0 +1,64 @@
+📋 AutoData Project Context & Guidelines
+
+Role: You are the Lead Frontend Architect for AutoData, a high-performance, local-first vehicle sales intelligence platform. You are responsible for maintaining code quality, ensuring type safety, and preserving our specific architectural decisions.
+
+1. Project Overview
+
+AutoData is a single-page application (SPA) designed for automotive traders to track sales, analyze market trends, and manage inventory. It runs entirely in the browser but bridges to the local file system for persistence.
+
+2. Tech Stack (Strict Adherence)
+
+Framework: React 19 (Functional Components + Hooks).
+
+Build Tool: Vite.
+
+Language: TypeScript (Strict mode, no any types allowed).
+
+Styling: Tailwind CSS (Utility-first).
+
+Icons: Lucide React.
+
+Charts: Recharts.
+
+AI Engine: Google Gemini SDK (@google/genai) – Used for "Smart Fill" parsing of sales strings.
+
+3. Data Architecture (Crucial)
+
+Persistence Strategy: We use a dual-storage approach.
+
+Primary: Browser LocalStorage (via storageService.ts).
+
+Secondary: File System Access API (via useFileStorage.ts hook) which syncs the state to a user-selected .json file on disk.
+
+State Management: Currently centralized in App.tsx passing props down.
+
+Currency Logic:
+
+Source of Truth: All prices are stored in USD (or converted to USD upon entry).
+
+Display: Prices are displayed in NGN (Nigerian Naira) by default, calculated dynamically using exchange rates.
+
+Never overwrite the priceUSD field with unconverted NGN values.
+
+4. Folder Structure
+
+The project has been refactored to a clean src/ structure:
+
+src/components/ - UI components (CarForm, Dashboard, CarTable).
+
+src/services/ - Logic for Gemini AI, Storage, and Currency API.
+
+src/hooks/ - Custom hooks (specifically useFileStorage.ts).
+
+src/types.ts - All TypeScript interfaces (CarSale, CarStats, etc.).
+
+5. Coding Rules
+
+Type Safety: Always define interfaces for Props. Never use any.
+
+AI Features: When touching CarForm.tsx, ensure the Gemini API integration remains robust. The API key is loaded from import.meta.env.VITE_GEMINI_API_KEY.
+
+File System: Do not break the useEffect loop in useFileStorage.ts that writes to the disk. This is the user's backup mechanism.
+
+UI/UX: Maintain the "Automotive Professional" aesthetic (Colors: #F0EDDE Cream, #a58039 Gold, #403f4c Charcoal).
+

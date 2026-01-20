@@ -1,4 +1,4 @@
-import { CarSale } from "../types";
+import { CarSale, RecordType } from "../types";
 
 const STORAGE_KEY = 'autotrend_sales_data';
 const DEALERS_KEY = 'autotrend_saved_dealers';
@@ -24,7 +24,54 @@ const INITIAL_VEHICLES: Record<string, string[]> = {
 export const getStoredSales = (): CarSale[] => {
   try {
     const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
+    const parsed: unknown = data ? JSON.parse(data) : [];
+    if (!Array.isArray(parsed)) return [];
+
+    // Migration: normalize legacy records into the new data integrity model
+    const migrated: CarSale[] = (parsed as any[]).map((raw) => {
+      const rawTags: unknown = raw?.tags;
+      const tagsArray: string[] = Array.isArray(rawTags)
+        ? rawTags.filter((t): t is string => typeof t === "string")
+        : [];
+
+      const hadExternalTag = tagsArray.includes("External Data");
+      const cleanedTags = tagsArray.filter((t) => t !== "External Data");
+
+      const recordType: RecordType =
+        raw?.recordType === RecordType.MARKET_DATA || hadExternalTag
+          ? RecordType.MARKET_DATA
+          : RecordType.INVENTORY;
+
+      const rawPrice: unknown = raw?.price;
+      const numericPrice =
+        typeof rawPrice === "number" && Number.isFinite(rawPrice) ? rawPrice : null;
+
+      const rawPriceUSD: unknown = raw?.priceUSD;
+      const numericPriceUSD =
+        typeof rawPriceUSD === "number" && Number.isFinite(rawPriceUSD) ? rawPriceUSD : null;
+
+      const rawDays: unknown = raw?.daysToSell;
+      const daysToSell =
+        typeof rawDays === "number" && Number.isFinite(rawDays) ? rawDays : null;
+
+      const rawMileage: unknown = raw?.mileage;
+      const mileage =
+        typeof rawMileage === "number" && Number.isFinite(rawMileage) ? rawMileage : null;
+
+      return {
+        ...raw,
+        recordType,
+        tags: cleanedTags,
+        price: numericPrice,
+        priceUSD: numericPriceUSD,
+        daysToSell,
+        mileage,
+      } as CarSale;
+    });
+
+    // Persist migrated data back to storage so it stays clean going forward
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+    return migrated;
   } catch (e) {
     console.error("Failed to load sales data", e);
     return [];

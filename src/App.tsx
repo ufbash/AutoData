@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Download, Plus, LayoutDashboard, List, Car, Upload, DollarSign, X, Save, FileJson } from 'lucide-react';
-import { CarSale, Currency, CarStats } from './types';
+import { CarSale, Currency, CarStats, RecordType } from './types';
 import { getStoredSales, saveSale, deleteSale, deleteSales, mergeSales, importSales } from './services/storageService';
 import { fetchExchangeRates, convertToUSD, convertFromUSD } from './services/currencyService';
 import CarForm from './components/CarForm';
@@ -90,23 +90,40 @@ const App: React.FC = () => {
     initRates().then((rates) => {
         const stored = getStoredSales();
         let needsSave = false;
-        
-        // Migration logic
-        const migrated = stored.map(s => {
-            if (s.priceUSD === undefined) {
-                needsSave = true;
-                return {
-                    ...s,
-                    priceUSD: convertToUSD(s.price, s.originalCurrency, rates),
-                    exchangeRate: rates[s.originalCurrency] || 1
-                };
-            }
-            return s;
+
+        // Fill in missing USD truth where possible (without touching null/unknown prices)
+        const migrated: CarSale[] = stored.map((s) => {
+            const recordType =
+              s.recordType ??
+              ((s.tags || []).includes('External Data') ? RecordType.MARKET_DATA : RecordType.INVENTORY);
+
+            const cleanedTags = (s.tags || []).filter(t => t !== 'External Data');
+            const hasTagCleanup = cleanedTags.length !== (s.tags || []).length;
+
+            const canComputeUSD = s.priceUSD === null && s.price !== null;
+            const computedUSD = canComputeUSD ? convertToUSD(s.price, s.originalCurrency, rates) : s.priceUSD;
+
+            const exchangeRate = canComputeUSD ? (rates[s.originalCurrency] || s.exchangeRate || 1) : s.exchangeRate;
+
+            const changed =
+              recordType !== s.recordType ||
+              hasTagCleanup ||
+              computedUSD !== s.priceUSD ||
+              exchangeRate !== s.exchangeRate;
+
+            if (changed) needsSave = true;
+
+            return {
+              ...s,
+              recordType,
+              tags: cleanedTags,
+              priceUSD: computedUSD,
+              exchangeRate,
+              daysToSell: Number.isFinite(s.daysToSell as any) ? s.daysToSell : null,
+            };
         });
 
-        if (needsSave) {
-            importSales(migrated); 
-        }
+        if (needsSave) importSales(migrated);
         setSales(migrated);
     });
   }, []);
@@ -155,17 +172,29 @@ const App: React.FC = () => {
     const csvContent = [
       headers.join(','),
       ...sales.map(s => {
-        let exportPrice = s.price;
+        let exportPrice: number | null = s.price;
         if (exportCurrency === Currency.USD) {
-            exportPrice = s.priceUSD || convertToUSD(s.price, s.originalCurrency, exchangeRates);
+            exportPrice =
+              s.priceUSD !== null
+                ? s.priceUSD
+                : s.price !== null
+                  ? convertToUSD(s.price, s.originalCurrency, exchangeRates)
+                  : null;
         } else if (exportCurrency !== s.originalCurrency) {
-            if (s.priceUSD) {
+            if (s.priceUSD !== null) {
                 exportPrice = convertFromUSD(s.priceUSD, exportCurrency, exchangeRates);
+            } else {
+                exportPrice = null;
             }
         }
         return [
-          s.make, s.model, s.subModel, s.year, exportPrice.toFixed(2), exportCurrency,
-          s.dateListed || '', s.dateSold || '', s.daysToSell !== undefined ? s.daysToSell : '',
+          s.make,
+          s.model,
+          s.subModel,
+          s.year,
+          exportPrice === null ? 'N/A' : exportPrice.toFixed(2),
+          exportCurrency,
+          s.dateListed || '', s.dateSold || '', s.daysToSell !== null ? s.daysToSell : '',
           s.dealer || 'Unknown', (s.tags || []).join(';')
         ].map(field => `"${field}"`).join(',');
       })
@@ -207,16 +236,24 @@ const App: React.FC = () => {
                       if (line.startsWith('"') && line.endsWith('"')) {
                           const rawValues = line.substring(1, line.length - 1).split('","');
                           if (rawValues.length >= 6) {
-                             const importedPrice = Number(rawValues[4]);
+                             const parsedPrice = Number(rawValues[4]);
+                             const importedPrice = Number.isFinite(parsedPrice) ? parsedPrice : null;
                              const importedCurrency = rawValues[5] as Currency;
-                             const usdValue = convertToUSD(importedPrice, importedCurrency, exchangeRates);
+                             const usdValue =
+                               importedPrice === null ? null : convertToUSD(importedPrice, importedCurrency, exchangeRates);
+                             const rawTags = rawValues[10] ? rawValues[10].split(';') : [];
+                             const hadLegacyExternal = rawTags.includes('External Data');
+                             const cleanedTags = rawTags.filter(t => t !== 'External Data');
                              const sale: CarSale = {
                                  id: uuidv4(),
                                  make: rawValues[0], model: rawValues[1], subModel: rawValues[2], year: rawValues[3],
                                  price: importedPrice, originalCurrency: importedCurrency, priceUSD: usdValue,
                                  exchangeRate: exchangeRates[importedCurrency] || 1, dateListed: rawValues[6],
-                                 dateSold: rawValues[7], daysToSell: rawValues[8] ? Number(rawValues[8]) : undefined,
-                                 dealer: rawValues[9], tags: rawValues[10] ? rawValues[10].split(';') : []
+                                 dateSold: rawValues[7],
+                                 daysToSell: rawValues[8] && Number.isFinite(Number(rawValues[8])) ? Number(rawValues[8]) : null,
+                                 dealer: rawValues[9],
+                                 tags: cleanedTags,
+                                 recordType: hadLegacyExternal ? RecordType.MARKET_DATA : RecordType.INVENTORY
                              };
                              newSales.push(sale);
                           }
@@ -243,7 +280,7 @@ const App: React.FC = () => {
     if (sales.length === 0) {
       return { totalSold: 0, totalVolume: 0, avgDaysToSell: 0, fastestMoving: null, topModels: [], topDealers: [] };
     }
-    let totalVolumeNGN = 0;
+    let totalRevenueNGN = 0;
     let totalDays = 0;
     let countDays = 0;
     let fastest: CarSale | null = null;
@@ -251,30 +288,43 @@ const App: React.FC = () => {
     const dealerCounts: Record<string, { count: number; totalNGN: number }> = {};
 
     sales.forEach(sale => {
-      const isExternalData = (sale.tags || []).includes('External Data');
-      const priceUSD = sale.priceUSD || convertToUSD(sale.price, sale.originalCurrency, exchangeRates);
-      const amountInNGN = convertFromUSD(priceUSD, 'NGN', exchangeRates);
-      totalVolumeNGN += amountInNGN;
+      const isInventory = sale.recordType === RecordType.INVENTORY;
+      const priceUSD =
+        sale.priceUSD !== null
+          ? sale.priceUSD
+          : sale.price !== null
+            ? convertToUSD(sale.price, sale.originalCurrency, exchangeRates)
+            : null;
+      const amountInNGN = priceUSD === null ? null : convertFromUSD(priceUSD, 'NGN', exchangeRates);
+
+      // Revenue/volume is inventory-only and requires a known price
+      if (isInventory && sale.price !== null && amountInNGN !== null) {
+        totalRevenueNGN += amountInNGN;
+      }
       
-      if (!isExternalData && sale.daysToSell !== undefined) {
-          totalDays += sale.daysToSell;
-          countDays++;
-          if (!fastest || sale.daysToSell < fastest.daysToSell) {
-            fastest = sale;
-          }
+      // Time-to-sell metrics are inventory-only and require a valid daysToSell
+      if (isInventory && sale.daysToSell !== null) {
+        totalDays += sale.daysToSell;
+        countDays++;
+        if (!fastest || fastest.daysToSell === null || sale.daysToSell < fastest.daysToSell) {
+          fastest = sale;
+        }
       }
       const modelKey = `${sale.make} ${sale.model}`;
       if (!modelCounts[modelKey]) modelCounts[modelKey] = { count: 0, totalNGN: 0 };
       modelCounts[modelKey].count++;
-      modelCounts[modelKey].totalNGN += amountInNGN;
+      if (amountInNGN !== null) modelCounts[modelKey].totalNGN += amountInNGN;
 
       const dealerKey = sale.dealer || 'Unknown';
       if (!dealerCounts[dealerKey]) dealerCounts[dealerKey] = { count: 0, totalNGN: 0 };
       dealerCounts[dealerKey].count++;
-      dealerCounts[dealerKey].totalNGN += amountInNGN;
+      if (amountInNGN !== null) dealerCounts[dealerKey].totalNGN += amountInNGN;
     });
 
-    const totalVolumeDisplay = displayCurrency === 'NGN' ? totalVolumeNGN : convertToUSD(totalVolumeNGN, 'NGN', exchangeRates);
+    const totalVolumeDisplay =
+      displayCurrency === 'NGN'
+        ? totalRevenueNGN
+        : convertToUSD(totalRevenueNGN, 'NGN', exchangeRates);
     const topModels = Object.entries(modelCounts)
       .map(([name, data]) => ({
         name,
