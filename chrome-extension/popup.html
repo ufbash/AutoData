@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, sans-serif; width: 300px; padding: 15px; }
+    button { background: #333; color: #fff; border: 0; padding: 10px; width: 100%; border-radius: 4px; cursor: pointer; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 10px; }
+    #status { margin-top: 10px; font-size: 12px; color: #666; }
+    #options-link { display: block; margin-top: 15px; font-size: 11px; text-align: center; color: #0066cc; text-decoration: none; cursor: pointer;}
+  </style>
+</head>
+<body>
+  <h3>AutoData Research</h3>
+  <input type="text" id="run_id" placeholder="Optional Research Run ID">
+  <button id="capture-btn">Capture This Lot</button>
+  <div id="status"></div>
+  <a id="options-link">Open Options</a>
+  <script src="popup.js"></script>
+</body>
+</html>

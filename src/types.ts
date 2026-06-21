@@ -2,7 +2,7 @@ export interface CarSale {
   id: string;
   make: string;
   model: string;
-  subModel: string;
+  trim: string;
   year: string;
   price: number | null; // Original input price (nullable for market records / unknown)
   originalCurrency: string; // The currency selected during input
@@ -26,7 +26,7 @@ export enum RecordType {
 export interface StandardizedCarData {
   make: string;
   model: string;
-  subModel: string;
+  trim: string;
   year: string;
   price?: number;
   currency?: string;

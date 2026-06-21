@@ -1,0 +1,32 @@
+{
+  "name": "AutoData Research Capture",
+  "version": "0.1.0",
+  "manifest_version": 3,
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": [
+    "https://www.copart.com/*",
+    "https://*.iaai.com/*",
+    "https://bid.cars/*",
+    "https://bidfax.info/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.copart.com/*", "*://copart.com/*"],
+      "js": ["content-copart.js"]
+    },
+    {
+      "matches": ["*://*.bid.cars/en/lot/*", "*://bid.cars/en/lot/*"],
+      "js": ["content-bidcars.js"]
+    }
+  ]
+}

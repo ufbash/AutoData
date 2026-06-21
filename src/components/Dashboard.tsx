@@ -13,11 +13,12 @@ interface DashboardProps {
   currency: Currency;
   exchangeRates: Record<string, number>;
   allSales: CarSale[];
+  includeMarketData: boolean;
 }
 
 type TimeFrame = 'weekly' | 'monthly' | 'yearly';
 
-const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, allSales }) => {
+const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, allSales, includeMarketData }) => {
   const [timeFrame, setTimeFrame] = useState<TimeFrame>('monthly');
   const [forecast, setForecast] = useState<MarketForecast | null>(null);
   const [loadingForecast, setLoadingForecast] = useState(false);
@@ -115,8 +116,8 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
 
         const result = await generateMarketForecast(summary);
         setForecast(result);
-    } catch (e) {
-        alert("Could not generate forecast. Check API Key.");
+    } catch (e: any) {
+        alert(`Could not generate forecast. ${e?.message || e}`);
     } finally {
         setLoadingForecast(false);
     }
@@ -157,7 +158,12 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, currency, exchangeRates, a
         <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-500">Total Volume</p>
+              <p className="text-sm font-medium text-gray-500">
+                {includeMarketData ? 'Total Market Value' : 'Total Revenue'}
+                <span className="text-xs text-gray-400">
+                  {includeMarketData ? ' (All Inventory + Market)' : ' (My Inventory Only)'}
+                </span>
+              </p>
               <p className="text-2xl font-bold text-[#403f4c] mt-1">{formatMoney(stats.totalVolume)}</p>
             </div>
             <div className="bg-green-100 p-3 rounded-full">

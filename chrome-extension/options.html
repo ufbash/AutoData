@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 400px; padding: 20px; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 15px; }
+    button { background: #0066cc; color: white; border: 0; padding: 10px 15px; cursor: pointer; border-radius: 4px; }
+    #status { margin-top: 10px; font-size: 13px; color: green; }
+  </style>
+</head>
+<body>
+  <h2>Extension Auth Setup</h2>
+  <label>Supabase URL:</label>
+  <input type="text" id="supabase_url" placeholder="https://....supabase.co">
+  
+  <label>X-Research-Secret:</label>
+  <input type="password" id="secret" placeholder="Your securely configured token">
+  
+  <button id="save-btn">Save Configurations</button>
+  <div id="status"></div>
+  
+  <script src="options.js"></script>
+</body>
+</html>

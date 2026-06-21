@@ -1,0 +1,5 @@
+[functions.research-capture]
+verify_jwt = false
+
+[functions.daily-sniper]
+verify_jwt = false

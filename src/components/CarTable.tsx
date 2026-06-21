@@ -5,8 +5,8 @@ import { convertFromUSD } from '../services/currencyService';
 
 interface CarTableProps {
   sales: CarSale[];
-  onDelete: (id: string) => void;
-  onBulkDelete?: (ids: string[]) => void;
+  onDelete: (id: string) => void | Promise<void>;
+  onBulkDelete?: (ids: string[]) => void | Promise<void>;
   onEdit: (sale: CarSale) => void;
   displayCurrency: Currency;
   exchangeRates: Record<string, number>;
@@ -19,6 +19,7 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
   // Filters
   const [filterDealer, setFilterDealer] = useState('');
   const [filterTag, setFilterTag] = useState('');
+  const [filterYear, setFilterYear] = useState('');
 
   // Delete Modal State
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -30,11 +31,12 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
 
   const uniqueDealers = Array.from(new Set(sales.map(s => s.dealer))).filter(Boolean);
   const uniqueTags = Array.from(new Set(sales.flatMap(s => s.tags || [])));
+  const uniqueYears = Array.from(new Set(sales.map(s => s.year))).filter(y => y && y !== 'Unknown').sort().reverse();
 
   // Clear selections when filters change
   useEffect(() => {
       setSelectedIds(new Set());
-  }, [filterDealer, filterTag]);
+  }, [filterDealer, filterTag, filterYear]);
 
   const handleSort = (field: SortField) => {
     if (field === sortField) {
@@ -65,7 +67,8 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
   const filteredSales = sales.filter(sale => {
       const matchesDealer = filterDealer ? sale.dealer === filterDealer : true;
       const matchesTag = filterTag ? (sale.tags || []).includes(filterTag) : true;
-      return matchesDealer && matchesTag;
+      const matchesYear = filterYear ? sale.year === filterYear : true;
+      return matchesDealer && matchesTag && matchesYear;
   });
 
   const sortedSales = [...filteredSales].sort((a, b) => {
@@ -93,6 +96,10 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
         return multiplier * (mileageA - mileageB);
       case 'make':
         return multiplier * a.make.localeCompare(b.make);
+      case 'year':
+        const yearA = a.year === 'Unknown' ? 0 : parseInt(a.year, 10);
+        const yearB = b.year === 'Unknown' ? 0 : parseInt(b.year, 10);
+        return multiplier * (yearA - yearB);
       default:
         return 0;
     }
@@ -188,6 +195,17 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
               <Filter className="w-4 h-4 text-[#a58039]" />
               <span className="text-sm font-bold uppercase tracking-wide">Filters:</span>
           </div>
+
+          <div className="flex items-center gap-2">
+             <select 
+                value={filterYear} 
+                onChange={(e) => setFilterYear(e.target.value)}
+                className="text-sm border-gray-300 rounded-md focus:ring-[#a58039] focus:border-[#a58039] bg-[#F0EDDE] p-1 text-[#403f4c]"
+             >
+                 <option value="">All Years</option>
+                 {uniqueYears.map(y => <option key={y} value={y}>{y}</option>)}
+             </select>
+          </div>
           
           <div className="flex items-center gap-2">
              <User className="w-4 h-4 text-gray-400" />
@@ -214,9 +232,9 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
           </div>
 
           <div className="ml-auto flex items-center gap-3">
-              {(filterDealer || filterTag) && (
+              {(filterDealer || filterTag || filterYear) && (
                   <button 
-                    onClick={() => { setFilterDealer(''); setFilterTag(''); }}
+                    onClick={() => { setFilterDealer(''); setFilterTag(''); setFilterYear(''); }}
                     className="text-xs text-[#ba3b46] hover:text-red-700 underline"
                   >
                       Clear Filters
@@ -252,9 +270,14 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
                         }
                     </button>
                 </th>
-                <th onClick={() => handleSort('make')} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20">
-                    <div className="flex items-center gap-1">Vehicle {getSortIcon('make')}</div>
+                <th onClick={() => handleSort('year' as SortField)} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20">
+                    <div className="flex items-center gap-1">Year {getSortIcon('year' as SortField)}</div>
                 </th>
+                <th onClick={() => handleSort('make')} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20">
+                    <div className="flex items-center gap-1">Make {getSortIcon('make')}</div>
+                </th>
+                <th className="px-6 py-3">Model</th>
+                <th className="px-6 py-3">Trim</th>
                 <th className="px-6 py-3">Details</th>
                 <th onClick={() => handleSort('price')} className="px-6 py-3 cursor-pointer hover:bg-[#a58039]/20 text-right">
                     <div className="flex items-center justify-end gap-1">Sold For {getSortIcon('price')}</div>
@@ -293,8 +316,16 @@ const CarTable: React.FC<CarTableProps> = ({ sales, onDelete, onBulkDelete, onEd
                             </button>
                         </td>
                         <td className="px-6 py-4">
-                            <div className="font-medium text-[#403f4c]">{sale.year} {sale.make} {sale.model}</div>
-                            <div className="text-xs text-[#a58039]">{sale.subModel !== 'Unknown' ? sale.subModel : ''}</div>
+                            <div className="font-medium text-[#403f4c]">{sale.year}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                            <div className="font-medium text-[#403f4c]">{sale.make}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                            <div className="text-[#403f4c]">{sale.model}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                            <div className="text-xs text-[#a58039]">{sale.trim !== 'Unknown' ? sale.trim : ''}</div>
                         </td>
                         <td className="px-6 py-4">
                             <div className="flex flex-col gap-1">

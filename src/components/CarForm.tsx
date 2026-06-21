@@ -4,14 +4,14 @@ import { standardizeVehicleString } from '../services/geminiService';
 import { 
     addSavedDealer, getSavedDealers, removeSavedDealer,
     getVehicleDB, addVehicleData, removeMake, removeModel,
-    getSavedSubModels, addSavedSubModel, removeSavedSubModel
+    getSavedTrims, addSavedTrim, removeSavedTrim,
+    prepareCarPayload
 } from '../services/storageService';
 import { CarSale, Currency, RecordType } from '../types';
 import { v4 as uuidv4 } from 'uuid';
-import { convertToUSD } from '../services/currencyService';
 
 interface CarFormProps {
-  onSaleAdded: (sale: CarSale) => void;
+  onSaleAdded: (sales: CarSale[]) => void | Promise<void>;
   onCancel: () => void;
   initialData?: CarSale | null;
   currentRates: Record<string, number>;
@@ -116,7 +116,8 @@ const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
 
 
 const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, currentRates }) => {
-  const [fillMode, setFillMode] = useState<FillMode>('ai');
+  const [inputMode, setInputMode] = useState<'manual' | 'ai'>('manual'); // Default to manual entry
+  const [fillMode, setFillMode] = useState<FillMode>('ai'); // When in AI mode, default to AI Smart Fill
   const [rawInput, setRawInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState<'input' | 'verify'>('input');
@@ -124,7 +125,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   // Form State
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
-  const [subModel, setSubModel] = useState('');
+  const [trim, setTrim] = useState('');
   const [year, setYear] = useState('');
   const [price, setPrice] = useState<number | null>(null); // Internal numeric value (not used for display)
   const [currency, setCurrency] = useState<Currency>(Currency.NGN);
@@ -133,11 +134,12 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   const [dealer, setDealer] = useState('');
   const [mileage, setMileage] = useState<number | null>(null);
   const [priceDisplay, setPriceDisplay] = useState(''); // Text display with commas
+  const [quantity, setQuantity] = useState(1); // Batch quantity, default 1
   
   // Saved Data State
   const [savedDealers, setSavedDealers] = useState<string[]>([]);
   const [vehicleDB, setVehicleDB] = useState<Record<string, string[]>>({});
-  const [savedSubModels, setSavedSubModels] = useState<string[]>([]);
+  const [savedTrims, setSavedTrims] = useState<string[]>([]);
   
   // Tag State
   const [tagInput, setTagInput] = useState('');
@@ -178,13 +180,14 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
     // Load saved data
     setSavedDealers(getSavedDealers());
     setVehicleDB(getVehicleDB());
-    setSavedSubModels(getSavedSubModels());
-    
+    setSavedTrims(getSavedTrims());
+
     if (initialData) {
+        setInputMode('manual'); // Always show manual fields when editing
         setStep('verify');
         setMake(initialData.make);
         setModel(initialData.model);
-        setSubModel(initialData.subModel);
+        setTrim(initialData.trim);
         setYear(initialData.year);
         setPrice(initialData.price ?? null);
         setPriceDisplay(initialData.price !== null ? formatNumberWithCommas(initialData.price) : '');
@@ -231,7 +234,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
      const parts = rawInput.split(',').map(s => s.trim());
      if (parts[0]) setMake(parts[0]);
      if (parts[1]) setModel(parts[1]);
-     if (parts[2]) setSubModel(parts[2]);
+     if (parts[2]) setTrim(parts[2]);
      if (parts[3]) setYear(parts[3]);
      if (parts[4]) {
          const numericPrice = parseFloat(parts[4].replace(/[^0-9.]/g, ''));
@@ -248,7 +251,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       const result = await standardizeVehicleString(rawInput);
       setMake(result.make);
       setModel(result.model);
-      setSubModel(result.subModel);
+      setTrim(result.trim);
       setYear(result.year);
       if (result.price) {
         setPrice(result.price);
@@ -338,9 +341,9 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       }
   };
 
-  const handleRemoveSubModel = (sub: string) => {
-      removeSavedSubModel(sub);
-      setSavedSubModels(getSavedSubModels());
+  const handleRemoveTrim = (sub: string) => {
+      removeSavedTrim(sub);
+      setSavedTrims(getSavedTrims());
   };
 
   const validate = (): boolean => {
@@ -366,7 +369,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       return isValid;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!validate()) return;
@@ -375,8 +378,8 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
     if (make && model) {
         addVehicleData(make, model);
     }
-    if (subModel && subModel !== 'Base' && subModel !== 'Unknown') {
-        addSavedSubModel(subModel);
+    if (trim && trim !== 'Base' && trim !== 'Unknown') {
+        addSavedTrim(trim);
     }
     const finalDealer = dealer.trim() || 'Unknown';
     if (finalDealer !== 'Unknown') {
@@ -395,33 +398,35 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
 
     const finalTags = [...tags];
 
-    // Convert to USD for storage (Truth Source)
     const numericPrice = parseNumberFromFormatted(priceDisplay);
-    const usdValue = numericPrice === null ? null : convertToUSD(numericPrice, currency, currentRates);
     
     // Mileage: already a number or null
     const numericMileage = mileage;
 
-    const saleData: CarSale = {
-      id: initialData ? initialData.id : uuidv4(),
-      make,
-      model,
-      subModel: subModel || 'Base',
-      year,
-      price: numericPrice,
-      originalCurrency: currency,
-      priceUSD: usdValue, // Stored Truth
-      exchangeRate: currentRates[currency] || 1, // Store rate at time of entry
-      dateListed: dateListed || undefined,
-      dateSold,
-      daysToSell,
-      mileage: numericMileage,
-      dealer: finalDealer,
-      tags: finalTags,
-      recordType
-    };
+    // Create batch of sales with unique IDs (editing always updates a single record)
+    const batchCount = initialData ? 1 : Math.max(1, quantity);
+    const newSales: CarSale[] = [];
+    for (let i = 0; i < batchCount; i++) {
+      const payloadData: Partial<CarSale> = {
+        id: initialData ? initialData.id : uuidv4(),
+        make,
+        model,
+        trim,
+        year,
+        price: numericPrice,
+        originalCurrency: currency,
+        dateListed: dateListed,
+        dateSold,
+        mileage: numericMileage,
+        dealer: finalDealer,
+        tags: finalTags,
+        recordType
+      };
+      
+      newSales.push(prepareCarPayload(payloadData, currentRates));
+    }
 
-    onSaleAdded(saleData);
+    await onSaleAdded(newSales);
   };
 
   return (
@@ -431,7 +436,26 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         {initialData ? 'Edit Sale Record' : 'Record New Sale'}
       </h2>
 
-      {step === 'input' && (
+      {/* External Data Toggle - visible in all modes */}
+      <div
+         className={`flex items-center justify-between p-3 rounded-lg border transition-colors cursor-pointer mb-4 ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e]/10 border-[#61988e]/30' : 'bg-gray-50 border-gray-200'}`}
+         onClick={() => handleExternalDataToggle(recordType !== RecordType.MARKET_DATA)}
+      >
+         <div className="flex items-center gap-3">
+             <div className={`p-2 rounded-full ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e] text-white' : 'bg-gray-200 text-gray-500'}`}>
+                 <Globe className="w-5 h-5" />
+             </div>
+             <div>
+                 <p className={`text-sm font-bold ${recordType === RecordType.MARKET_DATA ? 'text-[#61988e]' : 'text-[#403f4c]'}`}>External Market Data Mode</p>
+                 <p className="text-xs text-gray-500">Enable if this isn't your inventory. Use accurate dates if available for Market Analysis.</p>
+             </div>
+         </div>
+         <div className={`w-12 h-6 rounded-full relative transition-colors ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e]' : 'bg-gray-300'}`}>
+             <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${recordType === RecordType.MARKET_DATA ? 'left-7' : 'left-1'}`}></div>
+         </div>
+      </div>
+
+      {inputMode === 'ai' && (
         <div className="space-y-4">
           <div className="flex bg-[#F0EDDE] p-1 rounded-lg w-fit mb-2">
               <button
@@ -463,8 +487,8 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
                 type="text"
                 value={rawInput}
                 onChange={(e) => setRawInput(e.target.value)}
-                placeholder={fillMode === 'ai' 
-                    ? "e.g. 2021 Toyota Camry LE sold by Abuja Cars for 5m NGN" 
+                placeholder={fillMode === 'ai'
+                    ? "e.g. 2021 Toyota Camry LE sold by Abuja Cars for 5m NGN"
                     : "Make, Model, SubModel, Year, Price, Dealer"}
                 className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none"
                 onKeyDown={(e) => {
@@ -485,40 +509,21 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
               </button>
             </div>
             <p className="text-xs text-gray-500 mt-1">
-              {fillMode === 'ai' 
-                ? "Type freely. AI will extract Make, Model, Year, Price, Dealer and Date." 
+              {fillMode === 'ai'
+                ? "Type freely. AI will extract Make, Model, Year, Price, Dealer and Date."
                 : "Sequence: Make, Model, Sub-Model, Year, Price, Dealer"}
             </p>
           </div>
           <div className="flex justify-end pt-2">
-             <button onClick={() => setStep('verify')} className="text-sm text-[#a58039] hover:underline">
-                Skip and enter manually
+             <button onClick={() => setInputMode('manual')} className="text-sm text-[#a58039] hover:underline">
+                Back to Manual Entry
              </button>
           </div>
         </div>
       )}
 
-      {step === 'verify' && (
+      {inputMode === 'manual' && (
         <form onSubmit={handleSubmit} className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-          
-          {/* External Data Toggle */}
-          <div 
-             className={`flex items-center justify-between p-3 rounded-lg border transition-colors cursor-pointer ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e]/10 border-[#61988e]/30' : 'bg-gray-50 border-gray-200'}`}
-             onClick={() => handleExternalDataToggle(recordType !== RecordType.MARKET_DATA)}
-          >
-             <div className="flex items-center gap-3">
-                 <div className={`p-2 rounded-full ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e] text-white' : 'bg-gray-200 text-gray-500'}`}>
-                     <Globe className="w-5 h-5" />
-                 </div>
-                 <div>
-                     <p className={`text-sm font-bold ${recordType === RecordType.MARKET_DATA ? 'text-[#61988e]' : 'text-[#403f4c]'}`}>External Market Data Mode</p>
-                     <p className="text-xs text-gray-500">Enable if this isn't your inventory. Use accurate dates if available for Market Analysis.</p>
-                 </div>
-             </div>
-             <div className={`w-12 h-6 rounded-full relative transition-colors ${recordType === RecordType.MARKET_DATA ? 'bg-[#61988e]' : 'bg-gray-300'}`}>
-                 <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${recordType === RecordType.MARKET_DATA ? 'left-7' : 'left-1'}`}></div>
-             </div>
-          </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             
@@ -545,11 +550,11 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
             />
 
             <AutocompleteInput 
-                label="Sub-Model"
-                value={subModel}
-                onChange={setSubModel}
-                options={savedSubModels}
-                onRemoveOption={handleRemoveSubModel}
+                label="Trim"
+                value={trim}
+                onChange={setTrim}
+                options={savedTrims}
+                onRemoveOption={handleRemoveTrim}
                 placeholder="e.g. LE, XSE, AMG"
             />
 
@@ -678,21 +683,46 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
               </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+          {/* Quantity Input for Batch Entry (new sales only) */}
+          {!initialData && (
+            <div className="flex items-center justify-center gap-2 pt-4 border-t border-gray-100">
+              <label className="text-sm font-medium text-[#403f4c]">Quantity:</label>
+              <input
+                type="number"
+                min="1"
+                value={quantity}
+                onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))}
+                className="w-20 px-2 py-1 text-center border rounded focus:ring-2 focus:ring-[#a58039] focus:border-[#a58039] outline-none border-gray-300"
+              />
+              <span className="text-xs text-gray-500">unit{quantity > 1 ? 's' : ''}</span>
+            </div>
+          )}
+
+          <div className="flex justify-between items-center pt-4 border-t border-gray-100">
             <button
               type="button"
-              onClick={onCancel}
-              className="px-4 py-2 text-[#403f4c] hover:bg-[#F0EDDE] rounded-lg"
+              onClick={() => setInputMode('ai')}
+              className="text-sm text-[#a58039] hover:text-[#8c6d30] font-medium flex items-center gap-1"
             >
-              Cancel
+              <Sparkles className="w-4 h-4" />
+              Switch to AI Smart Fill
             </button>
-            <button
-              type="submit"
-              className="px-6 py-2 bg-[#61988e] text-white font-medium rounded-lg hover:bg-[#4d7d74] flex items-center gap-2 shadow-sm"
-            >
-              <CheckCircle className="w-4 h-4" />
-              {initialData ? 'Update Sale' : 'Save to Database'}
-            </button>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-4 py-2 text-[#403f4c] hover:bg-[#F0EDDE] rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2 bg-[#61988e] text-white font-medium rounded-lg hover:bg-[#4d7d74] flex items-center gap-2 shadow-sm"
+              >
+                <CheckCircle className="w-4 h-4" />
+                {initialData ? 'Update Sale' : 'Save to Database'}
+              </button>
+            </div>
           </div>
         </form>
       )}
