@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Download, Plus, LayoutDashboard, List, Car, Upload, X, Globe, Loader2 } from 'lucide-react';
+import { Download, Plus, LayoutDashboard, List, Car, Upload, X, Globe, Loader2, LogOut } from 'lucide-react';
 import { CarSale, Currency, CarStats, RecordType } from './types';
-import { getStoredSales, saveSales, deleteSale, deleteSales, mergeSales, importSales, standardizeTrims, executeTrimCleanup, supabase } from './services/storageService';
+import { getStoredSales, deleteSale, deleteSales, mergeSales, importSales, standardizeTrims, executeTrimCleanup, supabase, ingestSales, AppIngestPayload } from './services/storageService';
 import { fetchExchangeRates, convertToUSD, convertFromUSD } from './services/currencyService';
 import { normalizeHistoricalData } from './services/geminiService';
 import CarForm from './components/CarForm';
@@ -9,6 +9,8 @@ import Dashboard from './components/Dashboard';
 import CarTable from './components/CarTable';
 import BulkImport from './components/BulkImport';
 import { v4 as uuidv4 } from 'uuid';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import LoginScreen from './components/LoginScreen';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -106,7 +108,8 @@ function extractLegacySalesArray(parsedData: unknown): unknown[] {
   throw new Error('Could not find an array of sales in the JSON file.');
 }
 
-const App: React.FC = () => {
+const MainDashboard: React.FC = () => {
+  const { user, signOut } = useAuth();
   const [sales, setSales] = useState<CarSale[]>([]);
   const [salesLoading, setSalesLoading] = useState(true);
   const [view, setView] = useState<'dashboard' | 'list'>('dashboard');
@@ -200,15 +203,15 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const handleAddSale = async (newSales: CarSale[]) => {
+  const handleAddSale = async (payload: AppIngestPayload) => {
     try {
-      const updatedSales = await saveSales(newSales);
+      const updatedSales = await ingestSales(payload);
       setSales(updatedSales);
       setShowForm(false);
       setEditingSale(null);
     } catch (e) {
       console.error(e);
-      alert('Failed to save to Supabase. Check your connection and credentials.');
+      alert('Failed to save to database. Check your connection and credentials.');
     }
   };
 
@@ -705,6 +708,13 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
+              <div className="flex flex-col items-end mr-2">
+                <span className="text-xs font-medium text-[#403f4c]">{user?.email}</span>
+                <button onClick={signOut} className="text-[10px] text-[#a58039] hover:underline flex items-center gap-1">
+                  <LogOut className="w-3 h-3" /> Sign Out
+                </button>
+              </div>
+
               <select
                 value={displayCurrency}
                 onChange={(e) => setDisplayCurrency(e.target.value as Currency)}
@@ -787,22 +797,39 @@ const App: React.FC = () => {
           <CarTable sales={sales} onDelete={handleDeleteSale} onBulkDelete={handleBulkDelete} onEdit={handleEditSale} displayCurrency={displayCurrency} exchangeRates={exchangeRates} includeMarketData={includeMarketData} />
         )}
         {!salesLoading && view === 'bulk-import' && (
-          <BulkImport 
-            onSave={async (newSales) => {
-              try {
-                const updatedSales = await mergeSales(newSales);
-                setSales(updatedSales);
-                setView('list');
-              } catch (e) {
-                console.error(e);
-                throw e;
-              }
-            }} 
-            currentRates={exchangeRates} 
-          />
+          <BulkImport onSave={async (payload) => {
+            await handleAddSale(payload);
+            setView('list');
+          }} currentRates={exchangeRates} />
         )}
       </main>
     </div>
+  );
+};
+
+const AuthGate: React.FC = () => {
+  const { session, loading } = useAuth();
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[#a58039] animate-spin" />
+      </div>
+    );
+  }
+  
+  if (!session) {
+    return <LoginScreen />;
+  }
+  
+  return <MainDashboard />;
+};
+
+const App: React.FC = () => {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 };
 

@@ -90,8 +90,9 @@ serve(async (req: Request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !supabaseServiceKey) {
-      throw new Error("Missing Supabase configuration");
+    const defaultOrgId = Deno.env.get("DEFAULT_ORG_ID");
+    if (!supabaseUrl || !supabaseServiceKey || !defaultOrgId) {
+      throw new Error("Missing Supabase configuration or DEFAULT_ORG_ID");
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -150,6 +151,7 @@ serve(async (req: Request) => {
       const { data: newAsset, error: insertError } = await supabase
         .from('assets')
         .insert({
+          org_id: defaultOrgId,
           fingerprint_hash: fingerprintHash,
           vin: cf.vin ?? null,
           make: cf.make ?? null,
@@ -179,6 +181,8 @@ serve(async (req: Request) => {
     const { data: newSighting, error: sightingError } = await supabase
       .from('sightings')
       .insert({
+        org_id: defaultOrgId,
+        logged_via: 'extension_dom_capture',
         asset_id: assetId,
         source_platform: payload.source_platform ?? null,
         source_type: 'research_capture',
@@ -231,6 +235,7 @@ serve(async (req: Request) => {
        const { data: runListing, error: rlErr } = await supabase
          .from('research_run_listings')
          .insert({
+            org_id: defaultOrgId,
             run_id: payload.research_run_id,
             sighting_id: newSighting.id,
             position: maxPos + 1

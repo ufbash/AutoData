@@ -111,3 +111,32 @@ This section lists manual steps for verifying the generalized extractor and pars
 7. Capture a Copart lot (any). Confirm:
    - `listed_price` is NULL on the sighting
    - `raw_payload` is structured JSON
+
+## Multi-tenant foundation verification
+This section lists manual steps for verifying the multi-tenant upgrade:
+1. `supabase db push` applies 006 cleanly
+2. Confirm tables exist: organizations, memberships; enums org_role_enum, logged_via_enum exist
+3. Confirm org_id column on assets/sightings/research_runs/research_run_listings; logged_via on sightings
+4. `SELECT id FROM organizations WHERE slug='caplimo';` returns one row — note the id
+5. `supabase secrets set DEFAULT_ORG_ID=<that-id>` then `supabase functions deploy research-capture`
+6. Capture a test Copart lot via the extension → confirm the new asset + sighting rows have org_id = Caplimo id and logged_via = 'extension_dom_capture'
+7. Seed your own membership (SQL, user runs after first Google login exists — or note it as pending until auth UI is built):
+   `INSERT INTO memberships (user_id, org_id, role) VALUES ('<your-auth-uid>', '<caplimo-org-id>', 'superadmin');`
+
+## Step 5a auth verification
+This section lists manual steps for verifying the Google Auth login gate:
+1. `npm run dev` locally → app shows LoginScreen, not the dashboard
+2. Click "Continue with Google" → Google consent → redirected back → dashboard appears
+3. Logged-in email shows in header
+4. Refresh page → still logged in (session persists)
+5. Sign out → returns to LoginScreen
+6. Deploy to Vercel (git push) → repeat 1–5 on theautodata.com
+7. After first successful login, run in SQL editor: `SELECT id, email FROM auth.users;` → confirm your user row exists; note the id for membership seeding
+
+## Step 5b Repoint to Unified Ledger verification
+This section lists manual steps for verifying that manual entry and bulk import route through the unified ledger correctly:
+1. `supabase db push` to push migration 008.
+2. `supabase functions deploy app-ingest` to deploy the new Edge Function.
+3. In local dev (`npm run dev`), go to the Dashboard and ensure existing unified ledger sightings are displayed successfully (from the new `getStoredSales` read path).
+4. Click "Add Sold Car" (Manual Entry) or perform a "Bulk Import". Ensure it succeeds and the data correctly appears in the unified ledger `sightings` and `assets` table.
+5. In Supabase Table Editor, verify that `sales` table remains empty or untouched by the new writes, and `sightings` records the new manual/AI imports accurately.

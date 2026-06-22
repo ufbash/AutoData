@@ -10,8 +10,10 @@ import {
 import { CarSale, Currency, RecordType } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
+import { AppIngestPayload } from '../services/storageService';
+
 interface CarFormProps {
-  onSaleAdded: (sales: CarSale[]) => void | Promise<void>;
+  onSaleAdded: (payload: AppIngestPayload) => void | Promise<void>;
   onCancel: () => void;
   initialData?: CarSale | null;
   currentRates: Record<string, number>;
@@ -403,30 +405,34 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
     // Mileage: already a number or null
     const numericMileage = mileage;
 
-    // Create batch of sales with unique IDs (editing always updates a single record)
     const batchCount = initialData ? 1 : Math.max(1, quantity);
-    const newSales: CarSale[] = [];
+    const vehiclesToIngest = [];
+    
     for (let i = 0; i < batchCount; i++) {
-      const payloadData: Partial<CarSale> = {
-        id: initialData ? initialData.id : uuidv4(),
+      vehiclesToIngest.push({
         make,
         model,
-        trim,
-        year,
-        price: numericPrice,
-        originalCurrency: currency,
-        dateListed: dateListed,
-        dateSold,
-        mileage: numericMileage,
+        trim: trim || 'Base',
+        year: year ? parseInt(year) : undefined,
+        mileage_miles: numericMileage ?? undefined,
         dealer: finalDealer,
+        sale_price: numericPrice ?? null,
+        sale_date: dateSold || undefined,
+        listed_price: null,
+        date_listed: dateListed || undefined,
+        listed_currency: currency,
         tags: finalTags,
-        recordType
-      };
-      
-      newSales.push(prepareCarPayload(payloadData, currentRates));
+        daysToSell: daysToSell
+      });
     }
 
-    await onSaleAdded(newSales);
+    const payload: AppIngestPayload = {
+      entry_method: 'manual_entry',
+      record_type: recordType,
+      vehicles: vehiclesToIngest
+    };
+
+    await onSaleAdded(payload);
   };
 
   return (

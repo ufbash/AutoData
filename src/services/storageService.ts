@@ -5,297 +5,171 @@ import { v4 as uuidv4 } from "uuid";
 
 export { supabase };
 
-/**
- * Supabase table `sales` — PostgreSQL columns use camelCase (quoted identifiers),
- * matching PostgREST/JSON and the CarSale TypeScript shape.
- */
+// NOTE: The `sales` table is officially DEPRECATED in Step 5b.
+// It is retained physically in the database as a historical backup.
+// All new writes and reads are routed to the `assets` and `sightings` ledger.
 
-/** Row as returned by Supabase (camelCase keys). */
-interface SalesRow {
-  id: string;
-  make: string;
-  model: string;
-  trim: string;
-  year: string;
-  price: number | null;
-  originalCurrency: string;
-  priceUSD: number | null;
-  exchangeRate: number;
-  dateListed: string | null;
-  dateSold: string | null;
-  daysToSell: number | null;
-  mileage: number | null;
-  dealer: string;
-  tags: unknown;
-  notes: string | null;
-  recordType: string;
+export interface AppIngestPayload {
+  entry_method: 'manual_entry' | 'ai_vision';
+  record_type: 'INVENTORY' | 'MARKET_DATA';
+  org_id?: string;
+  vehicles: Array<{
+    vin?: string;
+    make: string;
+    model: string;
+    trim?: string;
+    year?: number;
+    exterior_color?: string;
+    mileage_miles?: number;
+    dealer?: string;
+    sale_price?: number | null;
+    sale_date?: string;
+    listed_price?: number | null;
+    date_listed?: string;
+    listed_currency?: string;
+    // Additional fields we want to pack into raw_payload for backward compatibility
+    tags?: string[];
+    priceUSD?: number | null;
+    exchangeRate?: number;
+    daysToSell?: number | null;
+    notes?: string;
+  }>;
 }
-
-function rowToCarSale(row: SalesRow): CarSale {
-  const tagsRaw = row.tags;
-  const tagsArray: string[] = Array.isArray(tagsRaw)
-    ? tagsRaw.filter((t): t is string => typeof t === "string")
-    : [];
-
-  const recordType =
-    row.recordType === RecordType.MARKET_DATA
-      ? RecordType.MARKET_DATA
-      : RecordType.INVENTORY;
-
-  const price =
-    typeof row.price === "number" && Number.isFinite(row.price)
-      ? row.price
-      : null;
-  const priceUSD =
-    typeof row.priceUSD === "number" && Number.isFinite(row.priceUSD)
-      ? row.priceUSD
-      : null;
-  const daysToSell =
-    typeof row.daysToSell === "number" && Number.isFinite(row.daysToSell)
-      ? row.daysToSell
-      : null;
-  const mileage =
-    typeof row.mileage === "number" && Number.isFinite(row.mileage)
-      ? row.mileage
-      : null;
-
-  return {
-    id: row.id,
-    make: row.make,
-    model: row.model,
-    trim: row.trim,
-    year: row.year,
-    price,
-    originalCurrency: row.originalCurrency,
-    priceUSD,
-    exchangeRate:
-      typeof row.exchangeRate === "number" && Number.isFinite(row.exchangeRate)
-        ? row.exchangeRate
-        : 1,
-    dateListed: row.dateListed ?? undefined,
-    dateSold: row.dateSold ?? undefined,
-    daysToSell,
-    mileage,
-    dealer: row.dealer,
-    tags: tagsArray,
-    notes: row.notes ?? undefined,
-    recordType,
-  };
-}
-
-/** Payload for insert/upsert: camelCase only, nulls for optional DB columns. */
-function carSaleToDbRow(s: CarSale): SalesRow {
-  return {
-    id: s.id,
-    make: s.make,
-    model: s.model,
-    trim: s.trim,
-    year: s.year,
-    price: s.price,
-    originalCurrency: s.originalCurrency,
-    priceUSD: s.priceUSD,
-    exchangeRate: s.exchangeRate,
-    dateListed: s.dateListed ?? null,
-    dateSold: s.dateSold ?? null,
-    daysToSell: s.daysToSell ?? null,
-    mileage: s.mileage ?? null,
-    dealer: s.dealer,
-    tags: s.tags,
-    notes: s.notes ?? null,
-    recordType: s.recordType,
-  };
-}
-
-export const prepareCarPayload = (
-  data: Partial<CarSale>,
-  currentRates: Record<string, number>
-): CarSale => {
-  const originalCurrency = (data.originalCurrency as Currency) || Currency.NGN;
-  const numericPrice = data.price ?? null;
-  const usdValue =
-    numericPrice === null
-      ? null
-      : convertToUSD(numericPrice, originalCurrency, currentRates);
-
-  let daysToSell: number | null = null;
-  if (data.dateListed && data.dateSold) {
-    const listedMs = Date.parse(data.dateListed);
-    const soldMs = Date.parse(data.dateSold);
-    if (Number.isFinite(listedMs) && Number.isFinite(soldMs)) {
-      const diffTime = Math.abs(soldMs - listedMs);
-      daysToSell = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    }
-  }
-
-  return {
-    id: data.id || uuidv4(),
-    make: data.make || "Unknown",
-    model: data.model || "Unknown",
-    trim: data.trim || "Base",
-    year: data.year || "Unknown",
-    price: numericPrice,
-    originalCurrency: originalCurrency,
-    priceUSD: usdValue, // Stored Truth
-    exchangeRate: currentRates[originalCurrency] || 1, // Store rate at time of entry
-    dateListed: data.dateListed || undefined,
-    dateSold: data.dateSold || new Date().toISOString().split("T")[0],
-    daysToSell: daysToSell,
-    mileage: data.mileage ?? null,
-    dealer: data.dealer || "Unknown",
-    tags: data.tags || [],
-    recordType: data.recordType || RecordType.INVENTORY,
-  };
-};
 
 export const getStoredSales = async (): Promise<CarSale[]> => {
   const { data, error } = await supabase
-    .from("sales")
-    .select("*")
-    .order("dateSold", { ascending: false, nullsFirst: false });
+    .from("sightings")
+    .select("id, dealer_source, listed_price, listed_currency, sale_date, mileage_miles, raw_payload, logged_via, captured_at, assets ( make, model, trim, year )")
+    .in("source_type", ["manual_entry", "ai_vision", "research_capture"]) // Include anything we want to see, maybe all sightings
+    .order("captured_at", { ascending: false });
 
   if (error) {
-    console.error("Failed to fetch sales from Supabase:", error);
+    console.error("Failed to fetch sightings from Supabase:", error);
     throw error;
   }
 
   if (!data || !Array.isArray(data)) return [];
 
-  return (data as SalesRow[]).map(rowToCarSale);
+  return data.map((row: any): CarSale => {
+    const raw = row.raw_payload || {};
+    const asset = row.assets || {};
+    return {
+      id: row.id,
+      make: asset.make || "Unknown",
+      model: asset.model || "Unknown",
+      trim: asset.trim || "Base",
+      year: asset.year?.toString() || "Unknown",
+      price: row.listed_price,
+      originalCurrency: row.listed_currency || 'NGN',
+      priceUSD: raw.priceUSD || null,
+      exchangeRate: raw.exchangeRate || 1,
+      dateListed: raw.date_listed || undefined,
+      dateSold: row.sale_date || undefined,
+      daysToSell: raw.daysToSell || null,
+      mileage: row.mileage_miles,
+      dealer: row.dealer_source || 'Unknown',
+      tags: raw.tags || [],
+      notes: raw.notes || undefined,
+      recordType: raw.record_type || RecordType.INVENTORY,
+    };
+  });
 };
 
-/** Upsert one or more rows by primary key `id`; returns the full table after fetch. */
-export const saveSales = async (sales: CarSale[]): Promise<CarSale[]> => {
-  if (sales.length === 0) return getStoredSales();
+export const ingestSales = async (payload: AppIngestPayload): Promise<CarSale[]> => {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError || !sessionData.session) {
+    throw new Error("You must be logged in to save records.");
+  }
 
-  const rows = sales.map(carSaleToDbRow);
-  const { error } = await supabase.from("sales").upsert(rows, {
-    onConflict: "id",
+  const token = sessionData.session.access_token;
+  const projectUrl = import.meta.env.VITE_SUPABASE_URL;
+
+  // We add saved dealer/make/model to local storage here as a convenience
+  payload.vehicles.forEach(v => {
+    if (v.dealer && v.dealer !== "Unknown") addSavedDealer(v.dealer);
+    if (v.make && v.model) addVehicleData(v.make, v.model);
+    if (v.trim && v.trim !== "Base" && v.trim !== "Unknown") addSavedTrim(v.trim);
   });
 
-  if (error) {
-    console.error("saveSales failed:", error);
-    throw error;
+  const response = await fetch(`${projectUrl}/functions/v1/app-ingest`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Ingest failed: ${errText}`);
+  }
+
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(`Ingest reported errors: ${JSON.stringify(result.errors)}`);
   }
 
   return getStoredSales();
 };
 
-export const saveSale = async (sale: CarSale): Promise<CarSale[]> => {
-  return saveSales([sale]);
-};
-
 export const deleteSale = async (id: string): Promise<CarSale[]> => {
-  const { error } = await supabase.from("sales").delete().eq("id", id);
-
+  const { error } = await supabase.from("sightings").delete().eq("id", id);
   if (error) {
     console.error("deleteSale failed:", error);
     throw error;
   }
-
   return getStoredSales();
 };
 
 export const deleteSales = async (ids: string[]): Promise<CarSale[]> => {
   if (ids.length === 0) return getStoredSales();
-
-  const { error } = await supabase.from("sales").delete().in("id", ids);
-
+  const { error } = await supabase.from("sightings").delete().in("id", ids);
   if (error) {
     console.error("deleteSales failed:", error);
     throw error;
   }
-
   return getStoredSales();
 };
 
-/** Replace all rows in `sales` with the given array (full sync). */
 export const importSales = async (sales: CarSale[]): Promise<void> => {
-  const { data: existing, error: selectError } = await supabase
-    .from("sales")
-    .select("id");
-
-  if (selectError) {
-    console.error("importSales select failed:", selectError);
-    throw selectError;
-  }
-
-  const ids = (existing ?? []).map((r: { id: string }) => r.id);
-  if (ids.length > 0) {
-    const { error: deleteError } = await supabase
-      .from("sales")
-      .delete()
-      .in("id", ids);
-
-    if (deleteError) {
-      console.error("importSales delete failed:", deleteError);
-      throw deleteError;
-    }
-  }
-
-  if (sales.length === 0) return;
-
-  const rows = sales.map(carSaleToDbRow);
-  const { error: insertError } = await supabase.from("sales").insert(rows);
-
-  if (insertError) {
-    console.error("importSales insert failed:", insertError);
-    throw insertError;
-  }
+  throw new Error("importSales is disabled for the unified ledger. Please use Bulk Import instead.");
 };
 
-export const mergeSales = async (newSales: CarSale[]): Promise<CarSale[]> => {
-  await saveSales(newSales);
-  newSales.forEach((s) => {
-    if (s.dealer && s.dealer !== "Unknown") addSavedDealer(s.dealer);
-    if (s.make && s.model) addVehicleData(s.make, s.model);
-    if (s.trim && s.trim !== "Base" && s.trim !== "Unknown")
-      addSavedTrim(s.trim);
-  });
-  return getStoredSales();
+export const mergeSales = async (sales: CarSale[]): Promise<CarSale[]> => {
+  if (sales.length === 0) return getStoredSales();
+  
+  const payload: AppIngestPayload = {
+    entry_method: 'manual_entry',
+    record_type: 'INVENTORY',
+    vehicles: sales.map(s => ({
+      make: s.make,
+      model: s.model,
+      trim: s.trim,
+      year: s.year !== 'Unknown' ? parseInt(s.year) : undefined,
+      sale_price: s.price,
+      listed_currency: s.originalCurrency,
+      date_listed: s.dateListed,
+      sale_date: s.dateSold,
+      mileage_miles: s.mileage ?? undefined,
+      dealer: s.dealer,
+      tags: s.tags,
+      daysToSell: s.daysToSell
+    }))
+  };
+
+  return ingestSales(payload);
 };
 
 export const standardizeTrims = async (): Promise<Record<string, string>> => {
-  const { data, error } = await supabase.from("sales").select("trim");
-  if (error) {
-    console.error("Failed to fetch trims:", error);
-    return {};
-  }
-
-  const uniqueTrims = Array.from(new Set(data.map(row => row.trim).filter(Boolean)));
-  const mapping: Record<string, string> = {};
-
-  uniqueTrims.forEach(dirtyName => {
-    let cleanName = dirtyName.trim();
-    
-    // Example standardization rules
-    if (/^XSE\d*\s*plug$/i.test(cleanName) || /^XSE$/i.test(cleanName)) cleanName = "XSE";
-    else if (/^AMG/i.test(cleanName)) cleanName = "AMG";
-    else if (/^M-Sport/i.test(cleanName) || /^M Sport/i.test(cleanName)) cleanName = "M-Sport";
-    else if (/^Autobiography/i.test(cleanName)) cleanName = "Autobiography";
-    else if (/^Limited/i.test(cleanName)) cleanName = "Limited";
-    
-    if (cleanName !== dirtyName) {
-      mapping[dirtyName] = cleanName;
-    }
-  });
-
-  return mapping;
+  // TODO: Repoint to operate on assets.trim / sightings
+  console.warn("standardizeTrims is stubbed pending step 5b trim refactor.");
+  return {};
 };
 
 export const executeTrimCleanup = async (dirtyName: string, cleanName: string): Promise<void> => {
-  const { error } = await supabase
-    .from("sales")
-    .update({ trim: cleanName })
-    .eq("trim", dirtyName);
-
-  if (error) {
-    console.error(`Failed to merge ${dirtyName} to ${cleanName}:`, error);
-    throw error;
-  }
-  
-  // Clean up localStorage
-  removeSavedTrim(dirtyName);
-  addSavedTrim(cleanName);
+  // TODO: Repoint to operate on assets.trim / sightings
+  console.warn("executeTrimCleanup is stubbed pending step 5b trim refactor.");
 };
 
 // --- Auxiliary data remains in localStorage (dealers, vehicle DB, trims) ---
@@ -305,63 +179,14 @@ const VEHICLE_DB_KEY = "autotrend_vehicle_db";
 const TRIMS_KEY = "autotrend_saved_trims";
 
 const INITIAL_VEHICLES: Record<string, string[]> = {
-  Toyota: [
-    "Camry",
-    "Corolla",
-    "Highlander",
-    "RAV4",
-    "Sienna",
-    "Avalon",
-    "Land Cruiser",
-    "Prado",
-    "Venza",
-    "Yaris",
-    "Tacoma",
-    "Tundra",
-    "4Runner",
-    "Sequoia",
-    "Hilux",
-  ],
-  Lexus: [
-    "RX 350",
-    "ES 350",
-    "GX 460",
-    "LX 570",
-    "IS 250",
-    "NX 200t",
-    "GS 350",
-    "LS 460",
-    "RC 350",
-    "LX 600",
-  ],
-  "Mercedes-Benz": [
-    "C-Class",
-    "E-Class",
-    "GLK",
-    "GLE",
-    "GLS",
-    "G-Class",
-    "S-Class",
-    "CLA",
-    "GLA",
-    "ML 350",
-    "GL 450",
-    "C300",
-    "C43 AMG",
-    "G63 AMG",
-  ],
+  Toyota: ["Camry", "Corolla", "Highlander", "RAV4", "Sienna", "Avalon", "Land Cruiser", "Prado", "Venza", "Yaris", "Tacoma", "Tundra", "4Runner", "Sequoia", "Hilux"],
+  Lexus: ["RX 350", "ES 350", "GX 460", "LX 570", "IS 250", "NX 200t", "GS 350", "LS 460", "RC 350", "LX 600"],
+  "Mercedes-Benz": ["C-Class", "E-Class", "GLK", "GLE", "GLS", "G-Class", "S-Class", "CLA", "GLA", "ML 350", "GL 450", "C300", "C43 AMG", "G63 AMG"],
   Honda: ["Accord", "Civic", "CR-V", "Pilot", "Crosstour", "Odyssey", "HR-V"],
   Ford: ["Edge", "Explorer", "Escape", "F-150", "Mustang", "Focus", "Fusion"],
   Hyundai: ["Elantra", "Sonata", "Tucson", "Santa Fe", "Accent", "Palisade"],
   Kia: ["Rio", "Optima", "Sportage", "Sorento", "Cerato", "Picanto"],
-  "Land Rover": [
-    "Range Rover",
-    "Range Rover Sport",
-    "Range Rover Evoque",
-    "Discovery",
-    "Defender",
-    "Velar",
-  ],
+  "Land Rover": ["Range Rover", "Range Rover Sport", "Range Rover Evoque", "Discovery", "Defender", "Velar"],
   Nissan: ["Altima", "Maxima", "Rogue", "Pathfinder", "Versa", "Sentra"],
   Acura: ["MDX", "RDX", "TLX", "ZDX"],
   Volkswagen: ["Golf", "Jetta", "Passat", "Tiguan", "Touareg"],
@@ -442,18 +267,7 @@ export const getSavedTrims = (): string[] => {
     const data = localStorage.getItem(TRIMS_KEY);
     return data
       ? JSON.parse(data)
-      : [
-          "LE",
-          "XLE",
-          "SE",
-          "XSE",
-          "Limited",
-          "Platinum",
-          "Sport",
-          "Base",
-          "AMG",
-          "4Matic",
-        ];
+      : ["LE", "XLE", "SE", "XSE", "Limited", "Platinum", "Sport", "Base", "AMG", "4Matic"];
   } catch (e) {
     return [];
   }

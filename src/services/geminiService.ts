@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { StandardizedCarData, MarketForecast, CarSale } from "../types";
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1' } });
 
 export const extractVehicleDataFromImages = async (
   image1Base64: string,
@@ -14,7 +14,7 @@ export const extractVehicleDataFromImages = async (
     throw new Error("API Key is missing. Please set VITE_GEMINI_API_KEY in your .env file.");
   }
 
-  const modelName = "gemini-3.5-flash";
+  const modelName = "gemini-3.1-flash-lite";
   console.log("Sending to Gemini:", modelName);
 
   try {
@@ -42,7 +42,7 @@ export const extractVehicleDataFromImages = async (
               - 'Make' is the brand (e.g., 'Mercedes-Benz', 'Toyota'). 
               If a dealer posts '2024 Mercedes C43', you must return { year: '2024', make: 'Mercedes-Benz', model: 'C-Class', trim: 'C 43 AMG' }.
 
-              Return as a clean JSON object with keys: { make, model, trim, year, price, originalCurrency, dateListed, dateSold, mileage, dealer }. 
+              Return as a clean JSON object with keys: { make, model, trim, year, exterior_color, price, originalCurrency, dateListed, dateSold, mileage, dealer }. 
               For 'originalCurrency', strictly use one of: 'NGN', 'USD', 'EUR', 'GBP'. Default to 'NGN' if ambiguous.
               Format dates as YYYY-MM-DD.
               If a field is missing, use null.

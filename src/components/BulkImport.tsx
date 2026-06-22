@@ -17,8 +17,10 @@ interface ImagePair {
     error?: string;
   }
 
+import { AppIngestPayload } from '../services/storageService';
+
 interface BulkImportProps {
-  onSave: (sales: CarSale[]) => Promise<void>;
+  onSave: (payload: AppIngestPayload) => Promise<void>;
   currentRates: Record<string, number>;
 }
 
@@ -246,23 +248,20 @@ export default function BulkImport({ onSave, currentRates }: BulkImportProps) {
         const originalCurrency = r.originalCurrency || Currency.NGN;
         const numericPrice = r.price || null;
 
-        const payloadData: Partial<CarSale> = {
-          id: r.id || uuidv4(),
+        return {
           make: r.make || 'Unknown',
           model: r.model || 'Unknown',
           trim: r.trim || 'Base',
-          year: r.year || 'Unknown',
-          price: numericPrice,
-          originalCurrency: originalCurrency,
-          dateListed: r.dateListed,
-          dateSold: r.dateSold,
-          mileage: r.mileage || null,
+          year: r.year ? parseInt(r.year as string) : undefined,
+          sale_price: numericPrice,
+          listed_currency: originalCurrency,
+          date_listed: r.dateListed,
+          sale_date: r.dateSold,
+          mileage_miles: r.mileage || undefined,
           dealer: r.dealer || 'Unknown',
           tags: markAsMarketData ? ['External Data'] : (r.tags || []),
-          recordType: markAsMarketData ? RecordType.MARKET_DATA : (r.recordType || RecordType.INVENTORY)
+          daysToSell: daysToSell
         };
-        
-        return prepareCarPayload(payloadData, currentRates);
       });
 
     if (validResults.length === 0) {
@@ -279,7 +278,12 @@ export default function BulkImport({ onSave, currentRates }: BulkImportProps) {
 
     setIsSaving(true);
     try {
-      await onSave(validResults);
+      const payload: AppIngestPayload = {
+        entry_method: 'ai_vision',
+        record_type: markAsMarketData ? RecordType.MARKET_DATA : RecordType.INVENTORY,
+        vehicles: validResults
+      };
+      await onSave(payload);
       alert(`Successfully saved ${validResults.length} records!`);
       // Clear processed pairs
       setPairs(prev => prev.filter(p => p.status !== 'success'));
