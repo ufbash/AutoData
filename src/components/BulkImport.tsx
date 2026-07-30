@@ -3,7 +3,7 @@ import { Upload, Image as ImageIcon, X, Loader2, CheckCircle, Save, AlertCircle 
 import { extractVehicleDataFromImages } from '../services/geminiService';
 import { CarSale, Currency, RecordType } from '../types';
 import { v4 as uuidv4 } from 'uuid';
-import { getSavedDealers, prepareCarPayload } from '../services/storageService';
+import { getSavedDealers } from '../services/storageService';
 import imageCompression from 'browser-image-compression';
 
 interface ImagePair {

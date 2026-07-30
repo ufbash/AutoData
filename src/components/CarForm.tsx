@@ -4,8 +4,7 @@ import { standardizeVehicleString } from '../services/geminiService';
 import { 
     addSavedDealer, getSavedDealers, removeSavedDealer,
     getVehicleDB, addVehicleData, removeMake, removeModel,
-    getSavedTrims, addSavedTrim, removeSavedTrim,
-    prepareCarPayload
+    getSavedTrims, addSavedTrim, removeSavedTrim
 } from '../services/storageService';
 import { CarSale, Currency, RecordType } from '../types';
 import { v4 as uuidv4 } from 'uuid';

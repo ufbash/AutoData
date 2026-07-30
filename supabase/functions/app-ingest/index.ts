@@ -47,13 +47,18 @@ serve(async (req: Request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !supabaseServiceKey) {
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    if (!supabaseUrl || !supabaseServiceKey || !supabaseAnonKey) {
       throw new Error("Missing Supabase configuration");
     }
 
-    // Client for auth check
-    const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey);
-    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
+    // 1. Client for auth check (JWT-scoped)
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { persistSession: false }
+    });
+    
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
     
     if (authError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized: Invalid token" }), { 
@@ -69,8 +74,10 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: "Invalid JSON format" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // Service Role Client for operations
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    // 2. Service Role Client for privileged DB operations (bypasses RLS)
+    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+    });
 
     // Derive org_id
     const { data: memberships, error: memError } = await supabase
@@ -80,12 +87,17 @@ serve(async (req: Request) => {
 
     if (memError) throw memError;
 
+    const memCount = memberships ? memberships.length : 0;
+    console.log(`Resolved user_id: ${user.id}, membership count: ${memCount}`);
+
     let targetOrgId = payload.org_id;
     if (!targetOrgId) {
-      if (memberships && memberships.length === 1) {
+      if (memCount === 0) {
+        return new Response(JSON.stringify({ error: "No organization membership found for this account." }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      } else if (memCount === 1) {
         targetOrgId = memberships[0].org_id;
       } else {
-        return new Response(JSON.stringify({ error: "User belongs to multiple orgs, org_id must be provided" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ error: "Multiple org memberships; org_id required." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
     } else {
       const isMember = memberships?.some(m => m.org_id === targetOrgId);

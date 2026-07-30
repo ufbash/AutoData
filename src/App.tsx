@@ -11,6 +11,9 @@ import BulkImport from './components/BulkImport';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginScreen from './components/LoginScreen';
+import ResearchRuns from './components/ResearchRuns';
+import ResearchRunDetail from './components/ResearchRunDetail';
+import PublicRunView from './components/PublicRunView';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -112,11 +115,12 @@ const MainDashboard: React.FC = () => {
   const { user, signOut } = useAuth();
   const [sales, setSales] = useState<CarSale[]>([]);
   const [salesLoading, setSalesLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'list'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail'>('dashboard');
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingSale, setEditingSale] = useState<CarSale | null>(null);
   const [displayCurrency, setDisplayCurrency] = useState<Currency>(Currency.NGN);
-  const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({'USD': 1});
+  const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ 'USD': 1 });
   const [includeMarketData, setIncludeMarketData] = useState(false);
 
   const [showExportModal, setShowExportModal] = useState(false);
@@ -253,18 +257,18 @@ const MainDashboard: React.FC = () => {
       ...sales.map(s => {
         let exportPrice: number | null = s.price;
         if (exportCurrency === Currency.USD) {
-            exportPrice =
-              s.priceUSD !== null
-                ? s.priceUSD
-                : s.price !== null
-                  ? convertToUSD(s.price, s.originalCurrency, exchangeRates)
-                  : null;
+          exportPrice =
+            s.priceUSD !== null
+              ? s.priceUSD
+              : s.price !== null
+                ? convertToUSD(s.price, s.originalCurrency, exchangeRates)
+                : null;
         } else if (exportCurrency !== s.originalCurrency) {
-            if (s.priceUSD !== null) {
-                exportPrice = convertFromUSD(s.priceUSD, exportCurrency, exchangeRates);
-            } else {
-                exportPrice = null;
-            }
+          if (s.priceUSD !== null) {
+            exportPrice = convertFromUSD(s.priceUSD, exportCurrency, exchangeRates);
+          } else {
+            exportPrice = null;
+          }
         }
         return [
           s.make,
@@ -293,10 +297,10 @@ const MainDashboard: React.FC = () => {
   };
 
   const handleImportClick = () => {
-      if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-          fileInputRef.current.click();
-      }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
   };
 
   const handleOpenCleanup = async () => {
@@ -327,17 +331,17 @@ const MainDashboard: React.FC = () => {
       const batchSize = 30;
       const totalBatches = Math.ceil(allSales.length / batchSize);
       let totalCleaned = 0;
-      
+
       setDetoxProgress({ current: 0, total: totalBatches });
 
       for (let i = 0; i < allSales.length; i += batchSize) {
         const currentBatchNum = Math.floor(i / batchSize) + 1;
         setDetoxProgress({ current: currentBatchNum, total: totalBatches });
         setDetoxStatusMsg(`Processing ${currentBatchNum}/${totalBatches}...`);
-        
+
         const batch = allSales.slice(i, i + batchSize);
         console.log(`Sending batch ${currentBatchNum} to Gemini:`, batch);
-        
+
         let success = false;
         let retries = 0;
         const maxRetries = 5;
@@ -346,32 +350,32 @@ const MainDashboard: React.FC = () => {
           try {
             const cleanedBatch = await normalizeHistoricalData(batch);
             console.log(`Received clean batch ${currentBatchNum} from Gemini:`, cleanedBatch);
-            
+
             // 4. Update Supabase for each record
             for (const cleanRecord of cleanedBatch) {
-               if (!cleanRecord.id) {
-                   console.warn("Skipping record missing ID:", cleanRecord);
-                   continue;
-               }
-               
-               const { error } = await supabase
-                 .from('sales')
-                 .update({
-                   make: cleanRecord.make,
-                   model: cleanRecord.model,
-                   trim: cleanRecord.trim,
-                   year: cleanRecord.year,
-                   dealer: cleanRecord.dealer
-                 })
-                 .eq('id', cleanRecord.id);
-                 
-               if (error) {
-                 console.error(`Failed to update record ${cleanRecord.id}:`, error);
-               } else {
-                 totalCleaned++;
-               }
+              if (!cleanRecord.id) {
+                console.warn("Skipping record missing ID:", cleanRecord);
+                continue;
+              }
+
+              const { error } = await supabase
+                .from('sales')
+                .update({
+                  make: cleanRecord.make,
+                  model: cleanRecord.model,
+                  trim: cleanRecord.trim,
+                  year: cleanRecord.year,
+                  dealer: cleanRecord.dealer
+                })
+                .eq('id', cleanRecord.id);
+
+              if (error) {
+                console.error(`Failed to update record ${cleanRecord.id}:`, error);
+              } else {
+                totalCleaned++;
+              }
             }
-            
+
             success = true;
             setDetoxStatusMsg(`Processing ${currentBatchNum}/${totalBatches}...`);
             // Standard delay between successful batches to respect rate limits
@@ -379,20 +383,20 @@ const MainDashboard: React.FC = () => {
               await new Promise(resolve => setTimeout(resolve, 10000)); // 10-second delay
             }
           } catch (batchError: any) {
-             retries++;
-             console.warn(`Error processing batch ${currentBatchNum} (Attempt ${retries}/${maxRetries}):`, batchError);
-             if (batchError?.status === 429 || String(batchError).includes('429')) {
-                console.warn(`Rate limit hit on batch ${currentBatchNum}. Waiting 65 seconds before retry...`);
-                setDetoxStatusMsg(`Rate limit hit. Pausing for 60 seconds...`);
-                await new Promise(resolve => setTimeout(resolve, 65000));
-             } else {
-                // If it's not a rate limit, wait 5 seconds before retrying just in case
-                await new Promise(resolve => setTimeout(resolve, 5000));
-             }
-             if (retries >= maxRetries) {
-               console.error(`Failed to process batch ${currentBatchNum} after ${maxRetries} attempts. Skipping.`);
-               break; // Move to the next batch
-             }
+            retries++;
+            console.warn(`Error processing batch ${currentBatchNum} (Attempt ${retries}/${maxRetries}):`, batchError);
+            if (batchError?.status === 429 || String(batchError).includes('429')) {
+              console.warn(`Rate limit hit on batch ${currentBatchNum}. Waiting 65 seconds before retry...`);
+              setDetoxStatusMsg(`Rate limit hit. Pausing for 60 seconds...`);
+              await new Promise(resolve => setTimeout(resolve, 65000));
+            } else {
+              // If it's not a rate limit, wait 5 seconds before retrying just in case
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+            if (retries >= maxRetries) {
+              console.error(`Failed to process batch ${currentBatchNum} after ${maxRetries} attempts. Skipping.`);
+              break; // Move to the next batch
+            }
           }
         }
       }
@@ -469,63 +473,63 @@ const MainDashboard: React.FC = () => {
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-          const content = e.target?.result as string;
-          if (content) {
-              void (async () => {
-              try {
-                  const lines = content.split('\n');
-                  const newSales: CarSale[] = [];
-                  for (let i = 1; i < lines.length; i++) {
-                      const line = lines[i].trim();
-                      if (!line) continue;
-                      if (line.startsWith('"') && line.endsWith('"')) {
-                          const rawValues = line.substring(1, line.length - 1).split('","');
-                          if (rawValues.length >= 6) {
-                             const parsedPrice = Number(rawValues[4]);
-                             const importedPrice = Number.isFinite(parsedPrice) ? parsedPrice : null;
-                             const importedCurrency = rawValues[5] as Currency;
-                             const usdValue =
-                               importedPrice === null ? null : convertToUSD(importedPrice, importedCurrency, exchangeRates);
-                             const parsedMileage = rawValues[9] ? Number(rawValues[9]) : null;
-                             const importedMileage = parsedMileage !== null && Number.isFinite(parsedMileage) ? parsedMileage : null;
-                             const rawTags = rawValues[11] ? rawValues[11].split(';') : [];
-                             const hadLegacyExternal = rawTags.includes('External Data');
-                             const cleanedTags = rawTags.filter(t => t !== 'External Data');
-                             const sale: CarSale = {
-                                 id: uuidv4(),
-                                 make: rawValues[0], model: rawValues[1], trim: rawValues[2], year: rawValues[3],
-                                 price: importedPrice, originalCurrency: importedCurrency, priceUSD: usdValue,
-                                 exchangeRate: exchangeRates[importedCurrency] || 1, dateListed: rawValues[6],
-                                 dateSold: rawValues[7],
-                                 daysToSell: rawValues[8] && Number.isFinite(Number(rawValues[8])) ? Number(rawValues[8]) : null,
-                                 mileage: importedMileage,
-                                 dealer: rawValues[10] || 'Unknown',
-                                 tags: cleanedTags,
-                                 recordType: hadLegacyExternal ? RecordType.MARKET_DATA : RecordType.INVENTORY
-                             };
-                             newSales.push(sale);
-                          }
-                      }
-                  }
-                  if (newSales.length > 0) {
-                      const updated = await mergeSales(newSales);
-                      setSales(updated);
-                      alert(`Successfully imported ${newSales.length} records.`);
-                  } else {
-                      alert("No valid records found.");
-                  }
-              } catch (error) {
-                  console.error(error);
-                  alert("Failed to parse or save imported file.");
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      if (content) {
+        void (async () => {
+          try {
+            const lines = content.split('\n');
+            const newSales: CarSale[] = [];
+            for (let i = 1; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line) continue;
+              if (line.startsWith('"') && line.endsWith('"')) {
+                const rawValues = line.substring(1, line.length - 1).split('","');
+                if (rawValues.length >= 6) {
+                  const parsedPrice = Number(rawValues[4]);
+                  const importedPrice = Number.isFinite(parsedPrice) ? parsedPrice : null;
+                  const importedCurrency = rawValues[5] as Currency;
+                  const usdValue =
+                    importedPrice === null ? null : convertToUSD(importedPrice, importedCurrency, exchangeRates);
+                  const parsedMileage = rawValues[9] ? Number(rawValues[9]) : null;
+                  const importedMileage = parsedMileage !== null && Number.isFinite(parsedMileage) ? parsedMileage : null;
+                  const rawTags = rawValues[11] ? rawValues[11].split(';') : [];
+                  const hadLegacyExternal = rawTags.includes('External Data');
+                  const cleanedTags = rawTags.filter(t => t !== 'External Data');
+                  const sale: CarSale = {
+                    id: uuidv4(),
+                    make: rawValues[0], model: rawValues[1], trim: rawValues[2], year: rawValues[3],
+                    price: importedPrice, originalCurrency: importedCurrency, priceUSD: usdValue,
+                    exchangeRate: exchangeRates[importedCurrency] || 1, dateListed: rawValues[6],
+                    dateSold: rawValues[7],
+                    daysToSell: rawValues[8] && Number.isFinite(Number(rawValues[8])) ? Number(rawValues[8]) : null,
+                    mileage: importedMileage,
+                    dealer: rawValues[10] || 'Unknown',
+                    tags: cleanedTags,
+                    recordType: hadLegacyExternal ? RecordType.MARKET_DATA : RecordType.INVENTORY
+                  };
+                  newSales.push(sale);
+                }
               }
-              })();
+            }
+            if (newSales.length > 0) {
+              const updated = await mergeSales(newSales);
+              setSales(updated);
+              alert(`Successfully imported ${newSales.length} records.`);
+            } else {
+              alert("No valid records found.");
+            }
+          } catch (error) {
+            console.error(error);
+            alert("Failed to parse or save imported file.");
           }
-      };
-      reader.readAsText(file);
+        })();
+      }
+    };
+    reader.readAsText(file);
   };
 
   const globalFilteredSales = useMemo(() => {
@@ -610,88 +614,88 @@ const MainDashboard: React.FC = () => {
     <div className="min-h-screen bg-[#F0EDDE] text-[#403f4c] font-sans relative">
 
       {showExportModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
-                  <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-lg font-bold text-[#403f4c]">Export Data</h3>
-                      <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-[#ba3b46]">
-                          <X className="w-5 h-5" />
-                      </button>
-                  </div>
-                  <p className="text-sm text-gray-500 mb-4">Select currency for export.</p>
-                  <div className="space-y-3 mb-6">
-                      <button onClick={() => setExportCurrency(Currency.NGN)} className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${exportCurrency === Currency.NGN ? 'border-[#a58039] bg-[#a58039]/10 text-[#a58039]' : 'border-gray-200 hover:bg-gray-50'}`}>
-                          <span className="font-bold">Nigerian Naira (NGN)</span>
-                          {exportCurrency === Currency.NGN && <div className="w-3 h-3 rounded-full bg-[#a58039]" />}
-                      </button>
-                      <button onClick={() => setExportCurrency(Currency.USD)} className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${exportCurrency === Currency.USD ? 'border-[#a58039] bg-[#a58039]/10 text-[#a58039]' : 'border-gray-200 hover:bg-gray-50'}`}>
-                          <span className="font-bold">US Dollar (USD)</span>
-                          {exportCurrency === Currency.USD && <div className="w-3 h-3 rounded-full bg-[#a58039]" />}
-                      </button>
-                  </div>
-                  <button onClick={triggerExport} className="w-full py-3 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors flex items-center justify-center gap-2">
-                      <Download className="w-4 h-4" /> Download CSV
-                  </button>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-[#403f4c]">Export Data</h3>
+              <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-[#ba3b46]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Select currency for export.</p>
+            <div className="space-y-3 mb-6">
+              <button onClick={() => setExportCurrency(Currency.NGN)} className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${exportCurrency === Currency.NGN ? 'border-[#a58039] bg-[#a58039]/10 text-[#a58039]' : 'border-gray-200 hover:bg-gray-50'}`}>
+                <span className="font-bold">Nigerian Naira (NGN)</span>
+                {exportCurrency === Currency.NGN && <div className="w-3 h-3 rounded-full bg-[#a58039]" />}
+              </button>
+              <button onClick={() => setExportCurrency(Currency.USD)} className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${exportCurrency === Currency.USD ? 'border-[#a58039] bg-[#a58039]/10 text-[#a58039]' : 'border-gray-200 hover:bg-gray-50'}`}>
+                <span className="font-bold">US Dollar (USD)</span>
+                {exportCurrency === Currency.USD && <div className="w-3 h-3 rounded-full bg-[#a58039]" />}
+              </button>
+            </div>
+            <button onClick={triggerExport} className="w-full py-3 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors flex items-center justify-center gap-2">
+              <Download className="w-4 h-4" /> Download CSV
+            </button>
           </div>
+        </div>
       )}
 
       {showCleanupModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col">
-                  <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-lg font-bold text-[#403f4c]">Database Cleanup</h3>
-                      <button onClick={() => setShowCleanupModal(false)} className="text-gray-400 hover:text-[#ba3b46]">
-                          <X className="w-5 h-5" />
-                      </button>
-                  </div>
-                  <p className="text-sm text-gray-500 mb-4">
-                    The following trims will be standardized to clean up duplicates:
-                  </p>
-                  
-                  <div className="flex-1 overflow-y-auto mb-6 border border-gray-200 rounded-lg bg-gray-50 p-2">
-                    {Object.keys(cleanupMapping).length === 0 ? (
-                      <p className="text-sm text-center text-gray-500 p-4">No cleanup needed! All trims look good.</p>
-                    ) : (
-                      <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-gray-500 uppercase border-b border-gray-200">
-                          <tr>
-                            <th className="px-3 py-2">Current Name</th>
-                            <th className="px-3 py-2 w-8"></th>
-                            <th className="px-3 py-2">New Name</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Object.entries(cleanupMapping).map(([dirty, clean]) => (
-                            <tr key={dirty} className="border-b border-gray-100 last:border-0">
-                              <td className="px-3 py-2 text-red-600 line-through">{dirty}</td>
-                              <td className="px-3 py-2 text-gray-400 text-center">→</td>
-                              <td className="px-3 py-2 text-green-600 font-medium">{String(clean)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-[#403f4c]">Database Cleanup</h3>
+              <button onClick={() => setShowCleanupModal(false)} className="text-gray-400 hover:text-[#ba3b46]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              The following trims will be standardized to clean up duplicates:
+            </p>
 
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => setShowCleanupModal(false)} 
-                      className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-lg font-bold hover:bg-gray-200 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      onClick={handleExecuteCleanup} 
-                      disabled={isCleaning || Object.keys(cleanupMapping).length === 0}
-                      className="flex-1 py-3 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {isCleaning ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                      {isCleaning ? 'Cleaning...' : 'Confirm & Clean'}
-                    </button>
-                  </div>
-              </div>
+            <div className="flex-1 overflow-y-auto mb-6 border border-gray-200 rounded-lg bg-gray-50 p-2">
+              {Object.keys(cleanupMapping).length === 0 ? (
+                <p className="text-sm text-center text-gray-500 p-4">No cleanup needed! All trims look good.</p>
+              ) : (
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-gray-500 uppercase border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2">Current Name</th>
+                      <th className="px-3 py-2 w-8"></th>
+                      <th className="px-3 py-2">New Name</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(cleanupMapping).map(([dirty, clean]) => (
+                      <tr key={dirty} className="border-b border-gray-100 last:border-0">
+                        <td className="px-3 py-2 text-red-600 line-through">{dirty}</td>
+                        <td className="px-3 py-2 text-gray-400 text-center">→</td>
+                        <td className="px-3 py-2 text-green-600 font-medium">{String(clean)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCleanupModal(false)}
+                className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-lg font-bold hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleExecuteCleanup}
+                disabled={isCleaning || Object.keys(cleanupMapping).length === 0}
+                className="flex-1 py-3 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isCleaning ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {isCleaning ? 'Cleaning...' : 'Confirm & Clean'}
+              </button>
+            </div>
           </div>
+        </div>
       )}
 
       <header className="bg-white/80 backdrop-blur-sm border-b border-[#a58039]/20 sticky top-0 z-10">
@@ -725,11 +729,10 @@ const MainDashboard: React.FC = () => {
 
               <button
                 onClick={() => setIncludeMarketData(!includeMarketData)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${
-                  includeMarketData
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${includeMarketData
                     ? 'bg-[#61988e] text-white'
                     : 'bg-[#F0EDDE] text-[#403f4c] hover:bg-[#e0ddce]'
-                }`}
+                  }`}
                 title={includeMarketData ? 'Showing all data (inventory + market)' : 'Showing inventory only'}
               >
                 <Globe className="w-3 h-3" />
@@ -778,6 +781,9 @@ const MainDashboard: React.FC = () => {
             <button onClick={() => setView('bulk-import')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'bulk-import' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
               <Upload className="w-4 h-4" /> Bulk Import
             </button>
+            <button onClick={() => setView('research')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'research' || view === 'research-detail' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+              <Globe className="w-4 h-4" /> Research Runs
+            </button>
           </div>
           <button onClick={() => { setShowForm(!showForm); setEditingSale(null); }} className="flex items-center gap-2 bg-[#403f4c] text-[#F0EDDE] px-5 py-2.5 rounded-lg hover:bg-[#403f4c]/90 transition-all shadow-lg shadow-[#403f4c]/20 active:scale-95 border border-[#403f4c]">
             <Plus className="w-5 h-5" /> {showForm && !editingSale ? 'Cancel Entry' : 'Add Sold Car'}
@@ -802,6 +808,12 @@ const MainDashboard: React.FC = () => {
             setView('list');
           }} currentRates={exchangeRates} />
         )}
+        {!salesLoading && view === 'research' && (
+          <ResearchRuns onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); }} />
+        )}
+        {!salesLoading && view === 'research-detail' && activeRunId && (
+          <ResearchRunDetail runId={activeRunId} onBack={() => { setView('research'); setActiveRunId(null); }} />
+        )}
       </main>
     </div>
   );
@@ -809,7 +821,7 @@ const MainDashboard: React.FC = () => {
 
 const AuthGate: React.FC = () => {
   const { session, loading } = useAuth();
-  
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center">
@@ -817,15 +829,21 @@ const AuthGate: React.FC = () => {
       </div>
     );
   }
-  
+
   if (!session) {
     return <LoginScreen />;
   }
-  
+
   return <MainDashboard />;
 };
 
 const App: React.FC = () => {
+  const shareMatch = window.location.pathname.match(/^\/share\/([A-Za-z0-9]{32,128})$/);
+  
+  if (shareMatch) {
+    return <PublicRunView token={shareMatch[1]} />;
+  }
+
   return (
     <AuthProvider>
       <AuthGate />

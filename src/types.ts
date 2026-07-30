@@ -16,6 +16,7 @@ export interface CarSale {
   tags: string[];
   notes?: string;
   recordType: RecordType;
+  logged_via?: string;
 }
 
 export enum RecordType {

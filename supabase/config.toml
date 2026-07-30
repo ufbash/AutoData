@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.daily-sniper]
 verify_jwt = false
+
+[functions.public-run]
+verify_jwt = false

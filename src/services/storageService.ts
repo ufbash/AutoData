@@ -40,7 +40,6 @@ export const getStoredSales = async (): Promise<CarSale[]> => {
   const { data, error } = await supabase
     .from("sightings")
     .select("id, dealer_source, listed_price, listed_currency, sale_date, mileage_miles, raw_payload, logged_via, captured_at, assets ( make, model, trim, year )")
-    .in("source_type", ["manual_entry", "ai_vision", "research_capture"]) // Include anything we want to see, maybe all sightings
     .order("captured_at", { ascending: false });
 
   if (error) {
@@ -61,16 +60,17 @@ export const getStoredSales = async (): Promise<CarSale[]> => {
       year: asset.year?.toString() || "Unknown",
       price: row.listed_price,
       originalCurrency: row.listed_currency || 'NGN',
-      priceUSD: raw.priceUSD || null,
-      exchangeRate: raw.exchangeRate || 1,
-      dateListed: raw.date_listed || undefined,
+      priceUSD: raw.priceUSD ?? null,
+      exchangeRate: raw.exchangeRate ?? 1,
+      dateListed: raw.dateListed || raw.date_listed,
       dateSold: row.sale_date || undefined,
-      daysToSell: raw.daysToSell || null,
+      daysToSell: raw.daysToSell ?? null,
       mileage: row.mileage_miles,
       dealer: row.dealer_source || 'Unknown',
       tags: raw.tags || [],
       notes: raw.notes || undefined,
-      recordType: raw.record_type || RecordType.INVENTORY,
+      recordType: raw.recordType || raw.record_type || RecordType.INVENTORY,
+      logged_via: row.logged_via
     };
   });
 };

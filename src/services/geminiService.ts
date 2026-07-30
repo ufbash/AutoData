@@ -1,5 +1,9 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { StandardizedCarData, MarketForecast, CarSale } from "../types";
+import { supabase } from "./supabaseClient";
+
+// NOTE: normalizeHistoricalData, standardizeVehicleString, and generateMarketForecast 
+// are pending server-side migration (step 14) and still require VITE_GEMINI_API_KEY.
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1' } });
@@ -7,71 +11,53 @@ const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1' } });
 export const extractVehicleDataFromImages = async (
   image1Base64: string,
   image1MimeType: string,
-  image2Base64: string,
-  image2MimeType: string
+  image2Base64: string | null,
+  image2MimeType: string | null
 ): Promise<Partial<CarSale>> => {
-  if (!apiKey) {
-    throw new Error("API Key is missing. Please set VITE_GEMINI_API_KEY in your .env file.");
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError || !sessionData.session) {
+    throw new Error("Please log in to use bulk import.");
   }
 
-  const modelName = "gemini-3.1-flash-lite";
-  console.log("Sending to Gemini:", modelName);
+  const token = sessionData.session.access_token;
+  const projectUrl = import.meta.env.VITE_SUPABASE_URL;
 
   try {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: `Identify and extract car sales data from two images. 
-              - **Sold Date:** Look at the VERY TOP of Image 1 (the Story/Highlight). It usually shows a date like '14 February'. Assume the year is 2026 unless the year is specifically shown. 
-              - **List Date:** Look at the VERY BOTTOM of Image 2 (the Post). It shows when the post was made, e.g., '9 February'. Assume the year is 2026 unless the year is specifically shown. 
-              - **Dealer:** Look at the profile name at the top left of either image (e.g., 'abujacar') or in the actual post, right before the cars details. It'll usually be in bold. 
-              - **Specs:** Extract make, model, year, price, and mileage from the post description. 
-              - **Trim:** Look closely at the post description for trim levels, performance variants, or packages (e.g., AMG, M-Sport, XSE, Limited, Longitude). If found, put this in the 'trim' field. If the description just says 'BMW 330i', the trim is '330i'.
-              
-              CRITICAL TAXONOMY RULE: Never combine Year, Make, Model, or Trim. 
-              You MUST strictly follow these brand-specific taxonomy rules for Make, Model, and Trim: 
-              1. **BMW:** 'Model' MUST be the Series or X-line (e.g., '3 Series', '5 Series', 'X5', 'X6'). 'Trim' is the specific badge and drivetrain (e.g., '330i xDrive', 'M50i', 'Competition'). Do NOT use '330i' as the Model. 
-              2. **Mercedes-Benz:** 'Model' MUST be the Class or SUV line (e.g., 'C-Class', 'E-Class', 'G-Class', 'GLE', 'S-Class'). 'Trim' is the engine/badge (e.g., 'C 43 AMG', 'G 63', 'E 350'). Do NOT use 'C43' as the Model. 
-              3. **Land Rover:** 'Model' is the core family (e.g., 'Range Rover', 'Range Rover Sport', 'Defender'). 'Trim' is the spec (e.g., 'Autobiography', 'HSE', 'V8 Carpathian'). 
-              4. **General Rule:** 'Model' is the broad family. 'Trim' is the specific performance, package, or engine variant. If a trim is unknown, use 'Base', but never put a trim level into the Model field. 
-              - 'Year' is ONLY the 4-digit number. 
-              - 'Make' is the brand (e.g., 'Mercedes-Benz', 'Toyota'). 
-              If a dealer posts '2024 Mercedes C43', you must return { year: '2024', make: 'Mercedes-Benz', model: 'C-Class', trim: 'C 43 AMG' }.
+    const payload = {
+      image1Base64,
+      image1MimeType,
+      image2Base64: image2Base64 || null,
+      image2MimeType: image2MimeType || null
+    };
 
-              Return as a clean JSON object with keys: { make, model, trim, year, exterior_color, price, originalCurrency, dateListed, dateSold, mileage, dealer }. 
-              For 'originalCurrency', strictly use one of: 'NGN', 'USD', 'EUR', 'GBP'. Default to 'NGN' if ambiguous.
-              Format dates as YYYY-MM-DD.
-              If a field is missing, use null.
-              Return ONLY the JSON object, no markdown formatting, no conversational text.`
-            },
-            {
-              inlineData: {
-                data: image1Base64,
-                mimeType: image1MimeType
-              }
-            },
-            {
-              inlineData: {
-                data: image2Base64,
-                mimeType: image2MimeType
-              }
-            }
-          ]
-        }
-      ]
+    const response = await fetch(`${projectUrl}/functions/v1/extract-vehicle-vision`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
     });
 
-    const text = response.text;
-    if (!text) throw new Error("No response from AI");
-
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const cleanJson = jsonMatch ? jsonMatch[0] : text;
+    if (response.status === 403) {
+      throw new Error("Vision extraction is restricted to staff accounts.");
+    }
     
-    return JSON.parse(cleanJson);
+    if (response.status === 401) {
+      throw new Error("Please log in to use bulk import.");
+    }
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Extraction failed: ${errText}`);
+    }
+
+    const result = await response.json();
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    
+    return result;
   } catch (error) {
     console.error("Gemini vision extraction failed:", error);
     throw error;
