@@ -37,6 +37,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   
   // Checklist states
   const [warningsReviewed, setWarningsReviewed] = useState(false);
+  const [pulseListingId, setPulseListingId] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -343,9 +344,6 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       }
     });
   });
-
-  const [pulseListingId, setPulseListingId] = useState<string | null>(null);
-
   const scrollToOffender = (ids: string[]) => {
     if (ids.length === 0) return;
     const firstId = ids[0];

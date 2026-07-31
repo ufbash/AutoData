@@ -152,50 +152,10 @@ const MainDashboard: React.FC = () => {
         const stored = await getStoredSales();
         if (cancelled) return;
 
-        let needsSave = false;
-        const migrated: CarSale[] = stored.map((s) => {
-          const recordType =
-            s.recordType ??
-            ((s.tags || []).includes('External Data') ? RecordType.MARKET_DATA : RecordType.INVENTORY);
-
-          const cleanedTags = (s.tags || []).filter((t) => t !== 'External Data');
-          const hasTagCleanup = cleanedTags.length !== (s.tags || []).length;
-
-          const canComputeUSD = s.priceUSD === null && s.price !== null;
-          const computedUSD = canComputeUSD ? convertToUSD(s.price, s.originalCurrency, rates) : s.priceUSD;
-
-          const exchangeRate = canComputeUSD
-            ? rates[s.originalCurrency] || s.exchangeRate || 1
-            : s.exchangeRate;
-
-          const changed =
-            recordType !== s.recordType ||
-            hasTagCleanup ||
-            computedUSD !== s.priceUSD ||
-            exchangeRate !== s.exchangeRate;
-
-          if (changed) needsSave = true;
-
-          return {
-            ...s,
-            recordType,
-            tags: cleanedTags,
-            priceUSD: computedUSD,
-            exchangeRate,
-            daysToSell: Number.isFinite(s.daysToSell as number) ? s.daysToSell : null,
-          };
-        });
-
-        if (needsSave) {
-          await importSales(migrated);
-          if (cancelled) return;
-          setSales(await getStoredSales());
-        } else {
-          setSales(migrated);
-        }
+        setSales(stored);
       } catch (e) {
         console.error('Failed to load sales', e);
-        alert('Could not load data from Supabase. Check VITE_SUPABASE_URL, your network, and table `sales`.');
+        alert('Could not load records from the ledger.');
       } finally {
         if (!cancelled) setSalesLoading(false);
       }
