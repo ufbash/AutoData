@@ -4,13 +4,14 @@ import { Loader2, X, Search, Image as ImageIcon } from 'lucide-react';
 
 interface AddCapturesModalProps {
   runId: string;
+  runType: string;
   orgId: string;
   existingSightingIds: string[];
   onClose: () => void;
   onAdded: () => void;
 }
 
-const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, orgId, existingSightingIds, onClose, onAdded }) => {
+const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, orgId, existingSightingIds, onClose, onAdded }) => {
   const [sightings, setSightings] = useState<AvailableSighting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +36,17 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, orgId, exist
       try {
         const data = await listAvailableSightings(orgId, existingSightingIds, 60, offset);
         if (data.length < 60) setHasMore(false);
-        setSightings(prev => offset === 0 ? data : [...prev, ...data]);
+        
+        const eligibleData = data.filter(s => {
+          if (runType === 'sold_comps') {
+            return s.price_usd !== null && s.current_bid_usd === null && s.lot_state !== 'active';
+          } else if (runType === 'active_listings') {
+            return s.current_bid_usd !== null && s.lot_state !== 'finished';
+          }
+          return true; // mixed
+        });
+        
+        setSightings(prev => offset === 0 ? eligibleData : [...prev, ...eligibleData]);
       } catch (err: any) {
         setError(err.message || 'Failed to fetch available captures');
       } finally {
@@ -88,7 +99,11 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, orgId, exist
         <div className="flex justify-between items-center mb-6">
           <div>
             <h3 className="text-xl font-bold text-[#403f4c]">Add Captures</h3>
-            <p className="text-sm text-gray-500">Select previously captured vehicles to add to this research run.</p>
+            <p className="text-sm text-gray-500">
+              Select previously captured vehicles to add to this research run.
+              {runType === 'sold_comps' && ' Showing sold or settled lots only — this is a market-research run.'}
+              {runType === 'active_listings' && ' Showing live auction listings only — this is a client-options run.'}
+            </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-[#ba3b46] transition-colors p-2">
             <X className="w-6 h-6" />

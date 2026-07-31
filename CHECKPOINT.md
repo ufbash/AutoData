@@ -179,3 +179,18 @@ This section lists manual steps for verifying the server-side, role-gated vision
 6. Enable sharing → share URL displays → Copy works → rotate changes the token
 7. Remove a listing → gone from run; SQL check confirms the sighting still exists in `sightings`
 8. Existing views (Dashboard, CarTable, CarForm, BulkImport) still work unchanged
+
+## A1 Verification
+1. `supabase db push`
+2. `supabase functions deploy app-ingest && supabase functions deploy research-capture`
+3. Backfill check:
+   `SELECT count(*) FILTER (WHERE price_usd IS NOT NULL) AS converted, count(*) AS total FROM sightings;`
+   → most existing rows converted (they are USD auction captures)
+4. Capture a Copart lot via the extension → `price_usd = current_bid_usd`, `exchange_rate = 1`
+5. Manual CarForm entry in **USD** → `price_usd = listed_price`, rate 1
+6. Manual CarForm entry in **NGN** (e.g. 45,000,000) → `price_usd` ≈ 32,600 at ~1380/USD, `exchange_rate` ≈ 1380, `exchange_rate_date` = now
+7. Confirm:
+   `SELECT listed_price, listed_currency, price_usd, exchange_rate, exchange_rate_date, current_bid_usd FROM sightings ORDER BY captured_at DESC LIMIT 5;`
+8. Rows that remain unconverted (non-USD, pre-existing):
+   `SELECT count(*) FROM sightings WHERE price_usd IS NULL AND listed_price IS NOT NULL;`
+   → report the number; these need manual attention or acceptance

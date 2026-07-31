@@ -106,6 +106,19 @@ serve(async (req: Request) => {
       }
     }
 
+    let rates: Record<string, number> | null = null;
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD');
+      if (res.ok) {
+        const data = await res.json();
+        rates = data.rates;
+      } else {
+        console.error(`Rate fetch failed with status ${res.status}`);
+      }
+    } catch (err) {
+      console.error("Rate fetch network error:", err);
+    }
+
     const results = [];
     const errors = [];
 
@@ -167,6 +180,34 @@ serve(async (req: Request) => {
         }
 
         const priceToSave = v.sale_price ?? v.listed_price ?? null;
+        const listedCurrency = v.listed_currency ?? 'NGN';
+
+        let priceUsd: number | null = null;
+        let exchangeRate: number | null = null;
+        let exchangeRateDate: string | null = null;
+        let conversionFailed = false;
+
+        if (priceToSave !== null) {
+          if (!listedCurrency || listedCurrency === 'USD') {
+            priceUsd = priceToSave;
+            exchangeRate = 1;
+            exchangeRateDate = new Date().toISOString();
+          } else {
+            if (rates && rates[listedCurrency]) {
+              exchangeRate = rates[listedCurrency];
+              priceUsd = priceToSave / exchangeRate;
+              exchangeRateDate = new Date().toISOString();
+            } else {
+              conversionFailed = true;
+            }
+          }
+        }
+        
+        const rawPayloadToSave: any = { ...v, record_type: payload.record_type, date_listed: v.date_listed };
+        if (conversionFailed) {
+          rawPayloadToSave.price_usd_conversion_failed = true;
+          rawPayloadToSave.attempted_currency = listedCurrency;
+        }
 
         const { data: newSighting, error: sightingError } = await supabase
           .from('sightings')
@@ -179,10 +220,13 @@ serve(async (req: Request) => {
             created_by: user.id,
             dealer_source: v.dealer ?? null,
             listed_price: priceToSave,
-            listed_currency: v.listed_currency ?? 'NGN',
+            listed_currency: listedCurrency,
+            price_usd: priceUsd,
+            exchange_rate: exchangeRate,
+            exchange_rate_date: exchangeRateDate,
             sale_date: v.sale_date ?? null,
             mileage_miles: v.mileage_miles ?? null,
-            raw_payload: { ...v, record_type: payload.record_type, date_listed: v.date_listed }
+            raw_payload: rawPayloadToSave
           })
           .select('id')
           .single();

@@ -8,6 +8,7 @@ export interface ResearchRun {
   notes: string | null;
   share_token: string;
   share_enabled: boolean;
+  run_type: 'sold_comps' | 'active_listings' | 'mixed';
   created_at: string;
   updated_at: string;
   listing_count?: number;
@@ -43,6 +44,8 @@ export interface RunListing {
   image_urls: string[];
   logged_via: string;
   captured_at: string;
+  price_usd: number | null;
+  lot_state: 'active' | 'finished' | 'unknown' | null;
   make: string;
   model: string;
   trim: string | null;
@@ -75,7 +78,7 @@ export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
   }));
 };
 
-export const createRun = async (orgId: string, input: { client_name: string; notes?: string; target_spec?: object }): Promise<ResearchRun> => {
+export const createRun = async (orgId: string, input: { client_name: string; run_type: 'sold_comps' | 'active_listings' | 'mixed'; notes?: string; target_spec?: object }): Promise<ResearchRun> => {
   const share_token = Array.from(crypto.getRandomValues(new Uint8Array(24)))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
@@ -85,6 +88,7 @@ export const createRun = async (orgId: string, input: { client_name: string; not
     .insert({
       org_id: orgId,
       client_name: input.client_name,
+      run_type: input.run_type,
       notes: input.notes || null,
       target_spec: input.target_spec || null,
       status: 'draft',
@@ -114,7 +118,7 @@ export const getRun = async (runId: string): Promise<ResearchRun | null> => {
   return data || null;
 };
 
-export const updateRun = async (runId: string, patch: Partial<Pick<ResearchRun, 'client_name' | 'notes' | 'status' | 'share_enabled'>>): Promise<ResearchRun> => {
+export const updateRun = async (runId: string, patch: Partial<Pick<ResearchRun, 'client_name' | 'notes' | 'status' | 'share_enabled' | 'run_type'>>): Promise<ResearchRun> => {
   const { data, error } = await supabase
     .from('research_runs')
     .update(patch)
@@ -160,6 +164,8 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
         raw_payload,
         listed_price,
         listed_currency,
+        price_usd,
+        lot_state,
         assets (
           make,
           model,
@@ -218,6 +224,8 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       image_urls: sighting.image_urls || [],
       logged_via: sighting.logged_via || 'unknown',
       captured_at: sighting.captured_at,
+      price_usd: sighting.price_usd ?? null,
+      lot_state: sighting.lot_state ?? null,
       make: asset.make || 'Unknown',
       model: asset.model || 'Unknown',
       trim: asset.trim || null,
@@ -274,6 +282,37 @@ export const reorderListings = async (runId: string, orderedListingIds: string[]
 };
 
 export const attachSightingToRun = async (orgId: string, runId: string, sightingId: string): Promise<void> => {
+  // Fetch run type
+  const { data: runData, error: runError } = await supabase
+    .from('research_runs')
+    .select('run_type')
+    .eq('id', runId)
+    .single();
+
+  if (runError) throw new Error(`Failed to get run type: ${runError.message}`);
+  
+  // Fetch sighting details for validation
+  const { data: sightingData, error: sightingError } = await supabase
+    .from('sightings')
+    .select('price_usd, lot_state, raw_payload, listed_price')
+    .eq('id', sightingId)
+    .single();
+    
+  if (sightingError) throw new Error(`Failed to get sighting: ${sightingError.message}`);
+
+  const current_bid_usd = sightingData.raw_payload?.current_bid_usd ?? null;
+  const price_usd = sightingData.price_usd;
+  const lot_state = sightingData.lot_state;
+
+  if (runData.run_type === 'sold_comps') {
+    if (!(price_usd !== null && current_bid_usd === null && lot_state !== 'active')) {
+      throw new Error("Only sold or settled listings can be added to a market-research run.");
+    }
+  } else if (runData.run_type === 'active_listings') {
+    if (!(current_bid_usd !== null && lot_state !== 'finished')) {
+      throw new Error("Only live auction listings can be added to a client-options run.");
+    }
+  }
   const { data, error: countError } = await supabase
     .from('research_run_listings')
     .select('position')
@@ -347,6 +386,9 @@ export interface AvailableSighting {
   lot_number: string | null;
   listed_price: number | null;
   listed_currency: string | null;
+  price_usd: number | null;
+  lot_state: string | null;
+  current_bid_usd: number | null;
 }
 
 export async function listAvailableSightings(
@@ -368,6 +410,9 @@ export async function listAvailableSightings(
       lot_number,
       listed_price,
       listed_currency,
+      price_usd,
+      lot_state,
+      raw_payload,
       assets (
         make,
         model,
@@ -403,6 +448,9 @@ export async function listAvailableSightings(
         lot_number: row.lot_number,
         listed_price: row.listed_price ?? null,
         listed_currency: row.listed_currency ?? null,
+        price_usd: row.price_usd ?? null,
+        lot_state: row.lot_state ?? null,
+        current_bid_usd: row.raw_payload?.current_bid_usd ?? null,
       };
     });
 

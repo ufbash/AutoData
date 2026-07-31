@@ -23,6 +23,8 @@ interface ResearchCapturePayload {
     lot_number?: string | null;
     exterior_color?: string | null;
     interior_color?: string | null;
+    listed_price?: number | null;
+    listed_currency?: string | null;
     
     body_style?: string | null;
     cylinders?: number | null;
@@ -49,6 +51,7 @@ interface ResearchCapturePayload {
     source_auction_platform?: string | null;
   };
   image_urls: string[];
+  lot_state?: string;
   raw_dom_snapshot?: string;
 }
 
@@ -96,6 +99,19 @@ serve(async (req: Request) => {
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    let rates: Record<string, number> | null = null;
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD');
+      if (res.ok) {
+        const data = await res.json();
+        rates = data.rates;
+      } else {
+        console.error(`Rate fetch failed with status ${res.status}`);
+      }
+    } catch (err) {
+      console.error("Rate fetch network error:", err);
+    }
 
     const cf = payload.captured_fields;
 
@@ -177,6 +193,40 @@ serve(async (req: Request) => {
       assetId = newAsset.id;
     }
 
+    let priceUsd: number | null = null;
+    let exchangeRate: number | null = null;
+    let exchangeRateDate: string | null = null;
+    let conversionFailed = false;
+
+    const listedPriceToSave = (cf.current_bid_usd !== null && cf.current_bid_usd !== undefined) ? null : (cf.listed_price ?? null);
+    const listedCurrency = cf.listed_currency ?? 'USD';
+
+    if (cf.current_bid_usd !== null && cf.current_bid_usd !== undefined) {
+      priceUsd = cf.current_bid_usd;
+      exchangeRate = 1;
+      exchangeRateDate = new Date().toISOString();
+    } else if (listedPriceToSave !== null) {
+      if (listedCurrency === 'USD') {
+        priceUsd = listedPriceToSave;
+        exchangeRate = 1;
+        exchangeRateDate = new Date().toISOString();
+      } else {
+        if (rates && rates[listedCurrency]) {
+          exchangeRate = rates[listedCurrency];
+          priceUsd = listedPriceToSave / exchangeRate;
+          exchangeRateDate = new Date().toISOString();
+        } else {
+          conversionFailed = true;
+        }
+      }
+    }
+
+    const rawPayloadToSave: any = { ...payload };
+    if (conversionFailed) {
+      rawPayloadToSave.price_usd_conversion_failed = true;
+      rawPayloadToSave.attempted_currency = listedCurrency;
+    }
+
     // Insert into sightings
     const { data: newSighting, error: sightingError } = await supabase
       .from('sightings')
@@ -188,14 +238,18 @@ serve(async (req: Request) => {
         source_type: 'research_capture',
         source_url: payload.source_url ?? null,
         lot_number: cf.lot_number ?? null,
-        listed_price: null,
-        listed_currency: 'USD',
+        listed_price: listedPriceToSave,
+        listed_currency: listedCurrency,
+        price_usd: priceUsd,
+        exchange_rate: exchangeRate,
+        exchange_rate_date: exchangeRateDate,
         mileage_miles: cf.mileage_miles ?? null,
         damage_type: cf.damage_type ?? null,
         title_type: cf.title_type ?? null,
         location: cf.location ?? null,
         image_urls: payload.image_urls || [],
-        raw_payload: payload,
+        raw_payload: rawPayloadToSave,
+        lot_state: payload.lot_state ?? null,
         
         estimated_retail_value_usd: cf.estimated_retail_value_usd ?? null,
         current_bid_usd: cf.current_bid_usd ?? null,

@@ -15,6 +15,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
 
   const [showNewForm, setShowNewForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
+  const [newRunType, setNewRunType] = useState<'sold_comps' | 'active_listings' | 'mixed'>('active_listings');
   const [newNotes, setNewNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -48,11 +49,13 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
     try {
       const newRun = await createRun(orgId, {
         client_name: newClientName.trim(),
+        run_type: newRunType,
         notes: newNotes.trim() || undefined,
       });
       setRuns([newRun, ...runs]);
       setShowNewForm(false);
       setNewClientName('');
+      setNewRunType('active_listings');
       setNewNotes('');
       onOpenRun(newRun.id);
     } catch (err: any) {
@@ -106,6 +109,32 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
               />
             </div>
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Run Type *</label>
+              <div className="space-y-2">
+                <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input type="radio" name="runType" value="sold_comps" checked={newRunType === 'sold_comps'} onChange={(e) => setNewRunType(e.target.value as any)} className="mt-1 text-[#a58039] focus:ring-[#a58039]" />
+                  <div>
+                    <div className="font-bold text-[#403f4c]">Market research</div>
+                    <div className="text-sm text-gray-500">What have these sold for?</div>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input type="radio" name="runType" value="active_listings" checked={newRunType === 'active_listings'} onChange={(e) => setNewRunType(e.target.value as any)} className="mt-1 text-[#a58039] focus:ring-[#a58039]" />
+                  <div>
+                    <div className="font-bold text-[#403f4c]">Client options</div>
+                    <div className="text-sm text-gray-500">Which should we buy?</div>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input type="radio" name="runType" value="mixed" checked={newRunType === 'mixed'} onChange={(e) => setNewRunType(e.target.value as any)} className="mt-1 text-[#a58039] focus:ring-[#a58039]" />
+                  <div>
+                    <div className="font-bold text-[#403f4c]">Both</div>
+                    <div className="text-sm text-gray-500">Mix of live listings and market comps</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
               <textarea
                 value={newNotes}
@@ -150,17 +179,22 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
               className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20 hover:border-[#a58039]/60 hover:shadow-md transition-all cursor-pointer group flex flex-col h-full"
             >
               <div className="flex justify-between items-start mb-4">
-                <h3 className="font-bold text-lg text-[#403f4c] group-hover:text-[#a58039] transition-colors line-clamp-2">
+                <h3 className="font-bold text-lg text-[#403f4c] group-hover:text-[#a58039] transition-colors line-clamp-2 mb-2">
                   {run.client_name}
                 </h3>
-                <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap font-medium ${
-                  run.status === 'active' ? 'bg-green-100 text-green-700' :
-                  run.status === 'completed' ? 'bg-blue-100 text-blue-700' :
-                  run.status === 'archived' ? 'bg-gray-100 text-gray-700' :
-                  'bg-yellow-100 text-yellow-700' // draft
-                }`}>
-                  {run.status.charAt(0).toUpperCase() + run.status.slice(1)}
-                </span>
+                <div className="flex flex-wrap gap-2">
+                  <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap font-medium ${
+                    run.status === 'active' ? 'bg-green-100 text-green-700' :
+                    run.status === 'completed' ? 'bg-blue-100 text-blue-700' :
+                    run.status === 'archived' ? 'bg-gray-100 text-gray-700' :
+                    'bg-yellow-100 text-yellow-700' // draft
+                  }`}>
+                    {run.status.charAt(0).toUpperCase() + run.status.slice(1)}
+                  </span>
+                  <span className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full whitespace-nowrap font-medium">
+                    {run.run_type === 'sold_comps' ? 'Market Research' : run.run_type === 'active_listings' ? 'Client Options' : 'Mixed'}
+                  </span>
+                </div>
               </div>
               
               <div className="flex-1">

@@ -13,7 +13,7 @@ import {
 } from '../services/researchService';
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
-import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical } from 'lucide-react';
+import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle } from 'lucide-react';
 
 interface ResearchRunDetailProps {
   runId: string;
@@ -34,6 +34,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [notesInput, setNotesInput] = useState('');
+  
+  // Checklist states
+  const [warningsReviewed, setWarningsReviewed] = useState(false);
 
   const loadData = async () => {
     try {
@@ -103,6 +106,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
     setListings(prev => prev.map(l => l.id === listingId ? { ...l, included } : l));
     try {
       await setListingIncluded(listingId, included);
+      setWarningsReviewed(false); // reset checklist when listings change
     } catch (err: any) {
       alert(err.message || 'Failed to update listing');
       // Revert
@@ -155,6 +159,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
     try {
       await removeListingFromRun(listingId);
       setListings(prev => prev.filter(l => l.id !== listingId));
+      setWarningsReviewed(false); // reset checklist
     } catch (err: any) {
       alert(err.message || 'Failed to remove listing');
     }
@@ -180,29 +185,177 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   const includedListings = listings.filter(l => l.included);
   const includedCount = includedListings.length;
 
-  let totalPrice = 0;
-  let priceCount = 0;
-  let minPrice = Infinity;
-  let maxPrice = -Infinity;
-  let totalMileage = 0;
-  let mileageCount = 0;
+  const getStats = (list: RunListing[]) => {
+    let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
+    list.forEach(l => {
+      const p = l.price_usd;
+      if (p !== null) {
+        tP += p; pC++;
+        if (p < minP) minP = p;
+        if (p > maxP) maxP = p;
+      }
+      if (l.mileage_miles !== null) {
+        tM += l.mileage_miles; mC++;
+      }
+    });
+    return {
+      avgPrice: pC > 0 ? tP / pC : null,
+      minPrice: pC > 0 ? minP : null,
+      maxPrice: pC > 0 ? maxP : null,
+      priceCount: pC,
+      avgMileage: mC > 0 ? tM / mC : null,
+      count: list.length
+    };
+  };
 
-  includedListings.forEach(l => {
-    const price = l.current_bid_usd ?? l.listed_price ?? null;
-    if (price !== null) {
-      totalPrice += price;
-      priceCount++;
-      if (price < minPrice) minPrice = price;
-      if (price > maxPrice) maxPrice = price;
-    }
-    if (l.mileage_miles !== null) {
-      totalMileage += l.mileage_miles;
-      mileageCount++;
-    }
+  const isMixed = run.run_type === 'mixed';
+  const isSoldComps = run.run_type === 'sold_comps';
+  const isActiveListings = run.run_type === 'active_listings';
+
+  const displayGroups = isMixed 
+    ? [
+        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null)), type: 'sold' },
+        { label: "Client Options (Live)", stats: getStats(includedListings.filter(l => l.lot_state !== 'finished' && l.current_bid_usd !== null)), type: 'active' }
+      ]
+    : [
+        { label: "Run Listings", stats: getStats(includedListings), type: isSoldComps ? 'sold' : 'active' }
+      ];
+
+  // Pre-Share Checklist
+  const checklistItems: { id: string, type: 'BLOCK' | 'WARN', message: string, offenderIds: string[], passed: boolean }[] = [];
+
+  // 1. Zero listings (BLOCK)
+  checklistItems.push({
+    id: 'zero_listings',
+    type: 'BLOCK',
+    message: includedCount === 0 ? 'Zero included listings.' : 'At least one listing included',
+    offenderIds: [],
+    passed: includedCount > 0
   });
 
-  const avgPrice = priceCount > 0 ? totalPrice / priceCount : null;
-  const avgMileage = mileageCount > 0 ? totalMileage / mileageCount : null;
+  // 2. Duplicate vehicle (BLOCK)
+  const duplicateOffenders: string[] = [];
+  const vinToIds = new Map<string, string[]>();
+  includedListings.forEach(l => {
+    if (l.vin) {
+      if (!vinToIds.has(l.vin)) vinToIds.set(l.vin, []);
+      vinToIds.get(l.vin)!.push(l.id);
+    }
+  });
+  vinToIds.forEach((ids) => {
+    if (ids.length > 1) duplicateOffenders.push(...ids);
+  });
+  checklistItems.push({
+    id: 'duplicate',
+    type: 'BLOCK',
+    message: duplicateOffenders.length > 0 ? `Duplicate vehicle in run (${duplicateOffenders.length} listings)` : 'No duplicate vehicles',
+    offenderIds: duplicateOffenders,
+    passed: duplicateOffenders.length === 0
+  });
+
+  // 5. No price (WARN)
+  const noPriceOffenders = includedListings.filter(l => l.price_usd === null).map(l => l.id);
+  checklistItems.push({
+    id: 'no_price',
+    type: 'WARN',
+    message: noPriceOffenders.length > 0 ? `No USD price (${noPriceOffenders.length} listings)` : 'All listings have a USD price',
+    offenderIds: noPriceOffenders,
+    passed: noPriceOffenders.length === 0
+  });
+
+  // 6. Non-insurance seller (WARN)
+  const nonInsuranceOffenders = includedListings.filter(l => l.seller_type && /non-insurance/i.test(l.seller_type)).map(l => l.id);
+  checklistItems.push({
+    id: 'non_insurance',
+    type: 'WARN',
+    message: nonInsuranceOffenders.length > 0 ? `Non-insurance seller (${nonInsuranceOffenders.length} listings)` : 'No non-insurance sellers',
+    offenderIds: nonInsuranceOffenders,
+    passed: nonInsuranceOffenders.length === 0
+  });
+
+  if (isSoldComps || isMixed) {
+    const soldList = isMixed ? includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null) : includedListings;
+    const soldStats = getStats(soldList);
+    
+    // 3. Limited sample (WARN)
+    const limitedSample = soldStats.priceCount > 0 && soldStats.priceCount < 3;
+    checklistItems.push({
+      id: 'limited_sample',
+      type: 'WARN',
+      message: limitedSample ? `Market research average is based on only ${soldStats.priceCount} sales. Limited sample.` : 'Sufficient sample size',
+      offenderIds: [],
+      passed: !limitedSample
+    });
+
+    // 4. Different model (WARN)
+    const counts: Record<string, string[]> = {};
+    soldList.forEach(l => {
+      const key = `${l.make} ${l.model}`;
+      if (!counts[key]) counts[key] = [];
+      counts[key].push(l.id);
+    });
+    const keys = Object.keys(counts);
+    let differentModelOffenders: string[] = [];
+    let diffMsg = 'Models are consistent';
+    
+    if (keys.length > 1) {
+      let maxCount = -1;
+      let majorityKey = keys[0];
+      keys.forEach(k => {
+        if (counts[k].length > maxCount) {
+          maxCount = counts[k].length;
+          majorityKey = k;
+        }
+      });
+      keys.forEach(k => {
+        if (k !== majorityKey) {
+          differentModelOffenders.push(...counts[k]);
+        }
+      });
+      const compStr = Object.entries(counts).map(([k, ids]) => `${ids.length}× ${k}`).join(', ');
+      diffMsg = `Market research contains mixed models: ${compStr} (${differentModelOffenders.length} listings)`;
+    }
+
+    checklistItems.push({
+      id: 'different_model',
+      type: 'WARN',
+      message: diffMsg,
+      offenderIds: differentModelOffenders,
+      passed: differentModelOffenders.length === 0
+    });
+  }
+
+  const hasBlocks = checklistItems.some(i => i.type === 'BLOCK' && !i.passed);
+  const hasWarnings = checklistItems.some(i => i.type === 'WARN' && !i.passed);
+  const canShare = !hasBlocks && (!hasWarnings || warningsReviewed);
+
+  const listingBadges = new Map<string, { type: 'BLOCK' | 'WARN', text: string }[]>();
+  checklistItems.filter(i => !i.passed).forEach(item => {
+    item.offenderIds.forEach(id => {
+      if (!listingBadges.has(id)) listingBadges.set(id, []);
+      let text = '';
+      if (item.id === 'duplicate') text = 'Duplicate vehicle';
+      else if (item.id === 'no_price') text = 'No price';
+      else if (item.id === 'non_insurance') text = 'Non-insurance seller';
+      else if (item.id === 'different_model') text = 'Different model';
+      if (text) {
+        listingBadges.get(id)!.push({ type: item.type, text });
+      }
+    });
+  });
+
+  const [pulseListingId, setPulseListingId] = useState<string | null>(null);
+
+  const scrollToOffender = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const firstId = ids[0];
+    const el = document.getElementById(`listing-${firstId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setPulseListingId(firstId);
+      setTimeout(() => setPulseListingId(null), 2000);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -248,18 +401,36 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-            <select
-              value={run.status}
-              onChange={(e) => handleUpdate({ status: e.target.value as any })}
-              className="bg-gray-50 border border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-[#a58039] focus:border-[#a58039] block w-full p-2.5 font-medium"
-            >
-              <option value="draft">Draft</option>
-              <option value="active">Active</option>
-              <option value="completed">Completed</option>
-              <option value="archived">Archived</option>
-            </select>
+          <div className="flex gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select
+                value={run.status}
+                onChange={(e) => handleUpdate({ status: e.target.value as any })}
+                className="bg-gray-50 border border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-[#a58039] focus:border-[#a58039] block w-full p-2.5 font-medium"
+              >
+                <option value="draft">Draft</option>
+                <option value="active">Active</option>
+                <option value="completed">Completed</option>
+                <option value="archived">Archived</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Run Type</label>
+              <select
+                value={run.run_type}
+                onChange={(e) => {
+                  if (confirm('Changing run type may make some existing listings ineligible for this run. Continue?')) {
+                    handleUpdate({ run_type: e.target.value as any });
+                  }
+                }}
+                className="bg-gray-50 border border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-[#a58039] focus:border-[#a58039] block w-full p-2.5 font-medium"
+              >
+                <option value="active_listings">Client Options</option>
+                <option value="sold_comps">Market Research</option>
+                <option value="mixed">Both (Mixed)</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -277,20 +448,64 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
 
       {/* Sharing Panel */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20">
+        
+        {/* PRE-SHARE CHECKLIST */}
+        <div className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
+          <h4 className="text-sm font-bold text-[#403f4c] mb-3">Pre-Share Checklist</h4>
+          <ul className="space-y-2 text-sm">
+            {checklistItems.map((item, i) => {
+              if (item.passed) {
+                return (
+                  <li key={i} className="flex items-start gap-2 text-green-600">
+                    <Check className="w-4 h-4 mt-0.5 flex-shrink-0" /> {item.message}
+                  </li>
+                );
+              }
+              const isBlock = item.type === 'BLOCK';
+              return (
+                <li key={i} className={`flex items-start gap-2 ${isBlock ? 'text-red-600' : 'text-yellow-600'}`}>
+                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" /> 
+                  <span 
+                    className={item.offenderIds.length > 0 ? 'cursor-pointer hover:underline' : ''} 
+                    onClick={() => scrollToOffender(item.offenderIds)}
+                  >
+                    {item.message} ({item.type})
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          
+          {hasWarnings && !hasBlocks && (
+            <label className="flex items-center gap-2 mt-4 text-sm font-medium text-gray-700 cursor-pointer">
+              <input 
+                type="checkbox"
+                checked={warningsReviewed}
+                onChange={e => setWarningsReviewed(e.target.checked)}
+                className="rounded text-[#a58039] focus:ring-[#a58039]"
+              />
+              I've reviewed these warnings
+            </label>
+          )}
+        </div>
+
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <LinkIcon className="w-5 h-5 text-[#a58039]" />
+            <LinkIcon className={`w-5 h-5 ${canShare ? 'text-[#a58039]' : 'text-gray-400'}`} />
             <h3 className="text-lg font-bold text-[#403f4c]">Client Sharing</h3>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className={`relative inline-flex items-center ${canShare ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
             <input 
               type="checkbox" 
               className="sr-only peer" 
               checked={run.share_enabled}
+              disabled={!canShare}
               onChange={(e) => handleUpdate({ share_enabled: e.target.checked })}
             />
             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#a58039]"></div>
-            <span className="ml-3 text-sm font-medium text-gray-700">{run.share_enabled ? 'Enabled' : 'Disabled'}</span>
+            <span className="ml-3 text-sm font-medium text-gray-700">
+              {run.share_enabled ? 'Enabled' : (!canShare ? 'Blocked by checks' : 'Disabled')}
+            </span>
           </label>
         </div>
         
@@ -318,41 +533,63 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
             </div>
           </div>
         )}
-        <p className="text-xs text-gray-500 mt-3 italic">This link will become live when the client view ships (S2).</p>
       </div>
 
       {/* Listings Table */}
       <div className="bg-white rounded-xl shadow-sm border border-[#a58039]/20 overflow-hidden">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
           <div>
-            <h3 className="text-lg font-bold text-[#403f4c] flex items-center gap-2">
-              Run Listings
+            <h3 className="text-lg font-bold text-[#403f4c] flex items-center gap-2 mb-2">
+              Run Listings ({includedCount} of {listings.length} included)
             </h3>
-            <p className="text-sm text-gray-500 mt-1">{includedCount} of {listings.length} listings included.</p>
-            <div className="flex gap-4 mt-3 flex-wrap">
-              <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm">
-                <div className="text-gray-500 text-xs mb-1">Avg price ({priceCount} included with price)</div>
-                <div className="font-bold text-[#403f4c]">
-                  {avgPrice !== null ? `$${Math.round(avgPrice).toLocaleString()}` : '—'}
+            
+            {/* Dynamic Summary Bar */}
+            <div className="flex flex-col gap-4">
+              {displayGroups.map((group, i) => (
+                <div key={i} className="flex gap-4 flex-wrap border-l-4 border-[#a58039] pl-3 py-1">
+                  <div className="w-full text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">{group.label}</div>
+                  
+                  {group.type === 'sold' && (
+                    <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm min-w-[140px]">
+                      <div className="text-gray-500 text-xs mb-1">Avg sale price ({group.stats.priceCount} sales)</div>
+                      <div className="font-bold text-[#403f4c]">
+                        {group.stats.avgPrice !== null ? `$${Math.round(group.stats.avgPrice).toLocaleString()}` : '—'}
+                      </div>
+                    </div>
+                  )}
+
+                  {group.type === 'active' && (
+                    <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm min-w-[140px]">
+                      <div className="text-gray-500 text-xs mb-1">Listings count</div>
+                      <div className="font-bold text-[#403f4c]">
+                        {group.stats.count} included
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm min-w-[140px]">
+                    <div className="text-gray-500 text-xs mb-1">
+                      {group.type === 'active' ? 'Current bid range (live, provisional)' : 'Min / Max Price'}
+                    </div>
+                    <div className="font-bold text-[#403f4c]">
+                      {group.stats.priceCount > 0 ? `$${Math.round(group.stats.minPrice!).toLocaleString()} / $${Math.round(group.stats.maxPrice!).toLocaleString()}` : '—'}
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm min-w-[140px]">
+                    <div className="text-gray-500 text-xs mb-1">Avg Mileage</div>
+                    <div className="font-bold text-[#403f4c]">
+                      {group.stats.avgMileage !== null ? `${Math.round(group.stats.avgMileage).toLocaleString()} mi` : '—'}
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm">
-                <div className="text-gray-500 text-xs mb-1">Min / Max Price</div>
-                <div className="font-bold text-[#403f4c]">
-                  {priceCount > 0 ? `$${Math.round(minPrice).toLocaleString()} / $${Math.round(maxPrice).toLocaleString()}` : '—'}
-                </div>
-              </div>
-              <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm">
-                <div className="text-gray-500 text-xs mb-1">Avg Mileage</div>
-                <div className="font-bold text-[#403f4c]">
-                  {avgMileage !== null ? `${Math.round(avgMileage).toLocaleString()} mi` : '—'}
-                </div>
-              </div>
+              ))}
             </div>
+            
           </div>
           <button 
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors self-start mt-2"
           >
             <Plus className="w-4 h-4" /> Add captures
           </button>
@@ -379,6 +616,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
               <tbody className="divide-y divide-gray-100 bg-white">
                 {listings.map((listing, index) => (
                   <tr 
+                    id={`listing-${listing.id}`}
                     key={listing.id} 
                     draggable={true}
                     onDragStart={(e) => handleDragStart(e, index)}
@@ -386,7 +624,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                     onDrop={(e) => handleDrop(e, index)}
                     onDragEnd={handleDragEnd}
                     onClick={() => setActiveListing(listing)}
-                    className={`hover:bg-gray-50 transition-colors cursor-pointer ${!listing.included ? 'opacity-60' : ''} ${dragOverIndex === index ? 'border-t-2 border-[#a58039] bg-orange-50/50' : ''}`}
+                    className={`transition-all cursor-pointer ${!listing.included ? 'opacity-60' : ''} ${dragOverIndex === index ? 'border-t-2 border-[#a58039]' : ''} ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK') ? 'bg-red-50 hover:bg-red-100' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'bg-yellow-50 hover:bg-yellow-100' : 'bg-white hover:bg-gray-50'} ${pulseListingId === listing.id ? 'animate-pulse ring-2 ring-[#a58039] z-10 relative' : ''}`}
                   >
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing opacity-50 hover:opacity-100 transition-opacity">
@@ -402,7 +640,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                         className="rounded text-[#a58039] focus:ring-[#a58039] w-4 h-4 cursor-pointer"
                       />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className={`px-4 py-3 border-l-4 ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK') ? 'border-red-500' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'border-yellow-500' : 'border-transparent'}`} onClick={e => e.stopPropagation()}>
                       <div className="flex items-start gap-3">
                         <div className="w-16 h-12 flex-shrink-0 bg-gray-200 rounded overflow-hidden">
                           {listing.image_urls?.[0] ? (
@@ -429,6 +667,15 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                           <div className="font-bold text-[#403f4c]">
                             {listing.year} {listing.make} {listing.model} {listing.trim || ''}
                           </div>
+                          {(listingBadges.get(listing.id) || []).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {listingBadges.get(listing.id)!.map((b, bi) => (
+                                <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold whitespace-nowrap ${b.type === 'BLOCK' ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-yellow-100 text-yellow-700 border border-yellow-200'}`}>
+                                  {b.text}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           <div className="text-xs text-gray-500 mt-1 space-y-0.5">
                             <div>{listing.mileage_miles ? `${listing.mileage_miles.toLocaleString()} mi` : 'Unk. mileage'}</div>
                             <div className="flex items-center gap-2">
@@ -443,15 +690,14 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                       <div className="space-y-1">
                         <div className="text-sm font-medium text-[#403f4c]">
                           <span className="text-gray-500 text-xs block mb-0.5">
-                            {listing.current_bid_usd !== null ? 'Current bid' : 'Listed price'}
+                            {listing.price_usd !== null 
+                              ? (listing.current_bid_usd !== null ? 'Current bid' : 'Sale / Listed Price') 
+                              : 'No Price'}
                           </span>
-                          {(listing.current_bid_usd ?? listing.listed_price) !== null 
-                            ? `${listing.listed_currency && listing.listed_currency !== 'USD' && listing.current_bid_usd === null ? listing.listed_currency + ' ' : '$'}${(listing.current_bid_usd ?? listing.listed_price!).toLocaleString()}`
+                          {listing.price_usd !== null 
+                            ? `$${listing.price_usd.toLocaleString()}`
                             : '—'}
                         </div>
-                        {listing.estimated_retail_value_usd !== null && (
-                          <div className="text-xs text-gray-500 mt-1">Est retail: ${listing.estimated_retail_value_usd.toLocaleString()}</div>
-                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -489,6 +735,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       {showAddModal && orgId && (
         <AddCapturesModal
           runId={runId}
+          runType={run.run_type}
           orgId={orgId}
           existingSightingIds={listings.map(l => l.sighting_id)}
           onClose={() => setShowAddModal(false)}

@@ -2,7 +2,7 @@ const BIDCARS_BARE_LABELS = [
   'Loss', 'Primary damage', 'Secondary damage', 'Odometer', 'Start code',
   'Key', 'ACV / ERC', 'Body Style', 'Exterior color', 'Engine',
   'Transmission', 'Fuel Type', 'Drive Type', 'Lot', 'VIN', 'Seller',
-  'Sale Document', 'Current Bid'
+  'Sale Document', 'Current Bid', 'Final bid', 'Sold for', 'Final price'
 ];
 
 function extractBidcarsField(text, label) {
@@ -26,8 +26,8 @@ function extractBidcarsField(text, label) {
   for (let j = idx + 1; j < lines.length; j++) {
     if (lines[j] === '') continue;
     const v = lines[j].trim();
-    // Treat dash as null
-    if (v === '-' || v === '–' || v === '—') return null;
+    // Treat dash or placeholders as null
+    if (v === '-' || v === '–' || v === '—' || /^no information$/i.test(v)) return null;
     return v;
   }
   return null;
@@ -37,10 +37,14 @@ function parseEngineString(s) {
   if (!s) return { engine_type: null, cylinders: null, horsepower: null };
   const parts = s.split(',').map(p => p.trim());
 
-  let displacement = null, config = null, hp = null;
+  let displacement = null, config = null, hp = null, rawCyls = null;
   for (const p of parts) {
     if (/^\d+\.\d+L$/i.test(p)) displacement = p.toUpperCase();
     else if (/^[IVHWB]\d+$/i.test(p)) config = p.toUpperCase();
+    else if (/^(\d+)\s*cyl\.?$/i.test(p)) {
+      const m = p.match(/^(\d+)\s*cyl\.?$/i);
+      if (m) rawCyls = parseInt(m[1], 10);
+    }
     else if (/^\d+HP$/i.test(p)) hp = parseInt(p, 10);
   }
 
@@ -50,9 +54,36 @@ function parseEngineString(s) {
   if (config) {
     const m = config.match(/\d+$/);
     if (m) cylinders = parseInt(m[0], 10);
+  } else if (rawCyls !== null) {
+    cylinders = rawCyls;
   }
 
   return { engine_type, cylinders, horsepower: hp };
+}
+
+function extractFinalSalePrice(text) {
+  const lines = text.split('\n').map(l => l.trim());
+  const LABELS = ['Final bid', 'Sold for', 'Final price'];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!LABELS.includes(lines[i])) continue;
+
+    // look at the next non-empty line
+    for (let j = i + 1; j < Math.min(lines.length, i + 4); j++) {
+      const v = lines[j];
+      if (v === '') continue;
+
+      // MUST be a USD value. Skip EUR/PLN occurrences (Price Estimator section)
+      // and skip section headers (e.g. "Final Price Calculator").
+      const m = v.match(/^\$\s?([\d,]+(?:\.\d{2})?)\s*(USD)?$/i);
+      if (m) {
+        const num = parseFloat(m[1].replace(/,/g, ''));
+        if (!isNaN(num) && num > 0) return num;
+      }
+      break; // this occurrence isn't a USD price; try the next label occurrence
+    }
+  }
+  return null;
 }
 
 function isBidcarsLotPage() {
@@ -167,7 +198,7 @@ function captureCurrentLot() {
         const match = rawAcv.match(/\$[\d,]+/);
         if (match) {
             const num = parseFloat(match[0].replace(/[$,USD\s]/g, ''));
-            if (!isNaN(num)) estimated_retail_value_usd = num;
+            if (!isNaN(num) && num !== 0) estimated_retail_value_usd = num;
         }
     }
 
@@ -205,6 +236,48 @@ function captureCurrentLot() {
         if (prices.length > 1) estHigh = prices[1];
     }
 
+    // Lot State Detection
+    const tailMarkers = ['Frequently Asked Questions', 'Compare auctions', 'Popular models', '4 steps to purchasing', 'Help Center'];
+    let headText = fullText;
+    let minTailIdx = -1;
+    for (const marker of tailMarkers) {
+        const idx = fullText.indexOf(marker);
+        if (idx !== -1 && (minTailIdx === -1 || idx < minTailIdx)) {
+            minTailIdx = idx;
+        }
+    }
+    if (minTailIdx !== -1) {
+        headText = fullText.substring(0, minTailIdx);
+    }
+
+    let lot_state = 'unknown';
+    const isFinished = /Final auction ended/i.test(headText) || /Final bid/i.test(headText) || (/Live auction/i.test(headText) && /^Ended$/im.test(headText));
+    const isActive = /Current Bid/i.test(headText) && /Time left/i.test(headText) && !isFinished;
+    
+    if (isFinished) lot_state = 'finished';
+    else if (isActive) lot_state = 'active';
+
+    // Finished Lot Extraction
+    let listed_price = null;
+    let sale_date = null;
+    let listed_currency = null;
+
+    if (lot_state === 'finished' || lot_state === 'unknown') {
+        listed_price = extractFinalSalePrice(headText);
+    }
+
+    let sale_date_unavailable = false;
+    if (lot_state === 'finished') {
+        current_bid_usd = null;
+        sale_date = null; // Sale date is not available on finished bid.cars lots
+        sale_date_unavailable = true;
+        if (listed_price !== null) {
+            listed_currency = 'USD';
+        } else {
+            listed_currency = 'USD';
+        }
+    }
+
     const payload = {
         source_platform: 'bidcars',
         source_url: window.location.href,
@@ -236,9 +309,14 @@ function captureCurrentLot() {
             drivetrain: drivetrain,
             location: extractBidcarsField(fullText, 'Location'),
             current_bid_usd: current_bid_usd,
+            listed_price: listed_price,
+            listed_currency: listed_currency,
+            sale_date: sale_date,
             estimated_cost_low_usd: estLow,
             estimated_cost_high_usd: estHigh
         },
+        lot_state: lot_state,
+        sale_date_unavailable: sale_date_unavailable,
         image_urls: []
     };
 
@@ -280,6 +358,7 @@ function captureCurrentLot() {
     if (!payload.captured_fields.make) missing.push("make");
     if (!payload.captured_fields.model) missing.push("model");
     if (!payload.captured_fields.lot_number) missing.push("lot_number");
+    if (lot_state === 'unknown') missing.push("lot_state");
   
     if (missing.length > 0) {
         payload.captured_fields._missing_fields = missing;

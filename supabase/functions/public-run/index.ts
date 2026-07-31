@@ -40,7 +40,7 @@ serve(async (req) => {
     // 4. Look up the run
     const { data: run, error: runError } = await supabaseClient
       .from('research_runs')
-      .select('id, client_name, notes, created_at')
+      .select('id, client_name, notes, created_at, run_type')
       .eq('share_token', token)
       .eq('share_enabled', true)
       .single();
@@ -73,9 +73,13 @@ serve(async (req) => {
           current_bid_usd,
           listed_price,
           listed_currency,
+          price_usd,
           estimated_retail_value_usd,
           image_urls,
           source_platform,
+          lot_state,
+          captured_at,
+          sale_date,
           asset:assets (
             year,
             make,
@@ -106,13 +110,14 @@ serve(async (req) => {
       client_name: run.client_name,
       notes: run.notes,
       created_at: run.created_at,
+      run_type: run.run_type
     };
 
     const publicListings = (listingsData || []).map((row: any) => {
       const sighting = row.sighting || {};
       const asset = sighting.asset || {};
       
-      return {
+      const mapped: any = {
         // Curation
         notes: row.notes,
         
@@ -146,16 +151,55 @@ serve(async (req) => {
         current_bid_usd: sighting.current_bid_usd,
         listed_price: sighting.listed_price,
         listed_currency: sighting.listed_currency,
+        price_usd: sighting.price_usd,
         estimated_retail_value_usd: sighting.estimated_retail_value_usd,
         image_urls: sighting.image_urls,
-        source_platform: sighting.source_platform
+        source_platform: sighting.source_platform,
+        captured_at: sighting.captured_at
       };
+
+      if (sighting.lot_state === 'finished') {
+        mapped.sale_date = sighting.sale_date;
+      }
+      return mapped;
     });
 
-    const responseBody = {
+    let stats = null;
+    if (run.run_type === 'sold_comps' || run.run_type === 'mixed') {
+      let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
+      
+      const soldListings = run.run_type === 'mixed' 
+        ? publicListings.filter((l: any) => l.current_bid_usd === null) 
+        : publicListings;
+
+      soldListings.forEach((l: any) => {
+        if (typeof l.price_usd === 'number') {
+          tP += l.price_usd;
+          pC++;
+          if (l.price_usd < minP) minP = l.price_usd;
+          if (l.price_usd > maxP) maxP = l.price_usd;
+        }
+        if (typeof l.mileage_miles === 'number') {
+          tM += l.mileage_miles;
+          mC++;
+        }
+      });
+
+      stats = {
+        avg_price_usd: pC > 0 ? tP / pC : null,
+        min_price_usd: pC > 0 ? minP : null,
+        max_price_usd: pC > 0 ? maxP : null,
+        priced_count: pC,
+        total_count: soldListings.length,
+        avg_mileage: mC > 0 ? tM / mC : null
+      };
+    }
+
+    const responseBody: any = {
       run: publicRun,
       listings: publicListings
     };
+    if (stats) responseBody.stats = stats;
 
     // 7. Cache-Control header
     return new Response(JSON.stringify(responseBody), {
