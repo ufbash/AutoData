@@ -152,11 +152,10 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
     return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(num));
   };
   
-  // Helper: Strip commas and parse number
   const parseNumberFromFormatted = (str: string): number | null => {
-    const cleaned = str.replace(/,/g, '').trim();
+    const cleaned = str.replace(/[^\d.]/g, '').trim();
     if (cleaned === '') return null;
-    const parsed = Number(cleaned);
+    const parsed = parseFloat(cleaned);
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
   };
   
@@ -417,7 +416,7 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         dealer: finalDealer,
         sale_price: numericPrice ?? null,
         sale_date: dateSold || undefined,
-        listed_price: null,
+        listed_price: numericPrice ?? null,
         date_listed: dateListed || undefined,
         listed_currency: currency,
         tags: finalTags,
@@ -430,6 +429,8 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
       record_type: recordType,
       vehicles: vehiclesToIngest
     };
+
+    console.log("Submitting payload:", payload);
 
     await onSaleAdded(payload);
   };
@@ -598,8 +599,8 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
                         value={priceDisplay} 
                         onChange={e => {
                             const inputValue = e.target.value;
-                            // Allow only digits and commas
-                            const cleaned = inputValue.replace(/[^\d,]/g, '');
+                            // Allow digits, commas, and decimal point
+                            const cleaned = inputValue.replace(/[^\d,.]/g, '');
                             setPriceDisplay(cleaned);
                             // Update internal price state (strip commas)
                             const parsed = parseNumberFromFormatted(cleaned);

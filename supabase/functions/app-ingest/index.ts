@@ -37,13 +37,13 @@ serve(async (req: Request) => {
       throw new Error("Method not allowed");
     }
 
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized: Missing token" }), { 
+    const authHeader = req.headers.get("Authorization") || "";
+    const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+    if (!jwt) {
+      return new Response(JSON.stringify({ error: "Unauthorized: missing token" }), { 
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
     }
-    const token = authHeader.replace('Bearer ', '');
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -52,19 +52,22 @@ serve(async (req: Request) => {
       throw new Error("Missing Supabase configuration");
     }
 
-    // 1. Client for auth check (JWT-scoped)
-    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-      auth: { persistSession: false }
-    });
+    // Client 1: ANON key + the caller's JWT — used ONLY to verify identity
+    const supabaseAuth = createClient(
+      supabaseUrl,
+      supabaseAnonKey,
+      { global: { headers: { Authorization: `Bearer ${jwt}` } } }
+    );
     
-    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+    const { data: userData, error: userErr } = await supabaseAuth.auth.getUser(jwt);
     
-    if (authError || !user) {
+    if (userErr || !userData?.user) {
+      console.error("getUser failed:", userErr?.message);
       return new Response(JSON.stringify({ error: "Unauthorized: Invalid token" }), { 
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
     }
+    const user = userData.user;
 
     const payloadText = await req.text();
     let payload: AppIngestPayload;
@@ -74,15 +77,16 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: "Invalid JSON format" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // 2. Service Role Client for privileged DB operations (bypasses RLS)
-    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
-    });
+    // Client 2: SERVICE ROLE — used for the membership lookup and all DB writes
+    const supabase = createClient(
+      supabaseUrl,
+      supabaseServiceKey
+    );
 
     // Derive org_id
     const { data: memberships, error: memError } = await supabase
       .from('memberships')
-      .select('org_id')
+      .select('org_id, role')
       .eq('user_id', user.id);
 
     if (memError) throw memError;
@@ -106,17 +110,20 @@ serve(async (req: Request) => {
       }
     }
 
+    const membership = memberships?.find(m => m.org_id === targetOrgId);
+    if (!membership || membership.role !== 'superadmin') {
+      return new Response(JSON.stringify({ error: "Vehicle logging is restricted to administrators." }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     let rates: Record<string, number> | null = null;
+    let rateFetchError = false;
     try {
-      const res = await fetch('https://open.er-api.com/v6/latest/USD');
-      if (res.ok) {
-        const data = await res.json();
-        rates = data.rates;
-      } else {
-        console.error(`Rate fetch failed with status ${res.status}`);
-      }
-    } catch (err) {
-      console.error("Rate fetch network error:", err);
+      const r = await fetch("https://open.er-api.com/v6/latest/USD");
+      const j = await r.json();
+      if (j && j.rates && typeof j.rates === "object") rates = j.rates;
+      else rateFetchError = true;
+    } catch (_e) {
+      rateFetchError = true;
     }
 
     const results = [];
@@ -179,34 +186,42 @@ serve(async (req: Request) => {
           assetId = newAsset.id;
         }
 
-        const priceToSave = v.sale_price ?? v.listed_price ?? null;
-        const listedCurrency = v.listed_currency ?? 'NGN';
+        const cur = (v.listed_currency || "USD").toUpperCase();
+        const rawPrice = v.listed_price ?? null;
 
-        let priceUsd: number | null = null;
-        let exchangeRate: number | null = null;
-        let exchangeRateDate: string | null = null;
+        let price_usd: number | null = null;
+        let exchange_rate: number | null = null;
+        let exchange_rate_date: string | null = null;
         let conversionFailed = false;
 
-        if (priceToSave !== null) {
-          if (!listedCurrency || listedCurrency === 'USD') {
-            priceUsd = priceToSave;
-            exchangeRate = 1;
-            exchangeRateDate = new Date().toISOString();
+        // @ts-ignore
+        if (v.current_bid_usd != null) {
+          // @ts-ignore
+          price_usd = v.current_bid_usd;
+          exchange_rate = 1;
+          exchange_rate_date = new Date().toISOString();
+        } else if (rawPrice != null && (cur === "USD")) {
+          price_usd = rawPrice;
+          exchange_rate = 1;
+          exchange_rate_date = new Date().toISOString();
+        } else if (rawPrice != null) {
+          const rate = rates ? rates[cur] : undefined;
+          if (typeof rate === "number" && rate > 0) {
+            price_usd = Math.round((rawPrice / rate) * 100) / 100;
+            exchange_rate = rate;
+            exchange_rate_date = new Date().toISOString();
           } else {
-            if (rates && rates[listedCurrency]) {
-              exchangeRate = rates[listedCurrency];
-              priceUsd = priceToSave / exchangeRate;
-              exchangeRateDate = new Date().toISOString();
-            } else {
-              conversionFailed = true;
-            }
+            conversionFailed = true;
           }
         }
+
+        console.log(`Conversion: cur=${cur}, rawPrice=${rawPrice}, rate=${exchange_rate}, price_usd=${price_usd}`);
         
         const rawPayloadToSave: any = { ...v, record_type: payload.record_type, date_listed: v.date_listed };
         if (conversionFailed) {
           rawPayloadToSave.price_usd_conversion_failed = true;
-          rawPayloadToSave.attempted_currency = listedCurrency;
+          rawPayloadToSave.attempted_currency = cur;
+          rawPayloadToSave.rate_fetch_error = rateFetchError;
         }
 
         const { data: newSighting, error: sightingError } = await supabase
@@ -219,11 +234,11 @@ serve(async (req: Request) => {
             logged_via: payload.entry_method,
             created_by: user.id,
             dealer_source: v.dealer ?? null,
-            listed_price: priceToSave,
-            listed_currency: listedCurrency,
-            price_usd: priceUsd,
-            exchange_rate: exchangeRate,
-            exchange_rate_date: exchangeRateDate,
+            listed_price: rawPrice,
+            listed_currency: cur,
+            price_usd: price_usd,
+            exchange_rate: exchange_rate,
+            exchange_rate_date: exchange_rate_date,
             sale_date: v.sale_date ?? null,
             mileage_miles: v.mileage_miles ?? null,
             raw_payload: rawPayloadToSave

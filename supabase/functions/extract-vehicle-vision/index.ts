@@ -49,9 +49,9 @@ serve(async (req: Request) => {
 
     if (memError) throw memError;
 
-    const hasAccess = memberships?.some(m => m.role === 'staff' || m.role === 'superadmin');
+    const hasAccess = memberships?.some(m => m.role === 'superadmin');
     if (!hasAccess) {
-      return new Response(JSON.stringify({ error: "Vision extraction is restricted to staff." }), { 
+      return new Response(JSON.stringify({ error: "Vehicle logging is restricted to administrators." }), { 
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
     }

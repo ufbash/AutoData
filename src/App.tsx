@@ -112,7 +112,7 @@ function extractLegacySalesArray(parsedData: unknown): unknown[] {
 }
 
 const MainDashboard: React.FC = () => {
-  const { user, signOut } = useAuth();
+  const { user, role, signOut } = useAuth();
   const [sales, setSales] = useState<CarSale[]>([]);
   const [salesLoading, setSalesLoading] = useState(true);
   const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail'>('dashboard');
@@ -738,16 +738,20 @@ const MainDashboard: React.FC = () => {
             <button onClick={() => setView('list')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'list' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
               <List className="w-4 h-4" /> All Records
             </button>
-            <button onClick={() => setView('bulk-import')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'bulk-import' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
-              <Upload className="w-4 h-4" /> Bulk Import
-            </button>
+            {role === 'superadmin' && (
+              <button onClick={() => setView('bulk-import')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'bulk-import' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+                <Upload className="w-4 h-4" /> Bulk Import
+              </button>
+            )}
             <button onClick={() => setView('research')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'research' || view === 'research-detail' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
               <Globe className="w-4 h-4" /> Research Runs
             </button>
           </div>
-          <button onClick={() => { setShowForm(!showForm); setEditingSale(null); }} className="flex items-center gap-2 bg-[#403f4c] text-[#F0EDDE] px-5 py-2.5 rounded-lg hover:bg-[#403f4c]/90 transition-all shadow-lg shadow-[#403f4c]/20 active:scale-95 border border-[#403f4c]">
-            <Plus className="w-5 h-5" /> {showForm && !editingSale ? 'Cancel Entry' : 'Add Sold Car'}
-          </button>
+          {role === 'superadmin' && (
+            <button onClick={() => { setShowForm(!showForm); setEditingSale(null); }} className="flex items-center gap-2 bg-[#403f4c] text-[#F0EDDE] px-5 py-2.5 rounded-lg hover:bg-[#403f4c]/90 transition-all shadow-lg shadow-[#403f4c]/20 active:scale-95 border border-[#403f4c]">
+              <Plus className="w-5 h-5" /> {showForm && !editingSale ? 'Cancel Entry' : 'Add Sold Car'}
+            </button>
+          )}
         </div>
 
         {showForm && (

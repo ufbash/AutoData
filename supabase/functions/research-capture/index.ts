@@ -65,6 +65,8 @@ serve(async (req: Request) => {
       throw new Error("Method not allowed");
     }
 
+    // NOTE: Access control for the Chrome extension relies entirely on possession of the static x-research-secret.
+    // It does not use a user JWT, so role-based checks (e.g. requiring 'superadmin') cannot be enforced here.
     const researchSecret = req.headers.get("x-research-secret");
     if (!researchSecret || researchSecret !== Deno.env.get("RESEARCH_CAPTURE_SECRET")) {
       return new Response(JSON.stringify({ error: "Unauthorized: Invalid Secret" }), { 
