@@ -115,7 +115,7 @@ const MainDashboard: React.FC = () => {
   const { user, role, signOut } = useAuth();
   const [sales, setSales] = useState<CarSale[]>([]);
   const [salesLoading, setSalesLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail'>(role === 'superadmin' ? 'dashboard' : 'research');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingSale, setEditingSale] = useState<CarSale | null>(null);
@@ -274,104 +274,7 @@ const MainDashboard: React.FC = () => {
   };
 
   const handleDataDetox = async () => {
-    const confirmDetox = window.confirm("This will use AI to analyze and clean up your entire historical database (Make, Model, Year, Trim, Dealer). This process may take a few minutes. Proceed?");
-    if (!confirmDetox) return;
-
-    setIsDetoxing(true);
-    try {
-      // 1. Fetch all sales
-      const allSales = await getStoredSales();
-      if (allSales.length === 0) {
-        alert("No sales to clean.");
-        setIsDetoxing(false);
-        return;
-      }
-
-      // 2. Batch process (30 at a time)
-      const batchSize = 30;
-      const totalBatches = Math.ceil(allSales.length / batchSize);
-      let totalCleaned = 0;
-
-      setDetoxProgress({ current: 0, total: totalBatches });
-
-      for (let i = 0; i < allSales.length; i += batchSize) {
-        const currentBatchNum = Math.floor(i / batchSize) + 1;
-        setDetoxProgress({ current: currentBatchNum, total: totalBatches });
-        setDetoxStatusMsg(`Processing ${currentBatchNum}/${totalBatches}...`);
-
-        const batch = allSales.slice(i, i + batchSize);
-        console.log(`Sending batch ${currentBatchNum} to Gemini:`, batch);
-
-        let success = false;
-        let retries = 0;
-        const maxRetries = 5;
-
-        while (!success && retries < maxRetries) {
-          try {
-            const cleanedBatch = await normalizeHistoricalData(batch);
-            console.log(`Received clean batch ${currentBatchNum} from Gemini:`, cleanedBatch);
-
-            // 4. Update Supabase for each record
-            for (const cleanRecord of cleanedBatch) {
-              if (!cleanRecord.id) {
-                console.warn("Skipping record missing ID:", cleanRecord);
-                continue;
-              }
-
-              const { error } = await supabase
-                .from('sales')
-                .update({
-                  make: cleanRecord.make,
-                  model: cleanRecord.model,
-                  trim: cleanRecord.trim,
-                  year: cleanRecord.year,
-                  dealer: cleanRecord.dealer
-                })
-                .eq('id', cleanRecord.id);
-
-              if (error) {
-                console.error(`Failed to update record ${cleanRecord.id}:`, error);
-              } else {
-                totalCleaned++;
-              }
-            }
-
-            success = true;
-            setDetoxStatusMsg(`Processing ${currentBatchNum}/${totalBatches}...`);
-            // Standard delay between successful batches to respect rate limits
-            if (i + batchSize < allSales.length) {
-              await new Promise(resolve => setTimeout(resolve, 10000)); // 10-second delay
-            }
-          } catch (batchError: any) {
-            retries++;
-            console.warn(`Error processing batch ${currentBatchNum} (Attempt ${retries}/${maxRetries}):`, batchError);
-            if (batchError?.status === 429 || String(batchError).includes('429')) {
-              console.warn(`Rate limit hit on batch ${currentBatchNum}. Waiting 65 seconds before retry...`);
-              setDetoxStatusMsg(`Rate limit hit. Pausing for 60 seconds...`);
-              await new Promise(resolve => setTimeout(resolve, 65000));
-            } else {
-              // If it's not a rate limit, wait 5 seconds before retrying just in case
-              await new Promise(resolve => setTimeout(resolve, 5000));
-            }
-            if (retries >= maxRetries) {
-              console.error(`Failed to process batch ${currentBatchNum} after ${maxRetries} attempts. Skipping.`);
-              break; // Move to the next batch
-            }
-          }
-        }
-      }
-
-      // 5. Refresh
-      alert(`Data Detox complete! Successfully cleaned ${totalCleaned} records.`);
-      setSales(await getStoredSales());
-    } catch (e) {
-      console.error("Detox failed:", e);
-      alert("A critical error occurred during the Data Detox process.");
-    } finally {
-      setIsDetoxing(false);
-      setDetoxProgress({ current: 0, total: 0 });
-      setDetoxStatusMsg('');
-    }
+    alert("Data Detox is disabled; the sales table is deprecated.");
   };
 
   const handleExecuteCleanup = async () => {
@@ -732,16 +635,18 @@ const MainDashboard: React.FC = () => {
 
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
           <div className="flex bg-white rounded-lg p-1 shadow-sm border border-[#a58039]/20">
-            <button onClick={() => setView('dashboard')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'dashboard' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
-              <LayoutDashboard className="w-4 h-4" /> Overview
-            </button>
-            <button onClick={() => setView('list')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'list' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
-              <List className="w-4 h-4" /> All Records
-            </button>
             {role === 'superadmin' && (
-              <button onClick={() => setView('bulk-import')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'bulk-import' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
-                <Upload className="w-4 h-4" /> Bulk Import
-              </button>
+              <>
+                <button onClick={() => setView('dashboard')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'dashboard' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+                  <LayoutDashboard className="w-4 h-4" /> Overview
+                </button>
+                <button onClick={() => setView('list')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'list' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+                  <List className="w-4 h-4" /> All Records
+                </button>
+                <button onClick={() => setView('bulk-import')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'bulk-import' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+                  <Upload className="w-4 h-4" /> Bulk Import
+                </button>
+              </>
             )}
             <button onClick={() => setView('research')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'research' || view === 'research-detail' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
               <Globe className="w-4 h-4" /> Research Runs
@@ -760,13 +665,31 @@ const MainDashboard: React.FC = () => {
           </div>
         )}
 
-        {!salesLoading && view === 'dashboard' && (
+        {!salesLoading && role !== 'superadmin' && (view === 'dashboard' || view === 'list' || view === 'bulk-import') && (
+          <div className="bg-white p-8 rounded-xl shadow-sm border border-[#ba3b46]/20 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 bg-[#ba3b46]/10 text-[#ba3b46] rounded-full flex items-center justify-center mb-4">
+              <X className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-[#403f4c] mb-2">Access Restricted</h2>
+            <p className="text-gray-500 max-w-md">
+              You do not have permission to view the ledger dashboard. Please return to the Research Runs.
+            </p>
+            <button 
+              onClick={() => setView('research')}
+              className="mt-6 px-6 py-2 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors"
+            >
+              Go to Research Runs
+            </button>
+          </div>
+        )}
+
+        {!salesLoading && role === 'superadmin' && view === 'dashboard' && (
           <Dashboard stats={stats} currency={displayCurrency} exchangeRates={exchangeRates} allSales={sales} includeMarketData={includeMarketData} />
         )}
-        {!salesLoading && view === 'list' && (
+        {!salesLoading && role === 'superadmin' && view === 'list' && (
           <CarTable sales={sales} onDelete={handleDeleteSale} onBulkDelete={handleBulkDelete} onEdit={handleEditSale} displayCurrency={displayCurrency} exchangeRates={exchangeRates} includeMarketData={includeMarketData} />
         )}
-        {!salesLoading && view === 'bulk-import' && (
+        {!salesLoading && role === 'superadmin' && view === 'bulk-import' && (
           <BulkImport onSave={async (payload) => {
             await handleAddSale(payload);
             setView('list');
