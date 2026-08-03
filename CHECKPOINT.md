@@ -194,3 +194,16 @@ This section lists manual steps for verifying the server-side, role-gated vision
 8. Rows that remain unconverted (non-USD, pre-existing):
    `SELECT count(*) FROM sightings WHERE price_usd IS NULL AND listed_price IS NOT NULL;`
    → report the number; these need manual attention or acceptance
+
+## A3 Verification
+This section lists manual steps for verifying the automated monthly backup function:
+1. Sign up at resend.com (free tier: 3,000 emails/month), create an API key
+2. Run `supabase secrets set RESEND_API_KEY=<your-key> BACKUP_SECRET=<random-hex> BACKUP_RECIPIENTS=email1,email2`
+3. (Optional but recommended) Run `supabase secrets set BACKUP_FROM=your-verified-domain-email` to avoid spam filters, else it defaults to onboarding@resend.dev.
+4. Deploy the function: `supabase functions deploy monthly-backup`
+5. Apply the migration: `supabase db push` (pushes `013_backup_cron.sql`)
+   *(Note: if `current_setting('app.backup_secret', true)` is not supported in your Postgres instance, edit migration 013 and replace it with your actual secret string before pushing, or run `ALTER DATABASE postgres SET app.backup_secret TO '<random-hex>';` in your SQL editor.)*
+6. Manually test the function via HTTP POST to ensure emails are sent and size constraints are respected:
+   `curl -i -X POST https://<your-project-ref>.supabase.co/functions/v1/monthly-backup -H "X-Backup-Secret: <random-hex>"`
+7. Check the email inbox of the recipients for the attachments. Verify that `raw_payload` is omitted from `sightings` if the size exceeds ~8MB (the email body will specify this).
+8. Verify in the Supabase Dashboard under Database > Cron Jobs that `autodata-monthly-backup` is scheduled successfully for `0 3 1 * *`.

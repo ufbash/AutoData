@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.public-run]
 verify_jwt = false
+
+[functions.monthly-backup]
+verify_jwt = false
