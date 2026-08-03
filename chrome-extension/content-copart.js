@@ -46,17 +46,21 @@ function extractField(text, label, opts = { multiline: false }) {
 function extractCurrentBid(text) {
   const lines = text.split('\n').map(l => l.trim());
   const idx = lines.findIndex(l => /^current bid$/i.test(l));
-  if (idx === -1) return null;
-
-  for (let j = idx + 1; j < Math.min(lines.length, idx + 6); j++) {
-    if (lines[j] === '') continue;
-    if (/^\$[\d,]+(\.\d{2})?$/.test(lines[j])) {
-      const num = parseFloat(lines[j].replace(/[$,]/g, ''));
-      return isNaN(num) ? null : num;
+  
+  if (idx !== -1) {
+    for (let j = idx + 1; j < Math.min(lines.length, idx + 6); j++) {
+      if (lines[j] === '') continue;
+      if (/^\$[\d,]+(\.\d{2})?(\s*USD)?$/i.test(lines[j])) {
+        const num = parseFloat(lines[j].replace(/[$,USD\s]/gi, ''));
+        return isNaN(num) ? null : num;
+      }
+      // Stop if we've crossed into another section
+      if (/^(Auction countdown|Bid now|Eligibility|Shipping|Bidding increment|Starting bid)/i.test(lines[j])) break;
     }
-    // Stop if we've crossed into another section
-    if (/^(Auction countdown|Bid now|Eligibility|Shipping|Bidding increment|Starting bid)/i.test(lines[j])) break;
   }
+
+  if (/Pure sale/i.test(text)) return 0;
+  
   return null;
 }
 
@@ -191,6 +195,20 @@ function captureCurrentLot() {
         trans_engages = true;
     }
 
+    const sale_date = extractField(fullText, 'Sale date');
+
+    let lot_state = 'unknown';
+    if (/Sale (date )?ended/i.test(fullText) || /^Sold$/im.test(fullText) || /Bidding closed/i.test(fullText)) {
+        lot_state = 'finished';
+    } else if (/Current bid/i.test(fullText) || /Bid now/i.test(fullText) || /Pure sale/i.test(fullText) || sale_date === 'Future') {
+        lot_state = 'active';
+    } else if (sale_date) {
+        const sdTime = new Date(sale_date).getTime();
+        if (!isNaN(sdTime) && sdTime > Date.now()) {
+            lot_state = 'active';
+        }
+    }
+
     const payload = {
         source_platform: 'copart',
         source_url: window.location.href,
@@ -216,7 +234,7 @@ function captureCurrentLot() {
             body_style: extractField(fullText, 'Body style'),
             has_key: extractField(fullText, 'Has key'),
             seller: extractField(fullText, 'Seller'),
-            sale_date: extractField(fullText, 'Sale date'),
+            sale_date: sale_date,
             highlights: highlights,
             location: extractField(fullText, 'Location'),
             runs_and_drives: runs_and_drives,
@@ -224,6 +242,7 @@ function captureCurrentLot() {
             transmission_engages: trans_engages,
             odometer_brand: extractOdometerBrand(fullText),
         },
+        lot_state: lot_state,
         image_urls: []
     };
 
@@ -269,6 +288,32 @@ function captureCurrentLot() {
     return payload;
 }
 
+function checkReady() {
+    const text = document.body.innerText || '';
+    return text.length > 2500 && /VIN:/i.test(text) && /Lot number:/i.test(text) && /Odometer:/i.test(text);
+}
+
+async function waitForCopartReady() {
+    let elapsed = 0;
+    while (elapsed < 8000) {
+        if (checkReady()) return true;
+        await new Promise(r => setTimeout(r, 300));
+        elapsed += 300;
+    }
+    return false;
+}
+
+async function captureCurrentLotAsync() {
+    const isReady = await waitForCopartReady();
+    const payload = captureCurrentLot();
+    if (!isReady) {
+        payload.page_not_fully_loaded = true;
+        if (!payload.captured_fields._missing_fields) payload.captured_fields._missing_fields = [];
+        payload.captured_fields._missing_fields.push('page_readiness');
+    }
+    return payload;
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "checkLotPage") {
         sendResponse({
@@ -279,12 +324,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     
     if (request.action === "captureCurrentLot") {
-        try {
-            const data = captureCurrentLot();
+        captureCurrentLotAsync().then(data => {
             sendResponse({ success: true, data });
-        } catch (e) {
+        }).catch(e => {
             sendResponse({ success: false, error: e.message || String(e) });
-        }
+        });
         return true;
     }
 });

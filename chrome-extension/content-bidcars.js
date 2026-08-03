@@ -155,7 +155,7 @@ function captureCurrentLot() {
         const parts = rawLot.split('-');
         if (parts.length > 1) {
             lot_number = parts[1].trim();
-            if (parts[0].trim() === '1') source_auction_platform = 'copart';
+            if (parts[0].trim() === '1' || parts[0].trim() === '0') source_auction_platform = 'copart';
             else if (parts[0].trim() === '2') source_auction_platform = 'iaai';
         } else {
             lot_number = rawLot;
@@ -320,19 +320,24 @@ function captureCurrentLot() {
         image_urls: []
     };
 
-    // Images logic (preserve existing)
-    const elements = document.querySelectorAll('*');
-    const allUrls = [];
-    
-    elements.forEach(el => {
-        ['src', 'srcset', 'data-src', 'href'].forEach(attr => {
-            const val = el.getAttribute(attr) || el[attr];
-            if (typeof val === 'string') {
-                const urls = val.split(/[,\s]+/).filter(u => /https?:\/\/(images\.bid\.cars|pluto\.bid\.car)\/[^\s"'<>]+\.jpg/i.test(u));
-                allUrls.push(...urls);
-            }
-        });
+    if (location.search.includes('archived=true')) {
+        payload.captured_fields.archived = true;
+    }
+
+    // Images logic
+    const rx = /https?:\/\/(images\.bid\.cars|pluto\.bid\.car)\/[^\s"'<>\\]+\.jpg/gi;
+    const found = new Set();
+    document.querySelectorAll('*').forEach(el => {
+      for (const a of el.attributes || []) {
+        const m = (a.value || '').match(rx);
+        if (m) m.forEach(u => found.add(u));
+      }
+      if (el.style && el.style.backgroundImage) {
+        const m = el.style.backgroundImage.match(rx);
+        if (m) m.forEach(u => found.add(u));
+      }
     });
+    const allUrls = [...found];
     
     // Filter by VIN
     let vinUrls = allUrls.filter(u => u.includes(vin));
@@ -370,6 +375,62 @@ function captureCurrentLot() {
     return payload;
 }
 
+async function fetchImagesAsBase64(urls) {
+  const out = [];
+  let totalBytes = 0;
+  let truncated = false;
+  
+  console.log('[AutoData] fetching images, count:', urls.length);
+
+  for (let i = 0; i < Math.min(urls.length, 12); i++) {
+    try {
+      let res;
+      try {
+        res = await fetch(urls[i], { credentials: 'omit', mode: 'cors' });
+      } catch (e) {
+        res = { ok: false };
+      }
+      
+      if (!res.ok) { 
+        res = await fetch(urls[i]);
+      }
+      
+      if (!res.ok) { out.push(null); continue; }
+      
+      const blob = await res.blob();
+      const b64 = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1]);
+        r.onerror = reject;
+        r.readAsDataURL(blob);
+      });
+      
+      if (totalBytes + b64.length > 20 * 1024 * 1024 && i >= 8) {
+        truncated = true;
+        break;
+      }
+      
+      out.push(b64);
+      totalBytes += b64.length;
+    } catch (_e) { out.push(null); }
+  }
+  console.log('[AutoData] fetched blobs:', out.filter(Boolean).length, 'of', out.length);
+  return { blobs: out, truncated };
+}
+
+async function captureCurrentLotAsync() {
+    const payload = captureCurrentLot();
+    if (payload.image_urls.length > 0) {
+        const res = await fetchImagesAsBase64(payload.image_urls);
+        payload.image_blobs = res.blobs;
+        if (res.truncated) {
+            payload.image_blobs_truncated = true;
+        }
+    }
+    console.log('[AutoData] payload has image_blobs:', Array.isArray(payload.image_blobs), payload.image_blobs?.length);
+    return payload;
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "checkLotPage") {
         const check = isBidcarsLotPage();
@@ -382,12 +443,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     
     if (request.action === "captureCurrentLot") {
-        try {
-            const data = captureCurrentLot();
+        captureCurrentLotAsync().then(data => {
             sendResponse({ success: true, data });
-        } catch (e) {
+        }).catch(e => {
             sendResponse({ success: false, error: e.message || String(e) });
-        }
+        });
         return true;
     }
 });

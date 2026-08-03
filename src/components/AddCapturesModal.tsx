@@ -37,13 +37,21 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
         const data = await listAvailableSightings(orgId, existingSightingIds, 60, offset);
         if (data.length < 60) setHasMore(false);
         
+        const isFinished = (l: any) => l.lot_state === 'finished';
+        const isAuctionSource = (l: any) => ['copart','bidcars','iaai'].includes(l.source_platform);
+        const hasValue = (v: any) => v !== null && v !== undefined;
+
+        const eligibleActive = (l: any) => isAuctionSource(l) && !isFinished(l);
+        const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active';
+        const eligibleMixed = (l: any) => eligibleActive(l) || eligibleSold(l);
+
         const eligibleData = data.filter(s => {
           if (runType === 'sold_comps') {
-            return s.price_usd !== null && s.current_bid_usd === null && s.lot_state !== 'active';
+            return eligibleSold(s);
           } else if (runType === 'active_listings') {
-            return s.current_bid_usd !== null && s.lot_state !== 'finished';
+            return eligibleActive(s);
           }
-          return true; // mixed
+          return eligibleMixed(s);
         });
         
         setSightings(prev => offset === 0 ? eligibleData : [...prev, ...eligibleData]);
@@ -92,7 +100,7 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-in fade-in">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] flex flex-col">
         
         {/* Header */}
@@ -195,10 +203,11 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
                           <div className="w-12 h-12 flex-shrink-0 bg-gray-200 rounded overflow-hidden">
                             {s.image_urls?.[0] ? (
                               <img 
-                                src={s.image_urls[0]} 
+                                src={s.source_platform === 'copart' && s.image_urls[0].includes('_ful.jpg') ? s.image_urls[0].replace('_ful.jpg', '_thb.jpg') : s.image_urls[0]} 
                                 alt="thumbnail" 
                                 className="w-full h-full object-cover" 
                                 loading="lazy"
+                                decoding="async"
                                 width={48}
                                 height={48}
                                 referrerPolicy="no-referrer"

@@ -9,6 +9,8 @@ export interface ResearchRun {
   share_token: string;
   share_enabled: boolean;
   run_type: 'sold_comps' | 'active_listings' | 'mixed';
+  deleted_at?: string | null;
+  deleted_by?: string | null;
   created_at: string;
   updated_at: string;
   listing_count?: number;
@@ -59,6 +61,9 @@ export interface RunListing {
   fuel: string | null;
   drivetrain: string | null;
   exterior_color: string | null;
+  stored_image_urls?: string[];
+  image_store_status?: string | null;
+  images_stored_at?: string | null;
 }
 
 export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
@@ -66,6 +71,7 @@ export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
     .from('research_runs')
     .select('*, research_run_listings(count)')
     .eq('org_id', orgId)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -166,6 +172,9 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
         listed_currency,
         price_usd,
         lot_state,
+        stored_image_urls,
+        image_store_status,
+        images_stored_at,
         assets (
           make,
           model,
@@ -239,6 +248,9 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       fuel: asset.fuel || null,
       drivetrain: asset.drivetrain || null,
       exterior_color: asset.exterior_color || null,
+      stored_image_urls: sighting.stored_image_urls || undefined,
+      image_store_status: sighting.image_store_status || null,
+      images_stored_at: sighting.images_stored_at || null,
     };
   }).sort((a, b) => {
     if (a.position === b.position) {
@@ -291,25 +303,34 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
 
   if (runError) throw new Error(`Failed to get run type: ${runError.message}`);
   
-  // Fetch sighting details for validation
   const { data: sightingData, error: sightingError } = await supabase
     .from('sightings')
-    .select('price_usd, lot_state, raw_payload, listed_price')
+    .select('price_usd, lot_state, raw_payload, listed_price, source_platform')
     .eq('id', sightingId)
     .single();
     
   if (sightingError) throw new Error(`Failed to get sighting: ${sightingError.message}`);
 
-  const current_bid_usd = sightingData.raw_payload?.current_bid_usd ?? null;
-  const price_usd = sightingData.price_usd;
-  const lot_state = sightingData.lot_state;
+  const sightingObj = {
+    source_platform: sightingData.source_platform,
+    lot_state: sightingData.lot_state,
+    price_usd: sightingData.price_usd,
+    current_bid_usd: sightingData.raw_payload?.current_bid_usd ?? null
+  };
+
+  const isFinished = (l: any) => l.lot_state === 'finished';
+  const isAuctionSource = (l: any) => ['copart','bidcars','iaai'].includes(l.source_platform);
+  const hasValue = (v: any) => v !== null && v !== undefined;
+
+  const eligibleActive = (l: any) => isAuctionSource(l) && !isFinished(l);
+  const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active';
 
   if (runData.run_type === 'sold_comps') {
-    if (!(price_usd !== null && current_bid_usd === null && lot_state !== 'active')) {
+    if (!eligibleSold(sightingObj)) {
       throw new Error("Only sold or settled listings can be added to a market-research run.");
     }
   } else if (runData.run_type === 'active_listings') {
-    if (!(current_bid_usd !== null && lot_state !== 'finished')) {
+    if (!eligibleActive(sightingObj)) {
       throw new Error("Only live auction listings can be added to a client-options run.");
     }
   }
@@ -341,6 +362,18 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
     }
     throw new Error(`Failed to attach sighting to run: ${error.message}`);
   }
+
+  // Fire-and-forget image storage trigger
+  // Wrapped in try/catch so it never blocks or fails the attach operation
+  (async () => {
+    try {
+      await supabase.functions.invoke('store-images', {
+        body: { sighting_ids: [sightingId] }
+      });
+    } catch (e) {
+      console.warn(`Failed to trigger image storage for sighting ${sightingId}`, e);
+    }
+  })();
 };
 
 export const removeListingFromRun = async (listingId: string): Promise<void> => {
@@ -456,3 +489,103 @@ export async function listAvailableSightings(
 
   return available;
 }
+
+export const storeImagesForRun = async (runId: string) => {
+  // 1. Get all sighting IDs for the run
+  const { data: listings, error } = await supabase
+    .from('research_run_listings')
+    .select('sighting_id')
+    .eq('run_id', runId);
+
+  if (error) throw new Error(`Failed to get run listings: ${error.message}`);
+  if (!listings || listings.length === 0) return { results: [] };
+
+  const sightingIds = listings.map(l => l.sighting_id);
+  const results: any[] = [];
+
+  // 2. Batch in chunks of 50
+  for (let i = 0; i < sightingIds.length; i += 50) {
+    const batch = sightingIds.slice(i, i + 50);
+    const { data, error: invokeError } = await supabase.functions.invoke('store-images', {
+      body: { sighting_ids: batch }
+    });
+    
+    if (invokeError) {
+      console.warn('Batch image storage failed:', invokeError);
+      // We continue with other batches
+    } else if (data && data.results) {
+      results.push(...data.results);
+    }
+  }
+
+  return { results };
+};
+
+export const getSignedImageUrls = async (paths: string[], expiresIn = 3600): Promise<{ path: string, signedUrl: string }[]> => {
+  if (paths.length === 0) return [];
+  
+  const { data, error } = await supabase.storage
+    .from('vehicle-images')
+    .createSignedUrls(paths, expiresIn);
+
+  if (error) {
+    console.error(`Failed to sign URLs: ${error.message}`);
+    return [];
+  }
+
+  return (data || []).filter(d => !d.error && d.signedUrl).map(d => ({
+    path: d.path!,
+    signedUrl: d.signedUrl
+  }));
+};
+
+export const softDeleteRun = async (runId: string, userId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('research_runs')
+    .update({ 
+      deleted_at: new Date().toISOString(),
+      deleted_by: userId,
+      share_enabled: false 
+    })
+    .eq('id', runId);
+
+  if (error) {
+    throw new Error(`Failed to delete research run: ${error.message}`);
+  }
+};
+
+export const listDeletedRuns = async (orgId: string): Promise<ResearchRun[]> => {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const { data, error } = await supabase
+    .from('research_runs')
+    .select('*, research_run_listings(count)')
+    .eq('org_id', orgId)
+    .not('deleted_at', 'is', null)
+    .gte('deleted_at', thirtyDaysAgo.toISOString())
+    .order('deleted_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to list deleted runs: ${error.message}`);
+  }
+
+  return (data || []).map((row: any) => ({
+    ...row,
+    listing_count: row.research_run_listings?.[0]?.count || 0,
+  }));
+};
+
+export const restoreRun = async (runId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('research_runs')
+    .update({ 
+      deleted_at: null,
+      deleted_by: null
+    })
+    .eq('id', runId);
+
+  if (error) {
+    throw new Error(`Failed to restore research run: ${error.message}`);
+  }
+};

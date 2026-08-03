@@ -8,6 +8,9 @@ import {
   reorderListings, 
   removeListingFromRun, 
   rotateShareToken,
+  storeImagesForRun,
+  getSignedImageUrls,
+  softDeleteRun,
   ResearchRun,
   RunListing
 } from '../services/researchService';
@@ -21,7 +24,7 @@ interface ResearchRunDetailProps {
 }
 
 const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) => {
-  const { orgId } = useAuth();
+  const { orgId, user, role } = useAuth();
   
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [listings, setListings] = useState<RunListing[]>([]);
@@ -35,9 +38,18 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   const [nameInput, setNameInput] = useState('');
   const [notesInput, setNotesInput] = useState('');
   
+  // Image Storage
+  const [storingImages, setStoringImages] = useState(false);
+  const [signedThumbnails, setSignedThumbnails] = useState<Record<string, string>>({});
+  
   // Checklist states
   const [warningsReviewed, setWarningsReviewed] = useState(false);
   const [pulseListingId, setPulseListingId] = useState<string | null>(null);
+
+  // Delete states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const loadData = async () => {
     try {
@@ -50,6 +62,19 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       if (r) {
         setNameInput(r.client_name);
         setNotesInput(r.notes || '');
+      }
+
+      // Fetch signed urls for thumbnails
+      const paths = l.map(listing => listing.stored_image_urls?.[0]).filter(Boolean) as string[];
+      if (paths.length > 0) {
+        try {
+          const signed = await getSignedImageUrls(paths);
+          const map: Record<string, string> = {};
+          signed.forEach(s => map[s.path] = s.signedUrl);
+          setSignedThumbnails(map);
+        } catch (e) {
+          console.error('Failed to load signed thumbnails', e);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load details');
@@ -163,6 +188,30 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       setWarningsReviewed(false); // reset checklist
     } catch (err: any) {
       alert(err.message || 'Failed to remove listing');
+    }
+  };
+
+  const handleStoreImages = async () => {
+    setStoringImages(true);
+    try {
+      await storeImagesForRun(runId);
+      await loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to store images');
+    } finally {
+      setStoringImages(false);
+    }
+  };
+
+  const handleDeleteRun = async () => {
+    if (!user || run?.client_name !== deleteConfirmName) return;
+    setDeleting(true);
+    try {
+      await softDeleteRun(runId, user.id);
+      onBack();
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete run');
+      setDeleting(false);
     }
   };
 
@@ -585,12 +634,32 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
             </div>
             
           </div>
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors self-start mt-2"
-          >
-            <Plus className="w-4 h-4" /> Add captures
-          </button>
+          <div className="flex items-center justify-between w-full mt-2">
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={handleStoreImages}
+                disabled={storingImages}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-[#403f4c] rounded-lg font-bold hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                {storingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
+                Store Images
+              </button>
+              <button 
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white rounded-lg font-bold hover:bg-[#2d2c35] transition-colors"
+              >
+                <Plus className="w-4 h-4" /> Add captures
+              </button>
+            </div>
+            {role === 'superadmin' && (
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                className="flex items-center gap-2 px-4 py-2 text-red-600 font-bold hover:bg-red-50 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> Delete run
+              </button>
+            )}
+          </div>
         </div>
 
         {listings.length === 0 ? (
@@ -641,7 +710,13 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                     <td className={`px-4 py-3 border-l-4 ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK') ? 'border-red-500' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'border-yellow-500' : 'border-transparent'}`} onClick={e => e.stopPropagation()}>
                       <div className="flex items-start gap-3">
                         <div className="w-16 h-12 flex-shrink-0 bg-gray-200 rounded overflow-hidden">
-                          {listing.image_urls?.[0] ? (
+                          {listing.stored_image_urls?.[0] && signedThumbnails[listing.stored_image_urls[0]] ? (
+                            <img 
+                              src={signedThumbnails[listing.stored_image_urls[0]]} 
+                              alt="thumbnail" 
+                              className="w-full h-full object-cover" 
+                            />
+                          ) : listing.image_urls?.[0] ? (
                             <img 
                               src={listing.image_urls[0]} 
                               alt="thumbnail" 
@@ -679,6 +754,11 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                             <div className="flex items-center gap-2">
                               {listing.damage_type && <span>{listing.damage_type}</span>}
                               {listing.title_type && <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px] uppercase font-bold">{listing.title_type}</span>}
+                              
+                              {listing.image_store_status === 'complete' && <span className="text-green-600 font-bold text-[10px] uppercase">stored ({listing.stored_image_urls?.length})</span>}
+                              {listing.image_store_status === 'partial' && <span className="text-amber-600 font-bold text-[10px] uppercase">partial ({listing.stored_image_urls?.length})</span>}
+                              {listing.image_store_status === 'failed' && <span className="text-red-600 font-bold text-[10px] uppercase">failed</span>}
+                              {!listing.image_store_status && <span className="text-gray-400 font-bold text-[10px] uppercase">not stored</span>}
                             </div>
                           </div>
                         </div>
@@ -747,6 +827,49 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
           onClose={() => setActiveListing(null)}
           showInternalFields={true}
         />
+      )}
+
+      {showDeleteModal && run && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-in fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+            <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <AlertTriangle className="w-6 h-6 text-red-600" />
+              Delete Research Run
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              This will softly delete the run. Sharing will be disabled immediately. 
+              The run is recoverable for 30 days. Attached listings are <strong>NOT</strong> deleted from the ledger.
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Type <strong>{run.client_name}</strong> to confirm:
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmName}
+                onChange={e => setDeleteConfirmName(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-red-500 focus:border-red-500"
+                placeholder={run.client_name}
+              />
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button 
+                onClick={() => setShowDeleteModal(false)}
+                className="px-4 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg transition-colors"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleDeleteRun}
+                disabled={deleteConfirmName !== run.client_name || deleting}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Delete run'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { listRuns, createRun, ResearchRun } from '../services/researchService';
+import { listRuns, createRun, listDeletedRuns, restoreRun, ResearchRun } from '../services/researchService';
 import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car } from 'lucide-react';
 
 interface ResearchRunsProps {
@@ -8,10 +8,14 @@ interface ResearchRunsProps {
 }
 
 const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
-  const { orgId, orgLoading } = useAuth();
+  const { orgId, orgLoading, role } = useAuth();
   const [runs, setRuns] = useState<ResearchRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deletedRuns, setDeletedRuns] = useState<ResearchRun[]>([]);
+  const [deletedLoading, setDeletedLoading] = useState(false);
 
   const [showNewForm, setShowNewForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
@@ -60,8 +64,37 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
       onOpenRun(newRun.id);
     } catch (err: any) {
       alert(err.message || 'Failed to create run');
-    } finally {
       setCreating(false);
+    }
+  };
+
+  const handleToggleDeleted = async () => {
+    const nextState = !showDeleted;
+    setShowDeleted(nextState);
+    if (nextState && orgId) {
+      setDeletedLoading(true);
+      try {
+        const d = await listDeletedRuns(orgId);
+        setDeletedRuns(d);
+      } catch (err: any) {
+        alert(err.message || 'Failed to load deleted runs');
+      } finally {
+        setDeletedLoading(false);
+      }
+    }
+  };
+
+  const handleRestore = async (runId: string) => {
+    try {
+      await restoreRun(runId);
+      setDeletedRuns(prev => prev.filter(r => r.id !== runId));
+      // Refresh active runs
+      if (orgId) {
+        const data = await listRuns(orgId);
+        setRuns(data);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to restore run');
     }
   };
 
@@ -85,12 +118,22 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-[#403f4c]">Research Runs</h2>
-        <button
-          onClick={() => setShowNewForm(!showNewForm)}
-          className="flex items-center gap-2 px-4 py-2 bg-[#a58039] text-[#F0EDDE] rounded-lg font-bold hover:bg-[#8c6b2e] transition-colors"
-        >
-          <Plus className="w-4 h-4" /> New Research Run
-        </button>
+        <div className="flex items-center gap-3">
+          {role === 'superadmin' && (
+            <button
+              onClick={handleToggleDeleted}
+              className={`text-sm font-bold transition-colors ${showDeleted ? 'text-red-600' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+              {showDeleted ? 'Hide deleted' : 'Show deleted'}
+            </button>
+          )}
+          <button
+            onClick={() => setShowNewForm(!showNewForm)}
+            className="flex items-center gap-2 px-4 py-2 bg-[#a58039] text-[#F0EDDE] rounded-lg font-bold hover:bg-[#8c6b2e] transition-colors"
+          >
+            <Plus className="w-4 h-4" /> New Research Run
+          </button>
+        </div>
       </div>
 
       {showNewForm && (
@@ -164,7 +207,40 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
         </form>
       )}
 
-      {runs.length === 0 ? (
+      {showDeleted ? (
+        deletedLoading ? (
+          <div className="flex justify-center items-center h-32">
+            <Loader2 className="w-6 h-6 animate-spin text-[#a58039]" />
+          </div>
+        ) : deletedRuns.length === 0 ? (
+          <div className="bg-white p-12 rounded-xl shadow-sm border border-gray-200 text-center">
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No deleted runs</h3>
+            <p className="text-gray-500">Deleted runs are permanently removed after 30 days.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {deletedRuns.map(run => {
+              const daysRemaining = 30 - Math.floor((new Date().getTime() - new Date(run.deleted_at!).getTime()) / (1000 * 3600 * 24));
+              return (
+                <div key={run.id} className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-red-900 line-clamp-1">{run.client_name}</h3>
+                    <p className="text-sm text-red-700">
+                      Deleted on {new Date(run.deleted_at!).toLocaleDateString()} • {Math.max(0, daysRemaining)} days remaining until permanent deletion
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleRestore(run.id)}
+                    className="px-4 py-2 bg-white text-red-700 font-bold rounded-lg border border-red-200 hover:bg-red-100 transition-colors whitespace-nowrap"
+                  >
+                    Restore
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : runs.length === 0 ? (
         <div className="bg-white p-12 rounded-xl shadow-sm border border-gray-200 text-center">
           <Users className="w-12 h-12 text-gray-300 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">No research runs yet</h3>

@@ -43,6 +43,7 @@ serve(async (req) => {
       .select('id, client_name, notes, created_at, run_type')
       .eq('share_token', token)
       .eq('share_enabled', true)
+      .is('deleted_at', null)
       .single();
 
     if (runError || !run) {
@@ -76,6 +77,8 @@ serve(async (req) => {
           price_usd,
           estimated_retail_value_usd,
           image_urls,
+          stored_image_urls,
+          image_store_status,
           source_platform,
           lot_state,
           captured_at,
@@ -112,6 +115,37 @@ serve(async (req) => {
       created_at: run.created_at,
       run_type: run.run_type
     };
+
+    // Gather paths to sign
+    const pathsToSignSet = new Set<string>();
+    (listingsData || []).forEach((row: any) => {
+      const sighting = row.sighting || {};
+      if (Array.isArray(sighting.stored_image_urls)) {
+        sighting.stored_image_urls.forEach((p: string) => pathsToSignSet.add(p));
+      }
+    });
+
+    const pathsToSign = Array.from(pathsToSignSet);
+    const signedUrlMap = new Map<string, string>();
+
+    if (pathsToSign.length > 0) {
+      // Sign in batches of 100 to avoid length limits
+      for (let i = 0; i < pathsToSign.length; i += 100) {
+        const batch = pathsToSign.slice(i, i + 100);
+        const { data: signedUrls, error: signError } = await supabaseClient
+          .storage
+          .from('vehicle-images')
+          .createSignedUrls(batch, 7 * 24 * 3600);
+        
+        if (!signError && signedUrls) {
+          signedUrls.forEach(su => {
+            if (!su.error && su.signedUrl && su.path) {
+              signedUrlMap.set(su.path, su.signedUrl);
+            }
+          });
+        }
+      }
+    }
 
     const publicListings = (listingsData || []).map((row: any) => {
       const sighting = row.sighting || {};
@@ -153,7 +187,13 @@ serve(async (req) => {
         listed_currency: sighting.listed_currency,
         price_usd: sighting.price_usd,
         estimated_retail_value_usd: sighting.estimated_retail_value_usd,
-        image_urls: sighting.image_urls,
+        image_urls: (() => {
+          if (Array.isArray(sighting.stored_image_urls) && sighting.stored_image_urls.length > 0) {
+            const signed = sighting.stored_image_urls.map((p: string) => signedUrlMap.get(p)).filter(Boolean);
+            if (signed.length > 0) return signed;
+          }
+          return sighting.image_urls;
+        })(),
         source_platform: sighting.source_platform,
         captured_at: sighting.captured_at
       };

@@ -9,3 +9,6 @@ verify_jwt = false
 
 [functions.monthly-backup]
 verify_jwt = false
+
+[functions.upload-images]
+verify_jwt = false

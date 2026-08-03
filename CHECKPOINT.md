@@ -207,3 +207,11 @@ This section lists manual steps for verifying the automated monthly backup funct
    `curl -i -X POST https://<your-project-ref>.supabase.co/functions/v1/monthly-backup -H "X-Backup-Secret: <random-hex>"`
 7. Check the email inbox of the recipients for the attachments. Verify that `raw_payload` is omitted from `sightings` if the size exceeds ~8MB (the email body will specify this).
 8. Verify in the Supabase Dashboard under Database > Cron Jobs that `autodata-monthly-backup` is scheduled successfully for `0 3 1 * *`.
+
+## C1 Verification (Stored Images)
+1. Execute `supabase db push` to run `014_stored_images.sql`.
+   *Fallback:* If bucket creation via SQL fails or is restricted on this project, create it manually via the Supabase Dashboard: Go to Storage → New bucket → name it `vehicle-images` → set to Private (do NOT check public). Then push the migration again (or execute the remaining RLS policies).
+2. Deploy the updated functions: `supabase functions deploy store-images && supabase functions deploy public-run`.
+3. In the Staff UI, open an existing Research Run. Click "Store Images" to manually trigger storage for existing listings.
+4. Verify the UI updates to show "stored (N)" status on the listings, and the thumbnails correctly switch to the cached versions (open Network tab to confirm they are signed URLs from Supabase Storage).
+5. Open the Public Share Link. Confirm that images load successfully and inspecting the image source shows a Supabase Storage signed URL instead of the original Copart/bid.cars CDN URL.
