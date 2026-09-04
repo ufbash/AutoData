@@ -254,7 +254,7 @@ client except noise, and two emails per auction is how a sender gets muted.
 | 8.2 | The all-runs page **stays** as a cross-client index | LOCKED |
 | 8.3 | `ResearchRunDetail` is **not moved** — only lists and creation change | LOCKED |
 | 8.4 | URL routing deferred to Phase D, when the client portal needs it | LOCKED |
-| 8.5 | Whether a run may exist without a client | **OPEN** |
+| 8.5 | Every research run requires a client (placeholder "Internal / Market Research" client for internal work) | LOCKED (4 Sep 2026) |
 
 **On 8.3 — the important one.** The original proposal was "move all research-run features
 under the client page." That is the risky version: `ResearchRunDetail` holds nearly
@@ -271,10 +271,12 @@ only `/share/:token` is a real URL. Converting now would mean touching every scr
 every navigation control at once, with no staging environment, for zero visible benefit
 today. The payoff arrives with the client portal, which needs its own address anyway.
 
-**On 8.5 — the open question.** Runs like "Test Market" currently exist with no client, and
-internal market research may not be for anyone specific. Either every run requires a client
-(with a placeholder "Internal / Market Research" client — clean, consistent, recommended),
-or the client link stays optional. Not yet decided.
+**On 8.5 — decided (4 Sep 2026).** Every research run requires a client, with a placeholder
+"Internal / Market Research" client for internal work. Reasoning: an unconditional rule means
+no screen has to handle a null client; the client hub becomes the single creation path; the
+alternative leaves two shapes of run permanently. Existing client-less runs (e.g. "Test
+Market") get repointed to the placeholder when P1 lands — not done as part of this decision,
+since repointing existing rows is a data write that belongs to the P1 build itself.
 
 ---
 

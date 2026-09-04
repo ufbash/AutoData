@@ -139,6 +139,72 @@ const BriefForm = ({
   );
 };
 
+// --- Client Edit Form Component ---
+const ClientEditForm = ({
+  client,
+  onSubmit,
+  onCancel,
+  isSubmitting
+}: {
+  client: Client,
+  onSubmit: (data: Partial<Client>) => void,
+  onCancel: () => void,
+  isSubmitting: boolean
+}) => {
+  const [formData, setFormData] = useState<Partial<Client>>(client);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit(formData);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="p-6 border-b border-gray-100 bg-gray-50/50 space-y-4">
+      <div className="flex justify-between items-center mb-2">
+        <h4 className="font-bold text-gray-800">Edit Client</h4>
+        <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-gray-700 mb-1">Full Name / Company</label>
+          <input type="text" value={formData.full_name || ''} onChange={e => setFormData({...formData, full_name: e.target.value})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" required />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Email</label>
+          <input type="email" value={formData.email || ''} onChange={e => setFormData({...formData, email: e.target.value || undefined})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" placeholder="e.g. client@example.com" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Phone</label>
+          <input type="text" value={formData.phone || ''} onChange={e => setFormData({...formData, phone: e.target.value || undefined})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" placeholder="e.g. +234..." />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Preferred Contact</label>
+          <select value={formData.preferred_contact || ''} onChange={e => setFormData({...formData, preferred_contact: (e.target.value || undefined) as Client['preferred_contact']})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded">
+            <option value="">No preference</option>
+            <option value="phone">Phone</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">Email</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Assigned Agent</label>
+          <input type="text" value={formData.assigned_agent || ''} onChange={e => setFormData({...formData, assigned_agent: e.target.value || undefined})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" />
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-gray-700 mb-1">Notes</label>
+          <textarea value={formData.notes || ''} onChange={e => setFormData({...formData, notes: e.target.value || undefined})} rows={2} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="text-sm px-4 py-2 text-gray-500 hover:bg-gray-200 rounded font-bold">Cancel</button>
+        <button type="submit" disabled={isSubmitting} className="text-sm px-4 py-2 bg-[#a58039] text-white rounded font-bold disabled:opacity-50">
+          {isSubmitting ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+    </form>
+  );
+};
+
 export const ClientsList: React.FC = () => {
   const { orgId, orgLoading, role, user } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
@@ -158,6 +224,10 @@ export const ClientsList: React.FC = () => {
   const [showNewClientForm, setShowNewClientForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
   const [creatingClient, setCreatingClient] = useState(false);
+
+  // Edit Client Form
+  const [editingClient, setEditingClient] = useState(false);
+  const [savingClient, setSavingClient] = useState(false);
 
   // Brief Forms and Views
   const [showNewBriefForm, setShowNewBriefForm] = useState(false);
@@ -230,6 +300,21 @@ export const ClientsList: React.FC = () => {
       alert(err.message);
     } finally {
       setCreatingClient(false);
+    }
+  };
+
+  const handleUpdateClient = async (patch: Partial<Client>) => {
+    if (!selectedClient) return;
+    setSavingClient(true);
+    try {
+      const c = await updateClient(selectedClient.id, patch);
+      setClients(clients.map(cl => cl.id === c.id ? c : cl));
+      setSelectedClient(c);
+      setEditingClient(false);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSavingClient(false);
     }
   };
 
@@ -603,11 +688,26 @@ export const ClientsList: React.FC = () => {
               </div>
             </div>
           </div>
+        ) : editingClient ? (
+          <ClientEditForm
+            client={selectedClient}
+            onSubmit={handleUpdateClient}
+            onCancel={() => setEditingClient(false)}
+            isSubmitting={savingClient}
+          />
         ) : (
           <>
-            <div className="p-6 border-b border-gray-100 bg-gray-50/50">
-              <h2 className="text-2xl font-bold text-[#403f4c]">{selectedClient.full_name}</h2>
-              <div className="text-sm text-gray-500 mt-1">Client since {new Date(selectedClient.created_at).toLocaleDateString()}</div>
+            <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex justify-between items-start">
+              <div>
+                <h2 className="text-2xl font-bold text-[#403f4c]">{selectedClient.full_name}</h2>
+                <div className="text-sm text-gray-500 mt-1">Client since {new Date(selectedClient.created_at).toLocaleDateString()}</div>
+                {(selectedClient.email || selectedClient.phone) && (
+                  <div className="text-sm text-gray-500 mt-1">{[selectedClient.email, selectedClient.phone].filter(Boolean).join(' · ')}</div>
+                )}
+              </div>
+              <button onClick={() => setEditingClient(true)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
+                <Edit2 className="w-4 h-4" /> Edit
+              </button>
             </div>
 
             <div className="p-6 flex justify-between items-center border-b border-gray-100">

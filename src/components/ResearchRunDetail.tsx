@@ -18,7 +18,7 @@ import {
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
-import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X } from 'lucide-react';
+import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X, Info } from 'lucide-react';
 
 interface ResearchRunDetailProps {
   runId: string;
@@ -689,6 +689,12 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
         {run.client_brief && (
           <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
             <h3 className="text-sm font-bold text-gray-700 mb-2">Linked Buying Brief Requirements</h3>
+            {run.run_type === 'sold_comps' && (
+              <div className="mb-3 flex items-start gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Spec matching applies to active-listings runs only. This brief is stored with the run but no spec rules will run against it.</span>
+              </div>
+            )}
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
               {run.client_brief.year_min || run.client_brief.year_max ? (
                 <div><span className="text-gray-500">Year:</span> {run.client_brief.year_min || 'Any'} - {run.client_brief.year_max || 'Any'}</div>
