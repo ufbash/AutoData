@@ -1,20 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { 
-  getRun, 
-  listRunListings, 
-  updateRun, 
-  setListingIncluded, 
-  reorderListings, 
-  removeListingFromRun, 
+import {
+  getRun,
+  listRunListings,
+  updateRun,
+  setListingIncluded,
+  reorderListings,
+  removeListingFromRun,
   rotateShareToken,
   storeImagesForRun,
   getSignedImageUrls,
   softDeleteRun,
+  listAuctionHistoryForAssets,
   ResearchRun,
   RunListing,
+  AuctionHistoryRecord,
   deleteSighting
 } from '../services/researchService';
+import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
@@ -30,6 +33,8 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [listings, setListings] = useState<RunListing[]>([]);
+  const [auctionHistoryFlags, setAuctionHistoryFlags] = useState<Map<string, AuctionHistoryFlags>>(new Map());
+  const [auctionHistoryRows, setAuctionHistoryRows] = useState<Map<string, AuctionHistoryRecord[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -63,6 +68,18 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       ]);
       setRun(r);
       setListings(l);
+
+      const assetIds = l.map(listing => listing.asset_id).filter((id): id is string => !!id);
+      const historyByAsset = await listAuctionHistoryForAssets(assetIds);
+      const flagsMap = new Map<string, AuctionHistoryFlags>();
+      l.forEach(listing => {
+        if (listing.asset_id) {
+          flagsMap.set(listing.asset_id, deriveAuctionHistoryFlags(historyByAsset.get(listing.asset_id)));
+        }
+      });
+      setAuctionHistoryFlags(flagsMap);
+      setAuctionHistoryRows(historyByAsset);
+
       if (r) {
         setNameInput(r.client_name);
         setNotesInput(r.notes || '');
@@ -325,7 +342,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
     'storm' // Ambiguous
   ];
 
-  const checklistItems: { id: string, type: 'BLOCK' | 'CRITICAL' | 'WARN', message: string, offenderIds: string[], passed: boolean }[] = [];
+  const checklistItems: { id: string, type: 'BLOCK' | 'CRITICAL' | 'WARN' | 'INFO', message: string, offenderIds: string[], passed: boolean }[] = [];
 
   // 1. Zero listings (BLOCK)
   checklistItems.push({
@@ -489,7 +506,79 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
         });
       });
     }
+
+    // A2 Rule 1 — prior auction history (HARD BLOCK, active portion only, never overridable)
+    // A2 Rule 3 — not checkable (INFO, never rendered as a clean pass)
+    const priorAuctionByDetail = new Map<string, string[]>();
+    const notCheckableOffenders: string[] = [];
+    activeList.forEach(l => {
+      const flags = l.asset_id ? auctionHistoryFlags.get(l.asset_id) : undefined;
+      if (!flags || !flags.checkable) {
+        notCheckableOffenders.push(l.id);
+        return;
+      }
+      if (flags.hasPriorAuctionHistory) {
+        const rows = (l.asset_id && auctionHistoryRows.get(l.asset_id)) || [];
+        const dates = rows
+          .map(r => r.auction_date)
+          .filter((d): d is string => !!d)
+          .sort();
+        const dateText = dates.length > 0 ? dates.join(', ') : 'date unknown';
+        const detail = `has been to auction before (${flags.appearanceCount} prior appearance${flags.appearanceCount === 1 ? '' : 's'}: ${dateText})`;
+        if (!priorAuctionByDetail.has(detail)) priorAuctionByDetail.set(detail, []);
+        priorAuctionByDetail.get(detail)!.push(l.id);
+      }
+    });
+
+    if (priorAuctionByDetail.size === 0) {
+      checklistItems.push({
+        id: 'prior_auction_history',
+        type: 'BLOCK',
+        message: 'No prior auction history detected',
+        offenderIds: [],
+        passed: true
+      });
+    } else {
+      priorAuctionByDetail.forEach((ids, detail) => {
+        checklistItems.push({
+          id: `prior_auction_history_${detail}`,
+          type: 'BLOCK',
+          message: `${ids.length} listing(s) blocked: this vehicle ${detail}.`,
+          offenderIds: ids,
+          passed: false
+        });
+      });
+    }
+
+    checklistItems.push({
+      id: 'prior_auction_not_checkable',
+      type: 'INFO',
+      message: notCheckableOffenders.length > 0
+        ? `Prior auction history not checkable for this source (${notCheckableOffenders.length} listing(s)) — bid.cars Sales History coverage only, Copart not yet available.`
+        : 'Prior auction history checked for all listings',
+      offenderIds: notCheckableOffenders,
+      passed: notCheckableOffenders.length === 0
+    });
   }
+
+  // A2 Rule 2 — odometer rollback (CRITICAL, all run types including sold_comps, overridable).
+  // A data-integrity rule, not client protection: applies regardless of run_type.
+  const odometerRollbackOffenders: string[] = [];
+  includedListings.forEach(l => {
+    const flags = l.asset_id ? auctionHistoryFlags.get(l.asset_id) : undefined;
+    if (flags?.checkable && flags.odometerRollback) {
+      odometerRollbackOffenders.push(l.id);
+    }
+  });
+  checklistItems.push({
+    id: 'odometer_rollback',
+    type: 'CRITICAL',
+    message: odometerRollbackOffenders.length > 0
+      ? `${odometerRollbackOffenders.length} listing(s) show odometer rollback across auction appearances — recorded mileage decreased between appearances, meaning the record may not describe the vehicle it claims to.`
+      : 'No odometer rollback detected',
+    offenderIds: odometerRollbackOffenders,
+    passed: odometerRollbackOffenders.length === 0
+  });
 
   // 5. No price (WARN)
   const noPriceOffenders = includedListings.filter(l => l.price_usd === null).map(l => l.id);
@@ -580,7 +669,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
     (!hasCriticals || (warningsReviewed && criticalOverrideReason.trim().length >= 10)) &&
     (!hasWarnings || warningsReviewed);
 
-  const listingBadges = new Map<string, { type: 'BLOCK' | 'CRITICAL' | 'WARN', text: string }[]>();
+  const listingBadges = new Map<string, { type: 'BLOCK' | 'CRITICAL' | 'WARN' | 'INFO', text: string }[]>();
   checklistItems.filter(i => !i.passed).forEach(item => {
     item.offenderIds.forEach(id => {
       if (!listingBadges.has(id)) listingBadges.set(id, []);
@@ -593,6 +682,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       else if (item.id.startsWith('critical_')) text = 'CRITICAL';
       else if (item.id.startsWith('spec_critical_')) text = 'SPEC CRITICAL';
       else if (item.id.startsWith('spec_warn_')) text = 'SPEC WARN';
+      else if (item.id.startsWith('prior_auction_history')) text = 'PRIOR AUCTION HISTORY';
+      else if (item.id === 'prior_auction_not_checkable') text = 'History not checkable';
+      else if (item.id === 'odometer_rollback') text = 'Odometer rollback';
       if (text) {
         listingBadges.get(id)!.push({ type: item.type, text });
       }
@@ -732,6 +824,19 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
           <h4 className="text-sm font-bold text-[#403f4c] mb-3">Pre-Share Checklist</h4>
           <ul className="space-y-2 text-sm">
             {checklistItems.map((item, i) => {
+              if (item.type === 'INFO') {
+                return (
+                  <li key={i} className="flex items-start gap-2 text-blue-700">
+                    <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <span
+                      className={item.offenderIds.length > 0 ? 'cursor-pointer hover:underline' : ''}
+                      onClick={() => scrollToOffender(item.offenderIds)}
+                    >
+                      {item.message}
+                    </span>
+                  </li>
+                );
+              }
               if (item.passed) {
                 return (
                   <li key={i} className="flex items-start gap-2 text-green-600">
@@ -742,9 +847,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
               const isBlock = item.type === 'BLOCK';
               return (
                 <li key={i} className={`flex items-start gap-2 ${isBlock ? 'text-red-600' : 'text-yellow-600'}`}>
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" /> 
-                  <span 
-                    className={item.offenderIds.length > 0 ? 'cursor-pointer hover:underline' : ''} 
+                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span
+                    className={item.offenderIds.length > 0 ? 'cursor-pointer hover:underline' : ''}
                     onClick={() => scrollToOffender(item.offenderIds)}
                   >
                     {item.message} ({item.type})
@@ -1003,7 +1108,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                           {(listingBadges.get(listing.id) || []).length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1.5">
                               {listingBadges.get(listing.id)!.map((b, bi) => (
-                                <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold whitespace-nowrap ${(b.type === 'BLOCK' || b.type === 'CRITICAL') ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-yellow-100 text-yellow-700 border border-yellow-200'}`}>
+                                <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold whitespace-nowrap ${(b.type === 'BLOCK' || b.type === 'CRITICAL') ? 'bg-red-100 text-red-700 border border-red-200' : b.type === 'INFO' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-yellow-100 text-yellow-700 border border-yellow-200'}`}>
                                   {b.text}
                                 </span>
                               ))}

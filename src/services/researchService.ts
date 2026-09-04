@@ -59,6 +59,7 @@ export interface ResearchRun {
 export interface RunListing {
   id: string;
   sighting_id: string;
+  asset_id: string | null;
   position: number | null;
   included: boolean;
   notes: string | null;
@@ -380,6 +381,38 @@ export const deleteSighting = async (sightingId: string, assetId: string): Promi
   }
 };
 
+export interface AuctionHistoryRecord {
+  asset_id: string;
+  auction_platform: string | null;
+  auction_date: string | null;
+  lot_number: string | null;
+  bid_amount_usd: number | null;
+  odometer_miles: number | null;
+  status: string | null;
+}
+
+export const listAuctionHistoryForAssets = async (assetIds: string[]): Promise<Map<string, AuctionHistoryRecord[]>> => {
+  const map = new Map<string, AuctionHistoryRecord[]>();
+  const uniqueIds = Array.from(new Set(assetIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await supabase
+    .from('auction_history')
+    .select('asset_id, auction_platform, auction_date, lot_number, bid_amount_usd, odometer_miles, status')
+    .in('asset_id', uniqueIds);
+
+  if (error) {
+    throw new Error(`Failed to list auction history: ${error.message}`);
+  }
+
+  (data || []).forEach((row: AuctionHistoryRecord) => {
+    if (!map.has(row.asset_id)) map.set(row.asset_id, []);
+    map.get(row.asset_id)!.push(row);
+  });
+
+  return map;
+};
+
 export const listRunListings = async (runId: string): Promise<RunListing[]> => {
   const { data, error } = await supabase
     .from('research_run_listings')
@@ -390,6 +423,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       included,
       notes,
       sightings (
+        asset_id,
         source_platform,
         source_url,
         lot_number,
@@ -448,6 +482,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
     return {
       id: row.id,
       sighting_id: row.sighting_id,
+      asset_id: sighting.asset_id || null,
       position: row.position,
       included: row.included,
       notes: row.notes,

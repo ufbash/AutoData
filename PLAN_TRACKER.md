@@ -33,7 +33,7 @@ usability gap now queued as item 1.4 below.
 1. **1.1** — finish the missing client-brief form fields (blocks further testing)
 2. **1.2** — view / edit / soft-delete for briefs and clients
 3. **1.3** — audit the runs list + creation form before any restructure
-4. **2.1** — A2 derived flags, including cross-platform reappearance
+4. ~~**2.1** — A2 derived flags~~ — DONE 4 Sep 2026, see §2 below
 
 ### The most valuable open finding
 A vehicle sold on **Copart and then IAAI** was observed in a client run flagged only as a
@@ -115,21 +115,72 @@ comp. Asking ≠ sold; NG retail ≠ US auction.
 Should WARN when a sold-comps average mixes materially different populations (by
 `source_platform`). Deeper form of the existing mixed-models rule.
 
-### A2. Derived asset flags — **NOT STARTED — HIGH PRIORITY**
-From `auction_history`: `appearance_count`, `previously_unsold`, `highest_rejected_bid`, and
-prior-auction-history, plus the checklist rules using them. See `MASTER_PLAN.md` A2 for the
-4 Sep 2026 rule redefinition (any prior auction appearance, not cross-platform specifically),
-flag definitions, and the Tesla example.
+### A2. Derived asset flags — **DONE** (4 Sep 2026)
+Shared derivation `src/utils/auctionHistoryFlags.ts` (`deriveAuctionHistoryFlags`, one place,
+not duplicated), wired through `listRunListings` (added `asset_id`) and a new
+`listAuctionHistoryForAssets` batch fetch in `researchService.ts`. Three checklist rules in
+`ResearchRunDetail.tsx`: Rule 1 prior-auction-history hard block (active-listings + mixed
+active portion only, never overridable), Rule 2 odometer-rollback critical (all run types,
+overridable), Rule 3 not-checkable informational (never a clean pass).
 
-**Any prior auction appearance must be a hard block from client-facing active-listings and
-mixed runs** (per Bashir's 4 Sep 2026 decision; `DECISIONS.md` 4.8 scopes this to
-active/mixed only, never sold comps). Prior-auction-history is currently
-**UNDETECTABLE** in the live checklist — worth fixing, but not a known instance of a fraud
-pattern currently reaching clients (see §0 above for the corrected urgency framing).
+**Evidence — Checkpoint 1, asset `1ea4d7f1-51e1-4889-888b-101578f8a7bf` (2021 Tesla Model 3):**
+`appearance_count = 2` (not 3 — the two IAAI rows dedupe on lot `37445007`),
+`previously_unsold = true`, `highest_rejected_bid = 10575` (not 7500 — the `Sold` row's
+`bid_amount_usd` is `NULL`), `has_prior_auction_history = true`,
+`odometer_rollback = false` (51,218 → 63,017, increasing). Zero-history asset confirmed to
+return `checkable = false`, never a clean pass.
 
-Detection coverage depends on `auction_history`, which is populated from bid.cars only — a
-Copart-only capture has no history rows. B2 (Copart Sales History) is promoted to
-immediately behind A2 in the build sequence for this reason.
+**Evidence — Checkpoint 3, four browser cases, all observed:**
+1. Active-listings run + Tesla → hard blocked. Checklist: "1 listing(s) blocked: this vehicle
+   has been to auction before (2 prior appearances: 2023-10-17, 2023-10-19, 2026-08-25).
+   (BLOCK)". Sharing toggle disabled, no override offered.
+2. Sold-comps run + a different previously-auctioned vehicle (2025 Toyota Camry SE,
+   confirmed sale) → **not blocked**, counted in the average: $9,525 (2 comps) →
+   $11,317 (3 comps) after adding it. No prior-auction-history item rendered at all on a
+   sold_comps run (`DECISIONS.md` 4.8 held).
+3. Mixed run with the Camry as sold portion + the Tesla as active portion (same run) →
+   Camry unbadged, counted ($14,900 sold avg); Tesla red-badged "PRIOR AUCTION HISTORY",
+   blocked. Both coexist correctly in one run.
+4. Copart-only vehicle with zero `auction_history` rows → checklist shows "Prior auction
+   history not checkable for this source (1 listing(s)) — bid.cars Sales History coverage
+   only, Copart not yet available." (blue, informational) — not blocked, not rendered as a
+   clean pass.
+
+Note on real data: every asset currently carrying `auction_history` has `lot_state =
+'finished'` in its sightings — none are `'active'`. Cases 1 and 3 needed the Tesla's own
+sighting `lot_state` temporarily flipped to `'active'` (confirmed with Bashir first) to
+construct a real active-listings/mixed test case, then reverted to `'finished'` immediately
+after. No fabricated data — same real asset and history rows throughout.
+
+All nine spec-rule `if` blocks (`ResearchRunDetail.tsx:414/417/420/423/428/450/455/460/465`)
+confirmed byte-for-byte unchanged via `git diff`. No hard delete added (same three
+pre-existing `.delete()` calls, none touching `clients`/`client_briefs`/`sightings` rows
+this rule cares about). No migration, no new columns — flags derived at read time per
+`PROJECT_CHARTER.md` §5.8.
+
+**Coverage limitation (recorded 4 Sep 2026, not a defect — the rule is right, the data it
+needs is not yet arriving on active lots):**
+1. `auction_history` is populated from the bid.cars Sales History panel only. A vehicle
+   captured solely from Copart has no history rows. Rule 3 renders this honestly as "not
+   checkable" — but it means the block cannot fire on Copart-only captures at all.
+2. Every asset currently holding auction history has `lot_state = 'finished'` in its
+   sightings — none are `'active'`. Rule 1 only applies to active listings and the active
+   portion of mixed runs. So **on real data as it stands today, the hard block cannot fire.**
+   Demonstrating Checkpoint 3 case 1 required temporarily flipping the Tesla's own
+   `lot_state` to `'active'` and reverting it afterward (see evidence above).
+
+**Consequence: A2's real-world catch rate is currently zero.** B2 (Copart Sales History) is
+therefore the next build, sequenced ahead of P1 (client-hub restructure) — see `MASTER_PLAN.md`
+Part XII, corrected to match.
+
+**Odometer-rollback rule (Rule 2), verified 4 Sep 2026 via a throwaway in-memory script
+against the real `deriveAuctionHistoryFlags` function** (no fabricated database row): fires
+correctly on a genuine decrease regardless of input row order (sorts internally by
+`auction_date`, so fetch-order is not a risk); correctly does not fire on a null odometer
+(absence is not violation) or on identical readings within one deduped event (no false
+positive on the Tesla's own two same-lot rows). Noted, not fixed: identical readings across
+two genuinely *different* events also do not fire — the rule catches decreases only, not
+suspicious flatness. A real gap, deliberately left open pending a separate decision.
 
 Commercial upside beyond fraud detection: rejected-bid history reveals the seller's reserve
 and the market's repeated refusal — bidding intelligence no competitor has.
@@ -287,3 +338,4 @@ flicker.
 | 14 | Assessment notices must be photographed before handover | Ongoing habit, not a task |
 | 15 | Legacy `sheet_url` / `drive_folder_url` columns on `research_runs` | Drive/Sheets dropped; columns remain |
 | 16 | `docs/REPO_MAP.md` and `docs/BRIEF_WRITE_PATH.md` are untracked | Confirmed via `git status` 4 Sep 2026 — exist on disk, not yet committed |
+| 17 | A2 rule base: 74 assets / 110 `auction_history` rows (dated 4 Sep 2026) | Useful to compare against later as B2 (Copart Sales History) grows the base |
