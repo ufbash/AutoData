@@ -174,14 +174,28 @@ are also permanently null unless re-captured.
 
 ## 8. `auction_history`
 
-One row per past auction appearance, from the bid.cars Sales History panel:
-platform, auction date, lot number, bid amount, odometer, status, seller.
+One row per past auction appearance, from the bid.cars Sales History panel only (source:
+`supabase/migrations/019_auction_history.sql`, confirmed live via SQL 4 Sep 2026).
+
+Real columns:
+```
+id · org_id · asset_id · sighting_id · auction_platform · auction_date · lot_number
+bid_amount_usd · odometer_miles · status · seller_type · created_at
+```
+
+**The column is `auction_platform`, not `platform`.** A query written against `platform`
+fails outright ("column does not exist"); a rule written against a field the query does not
+return fails silently instead (`AGENTS.md` §4.10) — this exact naming assumption already
+cost a failed query in this session.
+
+Observed `status` values: `'Sold'`, `'Not sold'`, `'No information'`. `'No information'`
+means unknown, not unsold.
 
 Dedupe verified: re-capturing the same lot does not duplicate history rows.
 
 Feeds `sale_confirmed` and `auction_appearance_count`. **Not yet feeding** the derived
-flags (`previously_unsold`, `cross_platform_reappearance`, `highest_rejected_bid`) — that is
-Phase A2, still unbuilt.
+flags (`previously_unsold`, `highest_rejected_bid`, prior-auction-history) — that is
+Phase A2, still unbuilt. See `MASTER_PLAN.md` A2 for the flag definitions and rule.
 
 ---
 

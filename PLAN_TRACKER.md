@@ -37,45 +37,56 @@ usability gap now queued as item 1.4 below.
 
 ### The most valuable open finding
 A vehicle sold on **Copart and then IAAI** was observed in a client run flagged only as a
-mild "unconfirmed sale" warning. Cross-platform reappearance is a **wreck-and-flip fraud
-signal** that `PROJECT_CHARTER.md` §6 says must be blocked from client deliverables. The
-rule was never built — it is Phase **A2**. This is a fraud pattern currently reaching client
-deliverables unflagged, and it is the highest-value item outstanding.
+mild "unconfirmed sale" warning. `PROJECT_CHARTER.md` §6 frames this as a cross-platform
+wreck-and-flip fraud signal that must be blocked from client deliverables; Bashir's rule
+(4 Sep 2026, see `MASTER_PLAN.md` A2) broadens it to any prior auction appearance. The rule
+was never built — it is Phase **A2**.
+
+Corrected urgency framing (4 Sep 2026): the one real instance found (a 2021 Tesla Model 3,
+asset `1ea4d7f1-51e1-4889-888b-101578f8a7bf`) is a car auctioned twice three years apart with
+consistent mileage accrual (51218 → 63017, i.e. increasing, not rolled back) and an insurance
+seller (GEICO) on the second appearance — it blocks under Bashir's new rule, but it is **not**
+evidence of a fraud pattern currently in flow. The accurate statement is that
+prior-auction-history is currently **UNDETECTABLE** in the live checklist — the check does
+not exist, not that a known-bad car is slipping through unflagged. Still worth fixing; not
+an active incident.
 
 ---
 
 ## 1. Immediate queue
 
-### 1.1 Finish client-brief form fields — **NOT STARTED**
-Migration 022 created all columns, but the form only asks for some. Missing inputs:
-`colour_preference`, `titles_accepted`, `fuel_type`, `trim`, `interior_preference`,
-`max_budget_usd`, `max_bid_usd`, `quantity`.
-
-Blocks testing of the colour/fuel/trim/title spec rules — those rules exist in code but
-cannot be exercised because the data cannot be entered. Small; do first.
+### 1.1 Finish client-brief form fields — **DONE** (4 Sep 2026)
+Evidence: database row showing `titles_accepted` stored as a true 3-element array, distinct
+`max_budget_usd`/`max_bid_usd` values (no swap), and `max_mileage` stored as `NULL` after a
+real browser round-trip (create → save → hard refresh → reopen in edit mode → every value
+returned exactly as entered). All sixteen inputs are rendered by `BriefForm` in
+`src/components/ClientsList.tsx`.
 
 Note: `max_budget_usd` / `max_bid_usd` are **captured but not enforced**
 (`DECISIONS.md` 3.6). Store them; do not build a budget rule.
 
-### 1.2 Brief and client view / edit / soft-delete — **NOT STARTED**
-Currently a brief cannot be opened, edited or deleted.
+### 1.2 Brief and client view / edit / soft-delete — **PARTIALLY BUILT**
+Service layer and edit mode are present. Delete confirmation UI is unverified — nobody has
+checked it.
 
 Reuse the existing research-run deletion pattern (`DECISIONS.md` 9.9): superadmin only,
 type the full name to confirm, 30-day recovery. Do not invent a second model.
 
 `deleted_at`/`deleted_by` columns exist on `client_briefs` (migration 023, applied
-5 Aug 2026, committed to git 4 Sep 2026 — see `SCHEMA.md` §10). No UI work has started;
-the schema is no longer the blocker here.
+5 Aug 2026, committed to git 4 Sep 2026 — see `SCHEMA.md` §10). Service layer exists:
+`researchService.ts` exports `softDeleteClientBrief`, `listDeletedClientBriefs`,
+`restoreClientBrief`, and the equivalent trio for clients. Edit mode is verified working
+(see 1.1 — `BriefForm` handles create and edit, edit-mode round-trip confirmed 4 Sep).
+Unverified and possibly unbuilt: the delete confirmation UI — superadmin only, type the full
+name to confirm, 30-day recovery — and the two constraints below.
 
 Two constraints:
 - Deleting a brief must not break runs pointing at it — the run keeps working and keeps its
   spec history.
 - Deleting a client should be blocked while they have live runs.
 
-### 1.3 Audit runs list + creation form — **NOT STARTED**
-Read-only inventory of every feature on the runs list and creation form **before** the
-restructure, so nothing convenient is quietly dropped. This is the checkpoint that stops
-item 3.1 going wrong.
+### 1.3 Audit runs list + creation form — **DONE** (4 Sep 2026)
+Evidence: `docs/REPO_MAP.md` §C, 26 features inventoried, scoped to `ResearchRuns.tsx`.
 
 ### 1.4 Warn when a brief is attached to a sold-comps run — **NOT STARTED**
 The app currently accepts the link and silently ignores it. Should display something like
@@ -105,12 +116,20 @@ Should WARN when a sold-comps average mixes materially different populations (by
 `source_platform`). Deeper form of the existing mixed-models rule.
 
 ### A2. Derived asset flags — **NOT STARTED — HIGH PRIORITY**
-From `auction_history`: `appearance_count`, `previously_unsold`,
-`cross_platform_reappearance`, `highest_rejected_bid`, plus the checklist rules using them.
+From `auction_history`: `appearance_count`, `previously_unsold`, `highest_rejected_bid`, and
+prior-auction-history, plus the checklist rules using them. See `MASTER_PLAN.md` A2 for the
+4 Sep 2026 rule redefinition (any prior auction appearance, not cross-platform specifically),
+flag definitions, and the Tesla example.
 
-**Cross-platform reappearance must be a hard block from client deliverables**
-(`PROJECT_CHARTER.md` §6). A real instance has already been observed (Copart → IAAI) passing
-through with only a mild warning.
+**Any prior auction appearance must be a hard block from client-facing active-listings and
+mixed runs** (per Bashir's 4 Sep 2026 decision; `DECISIONS.md` 4.8 scopes this to
+active/mixed only, never sold comps). Prior-auction-history is currently
+**UNDETECTABLE** in the live checklist — worth fixing, but not a known instance of a fraud
+pattern currently reaching clients (see §0 above for the corrected urgency framing).
+
+Detection coverage depends on `auction_history`, which is populated from bid.cars only — a
+Copart-only capture has no history rows. B2 (Copart Sales History) is promoted to
+immediately behind A2 in the build sequence for this reason.
 
 Commercial upside beyond fraud detection: rejected-bid history reveals the seller's reserve
 and the market's repeated refusal — bidding intelligence no competitor has.
@@ -255,7 +274,7 @@ flicker.
 | 1 | AutoData↔Caplimo licence unsigned | **Blocks Phase D and alert recipients** |
 | 2 | No staging environment | Production Supabase doubles as the dev database |
 | 3 | `isUnconfirmed` duplicated across two files | Will drift if one is edited |
-| 4 | Data Detox (`handleCleanData`) disabled | Targeted the locked `sales` table |
+| 4 | Data Detox (`handleDataDetox`, `src/App.tsx:277`) disabled | Targeted the locked `sales` table |
 | 5 | CSV `importSales` disabled | Pending ledger-shaped re-implementation or removal |
 | 6 | `standardizeTrims` / `executeTrimCleanup` stubbed | Superseded by the E2 resolver |
 | 7 | Copart model/trim duplication backfill | `model LIKE '% ' \|\| trim` |
@@ -267,3 +286,4 @@ flicker.
 | 13 | Title standardisation | Title matching is approximate substring matching until this lands |
 | 14 | Assessment notices must be photographed before handover | Ongoing habit, not a task |
 | 15 | Legacy `sheet_url` / `drive_folder_url` columns on `research_runs` | Drive/Sheets dropped; columns remain |
+| 16 | `docs/REPO_MAP.md` and `docs/BRIEF_WRITE_PATH.md` are untracked | Confirmed via `git status` 4 Sep 2026 — exist on disk, not yet committed |

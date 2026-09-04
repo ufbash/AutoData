@@ -48,7 +48,9 @@ any future source that blocks servers** — assume it will be needed again.
 Supabase as single source of truth. `assets` (physical vehicles) / `sightings`
 (observations) / `auction_history` (past appearances) / `research_runs` +
 `research_run_listings` (deliverables) / `clients` + `client_briefs` /
-`organizations` + `memberships`. Migrations 001→022. Full detail in `SCHEMA.md`.
+`organizations` + `memberships`. Migrations 001→023 (023_soft_delete_clients_briefs was
+applied to production 5 Aug 2026 under Antigravity but not committed to git until this
+session, retroactively, as commit b27f9ae). Full detail in `SCHEMA.md`.
 
 Multi-tenancy, RLS, org scoping and role structure built from day one — so a second
 licensee is a new organization row, not a refactor.
@@ -81,7 +83,11 @@ Three-tier pre-share checklist (hard block / critical-red / warn-yellow). Full r
   stored as inconsistent free text, not codes
 - **Typed override with audit trail** — a critical warning can be overridden only with a
   typed reason, recorded with user id and timestamp
-- **Spec matching against a client brief** — stratified critical vs warn
+- **Spec matching against a client brief** — stratified critical vs warn. Verified count
+  (4 Sep 2026, `docs/REPO_MAP.md` §B.6): 9 individual `if` blocks in
+  `ResearchRunDetail.tsx` — 5 CRITICAL (max mileage, `year_min`, `year_max`,
+  `condition_required`, `titles_accepted`) and 4 WARN (colour, transmission, fuel type,
+  trim). Not 7, not 8 — those were earlier miscounts.
 
 ### 5. Auction timing — complete
 
@@ -103,29 +109,39 @@ Currency normalisation with the rate frozen at capture. Access control. Migratio
 
 Four items, in order. Everything here is small and unblocked.
 
-### Q1. Finish the client-brief form fields
-**Why first:** it blocks testing of everything else. Migration 022 created all the columns,
-but the form only asks for some of them, so the colour / fuel / trim / title spec rules
-exist in code and cannot be exercised.
+### Q1. Finish the client-brief form fields — DONE (verified 4 Sep 2026)
+All sixteen inputs are rendered by `BriefForm` in `src/components/ClientsList.tsx`. The
+write path carries every field unfiltered in both directions. Verified by a real browser
+round-trip (created a brief with all 16 fields populated, saved, hard-refreshed, reopened in
+edit mode — every value returned exactly as entered) plus a direct database read confirming
+`titles_accepted` stored as a true 3-element array, `max_budget_usd` and `max_bid_usd` stored
+distinct (no swap), and an untouched `max_mileage` stored as `NULL` rather than `0`.
 
-**Missing inputs:** `colour_preference`, `titles_accepted`, `fuel_type`, `trim`,
-`interior_preference`, `max_budget_usd`, `max_bid_usd`, `quantity`.
+**Constraint (still true, still matters):** `max_budget_usd` and `max_bid_usd` are
+**captured but never enforced** (`DECISIONS.md` 3.6). Auction price is not landed cost, and
+the duty model is uncalibrated — an "over budget" flag would be confidently wrong, which is
+worse than absent.
 
-**Constraint:** `max_budget_usd` and `max_bid_usd` are **captured but never enforced**
-(`DECISIONS.md` 3.6). Auction price is not landed cost, and the duty model is uncalibrated —
-an "over budget" flag would be confidently wrong, which is worse than absent.
+**Why this was believed unbuilt:** the work was applied on 5 Aug 2026 by untracked codemod
+scripts and never committed or recorded, so `ClientsList.tsx` entered git history only on
+4 Sep 2026 (commit 612e1e8). Same failure class as migration 023, same session.
 
-**Done looks like:** every column in `client_briefs` has a form input; a brief can be
-created with all seven spec dimensions populated; the previously-untestable spec rules can
-now be exercised.
-
-### Q2. View / edit / soft-delete for briefs and clients
-**Why:** a brief currently cannot be opened, edited or deleted at all.
+### Q2. View / edit / soft-delete for briefs and clients — PARTIALLY BUILT, UI unverified
+The columns exist: migration 023 added `client_briefs.deleted_at`, `client_briefs.deleted_by`,
+and `clients.deleted_by`; `clients.deleted_at` predates it.
 
 **Approach:** reuse the existing research-run deletion pattern — superadmin only, type the
 full name to confirm, 30-day recovery (`DECISIONS.md` 9.9). Do not invent a second model.
 
-**Requires:** a `deleted_at` column on `client_briefs` (not present).
+**What exists:**
+- Service layer: `researchService.ts` exports `softDeleteClientBrief`,
+  `listDeletedClientBriefs`, `restoreClientBrief`, and the equivalent trio for clients.
+- Edit mode: `BriefForm` handles create and edit; the edit-mode round-trip is verified
+  working (confirmed 4 Sep 2026, see Q1).
+
+**Unverified, possibly unbuilt:** the delete confirmation UI — superadmin only, type the
+full name to confirm, 30-day recovery — and the two constraints below. Nobody has checked
+this UI; it is not asserted missing, only unverified.
 
 **Two constraints that must hold:**
 - Deleting a brief must not break runs pointing at it. The run keeps working and keeps its
@@ -180,22 +196,75 @@ A1 — which is precisely why it is a separate item and not folded into it.
 sharing, naming the mix.
 
 ### A2. Derived asset flags — **highest priority in Phase A**
-**Why this outranks everything else queued:** a vehicle sold on **Copart and then IAAI** has
-already been observed passing into a client run with only a mild "unconfirmed sale" warning.
-Cross-platform reappearance is a **wreck-and-flip fraud signal** — a car wrecked, repaired
-cosmetically, and re-sold — and `PROJECT_CHARTER.md` §6 says it must be blocked from client
-deliverables. The rule was never built. A fraud pattern currently reaching clients outranks
-any missing feature.
+**Rule redefined (Bashir, 4 Sep 2026):** the trigger is **any prior auction appearance**,
+not cross-platform reappearance specifically.
+
+Any prior auction appearance in `auction_history` → hard block from client-facing
+active-listings and mixed runs. Not gated on elapsed time, odometer movement, or which
+platforms are involved.
+
+**Reasoning:** a repaired wreck carries latent faults from the first crash; a car being
+auctioned twice is itself the disqualifying signal for a client vehicle — it does not matter
+whether the two appearances share a platform.
+
+Per `DECISIONS.md` 4.8, this applies to active listings and mixed runs **only**. On a
+`sold_comps` run a previously-auctioned vehicle is valid market history: it stays in the run
+and still counts in the average.
+
+**Conflict with `PROJECT_CHARTER.md` §6:** the charter's wording is framed around
+cross-platform reappearance specifically. That framing is superseded by the broader rule
+above, but the charter is LOCKED and amending it is Bashir's decision, not an agent's — this
+is noted here, the charter itself is left unchanged.
 
 **Build, derived from `auction_history`:**
 - `appearance_count` — how many times this vehicle has been to auction
 - `previously_unsold` — ran before without meeting reserve
-- `cross_platform_reappearance` — appeared on more than one auction platform
 - `highest_rejected_bid` — the highest bid that failed to meet reserve
+- Prior-auction-history — any `auction_history` row for the asset predating the current
+  sighting
 
-**Then the checklist rules using them.** Cross-platform reappearance is a **hard block** from
-client-facing deliverables, not an overridable critical — the charter treats it as fraud, not
-risk. Severity escalates further where damage severity *decreases* between appearances.
+**Removed: the "damage severity decreases between appearances" escalation clause.** It is
+unbuildable — `auction_history` carries no damage field (real columns: `id`, `org_id`,
+`asset_id`, `sighting_id`, `auction_platform`, `auction_date`, `lot_number`,
+`bid_amount_usd`, `odometer_miles`, `status`, `seller_type`, `created_at` — see `SCHEMA.md`
+§8). Odometer movement is the available proxy instead. A **decreasing** odometer between
+appearances is odometer rollback — a separate critical signal in its own right, applicable
+to sold comps as well, since it means the recorded sale price describes a vehicle that was
+not what it claimed.
+
+**Flag definitions** (the naive version of each is wrong — the real Tesla asset below breaks
+it):
+
+| Flag | Definition | Naive version is wrong because |
+|---|---|---|
+| `appearance_count` | Distinct auction events, deduped on `(auction_platform, lot_number)` | Two rows can share one lot/platform pair — one auction event that produced two rows (e.g. a bid row then a status-update row). Row count over-counts; the dedup gives the correct figure |
+| `previously_unsold` | True only where `status = 'Not sold'` | `status = 'No information'` means unknown, not unsold (AGENTS.md §6, absence is not violation) |
+| `highest_rejected_bid` | Max `bid_amount_usd` among rows where `status = 'Not sold'` only | A sold row can carry `bid_amount_usd = NULL`, so a `max()` across all rows can silently return a rejected bid and label it a sale price |
+| Prior-auction-history | Any `auction_history` row for the asset predating the current sighting | — |
+
+**Real example — asset `1ea4d7f1-51e1-4889-888b-101578f8a7bf`, 2021 Tesla Model 3, VIN
+`5YJ3E1EA1MF874581`.** Its three `auction_history` rows:
+
+```
+IAAI    | 2023-10-17 | lot 37445007 | bid_amount_usd=10575 | odometer=51218 | status='Not sold'      | seller_type='No information'
+IAAI    | 2023-10-19 | lot 37445007 | bid_amount_usd=NULL   | odometer=51218 | status='Sold'          | seller_type='No information'
+Copart  | 2026-08-25 | lot 64610326 | bid_amount_usd=7500   | odometer=63017 | status='No information' | seller_type='GEICO'
+```
+
+Expected values on this asset: `appearance_count = 2` (the two IAAI rows share lot
+`37445007` — one auction that ran twice), `previously_unsold = true`, `highest_rejected_bid
+= 10575`, prior-auction-history = true → hard block.
+
+**Detection coverage gap:** `auction_history` is populated from the bid.cars Sales History
+panel only. A vehicle captured solely from Copart has no history rows, so this check
+silently passes rather than finding nothing to block. Per the honesty doctrine
+(`PROJECT_CHARTER.md` §5.1) the checklist must render this as **NOT CHECKABLE**, never as a
+clean pass.
+
+**Consequence for sequencing:** B2 (Copart Sales History) moves to immediately behind A2 in
+the build sequence, promoted out of Phase B (see Part IV and Part XII). Under a warn-based
+rule the coverage gap was tolerable; under a hard block it is what decides whether the rule
+works at all.
 
 **The commercial upside, which is the part most people miss:** rejected-bid history reveals
 the seller's reserve and the market's repeated refusal. A car that ran three times at
@@ -203,8 +272,8 @@ $6,200 / $6,800 / $7,100 without selling tells you the floor and that the market
 three times. That is bidding intelligence no competitor has, derived from data already
 captured.
 
-**Done looks like:** the four flags computed and stored; cross-platform reappearance hard-
-blocks a client run; the Copart→IAAI vehicle already observed is caught by the rule.
+**Done looks like:** the flags computed and stored; any prior auction appearance hard-blocks
+a client-facing active-listings or mixed run; the Tesla asset above is caught by the rule.
 
 ### A3. Extension run-picker
 Replace the current typed UUID with a dropdown of active runs. Small quality-of-life item;
@@ -218,7 +287,7 @@ low risk, meaningful daily friction reduction.
 Same schema as existing sources; image permutation `[2,1,4,3]`. IAAI appeared in the
 original Camry sheet and is the one source still missing entirely.
 
-### B2. Copart Sales History
+### B2. Copart Sales History — **promoted, now sequenced immediately behind A2**
 **Why it matters more than it looks:** Copart has no Sales History capture, so **every
 Copart sighting carries `sale_confirmed = null` permanently** and shows the "Unconfirmed
 sale" badge forever. That is honest — we genuinely cannot confirm — but it means the A1
@@ -226,6 +295,12 @@ verification layer, which is the strongest data-quality guarantee in the system,
 only covers bid.cars.
 
 Building this roughly doubles the value of A1. Contingent on Copart exposing the data.
+
+**Sequencing change:** A2's prior-auction-history rule is a hard block, and `auction_history`
+is populated from bid.cars only (see A2 above). A Copart-only capture has no history rows,
+so the A2 check is not checkable for it, not a clean pass. That coverage gap decides whether
+A2 works at all, so B2 no longer waits its turn in Phase B — it moves to immediately behind
+A2 in the sequence (Part XII).
 
 ---
 
@@ -252,9 +327,13 @@ listed* in a place disconnected from the client.
 portal needs its own address anyway.
 
 **Depends on:** Q3 (the audit) landing first.
-**Open first:** `DECISIONS.md` 8.5 — may a run exist without a client? Recommended answer:
-every run requires a client, with a placeholder "Internal / Market Research" client for
-non-client work. Clean rule, consistent data.
+**8.5 — decided (Bashir, 4 Sep 2026):** may a run exist without a client? **Every run
+requires a client**, with a placeholder "Internal / Market Research" client for internal
+work. Reasoning: an unconditional rule means no screen handles a null client, the client hub
+becomes the only creation path, and the alternative leaves two shapes of run permanently.
+Existing client-less runs (e.g. "Test Market") get repointed to the placeholder when P1
+lands. `DECISIONS.md` itself still needs 8.5 marked LOCKED to reflect this — out of scope
+for this edit, noted here only.
 
 **Done looks like:** a run can be created from within a client page with the brief pre-
 filled; the all-runs index still works; `ResearchRunDetail` is byte-for-byte unchanged in
@@ -471,6 +550,7 @@ NOW ──▶ Q1 brief form fields
         Q4 sold-comps brief warning   │
                                       │
 NEXT ─▶ A2 derived flags ★ fraud gap  │
+        B2 Copart Sales History ◀──────── (promoted; A2's hard block needs its coverage)
         A1b population coherence      │
         A3 extension run-picker       │
                                       │
@@ -480,7 +560,7 @@ THEN ─▶ P1 client-hub restructure ◀───┘ (depends on Q3)
         N3 approval trail
 
         C1 cost_rates (unblocked now)
-        B1 IAAI · B2 Copart history
+        B1 IAAI
         C2 duty calculator ◀─────────── (blocked: 10+ notices)
         C3 cost display
 

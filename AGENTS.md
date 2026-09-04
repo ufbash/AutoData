@@ -108,9 +108,24 @@ technically able to:**
 - Any Edge Function deploy (`supabase functions deploy`) — it takes effect immediately, no
   staging environment exists
 - Any destructive SQL (`DELETE`, `DROP`, `UPDATE` outside a documented soft-delete pattern)
-- Anything touching Chrome or the extension (reload, hard-refresh, DOM recon) — you cannot
-  drive a real browser session even with terminal access
+- Anything touching the Chrome extension itself (reload at `chrome://extensions`, DOM recon
+  against Copart/bid.cars) — this still needs the user, sign-in and credential entry are
+  still out of reach for the agent
 - Anything that sends a real email (Resend) or otherwise has an external side effect
+
+**Correction (4 Sep 2026): browser automation is available in this environment.** This
+session drove a real authenticated browser session via the `mcp__Claude_Browser__*` tools —
+filled a 16-field form, saved, hard-refreshed, reopened in edit mode, all without the user
+driving the mouse. The earlier claim that CC "cannot drive a real browser session even with
+terminal access" was wrong for this environment and is removed above. What remains correctly
+out of reach: the user must perform sign-in (the OAuth flow itself) and any credential entry
+— do not overcorrect and claim CC can log in.
+
+**Standing rule: a Claude-Code-run browser test is valid for FINDING problems, not for
+CLOSING items.** Closing a checklist item requires database output or the user's own
+observation. An agent's report of its own browser session is still an agent's summary, which
+§1 above already says is not evidence — running the browser yourself does not exempt you
+from that rule.
 
 **The reasoning:** capability is not the same as authorization. Being *able* to run
 `supabase db push` does not mean it is safe to run it unsupervised on a system with no
