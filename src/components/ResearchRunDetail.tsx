@@ -12,11 +12,13 @@ import {
   getSignedImageUrls,
   softDeleteRun,
   ResearchRun,
-  RunListing
+  RunListing,
+  deleteSighting
 } from '../services/researchService';
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
-import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle } from 'lucide-react';
+import AuctionCountdown from './AuctionCountdown';
+import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X } from 'lucide-react';
 
 interface ResearchRunDetailProps {
   runId: string;
@@ -44,12 +46,14 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   
   // Checklist states
   const [warningsReviewed, setWarningsReviewed] = useState(false);
+  const [criticalOverrideReason, setCriticalOverrideReason] = useState('');
   const [pulseListingId, setPulseListingId] = useState<string | null>(null);
 
   // Delete states
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [deleting, setDeleting] = useState(false);
+
 
   const loadData = async () => {
     try {
@@ -62,6 +66,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       if (r) {
         setNameInput(r.client_name);
         setNotesInput(r.notes || '');
+        setCriticalOverrideReason(r.critical_override_reason || '');
       }
 
       // Fetch signed urls for thumbnails
@@ -191,6 +196,22 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
     }
   };
 
+  const handleDeleteCapturePermanent = async (listingId: string, sightingId: string, assetId: string, make: string, model: string, year: number | null) => {
+    const confirmed = window.confirm(`Delete ${year || ''} ${make} ${model} permanently? This removes it from the ledger and from any research runs. This cannot be undone.`);
+    if (!confirmed) return;
+    
+    // Optimistic remove
+    setListings(prev => prev.filter(l => l.id !== listingId));
+    setWarningsReviewed(false);
+
+    try {
+      await deleteSighting(sightingId, assetId);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete sighting permanently');
+      loadData(); // revert optimistic
+    }
+  };
+
   const handleStoreImages = async () => {
     setStoringImages(true);
     try {
@@ -235,11 +256,20 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   const includedListings = listings.filter(l => l.included);
   const includedCount = includedListings.length;
 
-  const getStats = (list: RunListing[]) => {
+  const getStats = (list: RunListing[], isSoldGroup: boolean) => {
     let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
     list.forEach(l => {
+      let includePrice = true;
+      if (isSoldGroup) {
+        if (l.sale_confirmed === false) {
+          includePrice = false;
+        } else if (l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via)) {
+          includePrice = false;
+        }
+      }
+
       const p = l.price_usd;
-      if (p !== null) {
+      if (p !== null && includePrice) {
         tP += p; pC++;
         if (p < minP) minP = p;
         if (p > maxP) maxP = p;
@@ -264,15 +294,38 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
 
   const displayGroups = isMixed 
     ? [
-        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null)), type: 'sold' },
-        { label: "Client Options (Live)", stats: getStats(includedListings.filter(l => l.lot_state !== 'finished' && l.current_bid_usd !== null)), type: 'active' }
+        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null), true), type: 'sold' },
+        { label: "Client Options (Live)", stats: getStats(includedListings.filter(l => l.lot_state !== 'finished' && l.current_bid_usd !== null), false), type: 'active' }
       ]
     : [
-        { label: "Run Listings", stats: getStats(includedListings), type: isSoldComps ? 'sold' : 'active' }
+        { label: "Run Listings", stats: getStats(includedListings, isSoldComps), type: isSoldComps ? 'sold' : 'active' }
       ];
 
   // Pre-Share Checklist
-  const checklistItems: { id: string, type: 'BLOCK' | 'WARN', message: string, offenderIds: string[], passed: boolean }[] = [];
+  const CRITICAL_KEYWORDS = [
+    'mechanical', // MC
+    'water', // WA/flood
+    'flood', // WA/flood
+    'burn', // BN/BE/BI
+    'damage history', // DH
+    'partial', // PR
+    'rejected', // RJ
+    'undercarriage', // UN
+    'unknown', // UK
+    'frame', // FD
+    'rollover', // RO
+    'stripped', // ST
+    'all over', // AO
+    'biohaz', // BC
+    'chemical', // BC equivalent
+    'missing', // VI/VN/VP
+    'altered', // VI/VN/VP
+    'replaced vin', // VI/VN/VP
+    'vin', // VI/VN/VP
+    'storm' // Ambiguous
+  ];
+
+  const checklistItems: { id: string, type: 'BLOCK' | 'CRITICAL' | 'WARN', message: string, offenderIds: string[], passed: boolean }[] = [];
 
   // 1. Zero listings (BLOCK)
   checklistItems.push({
@@ -303,6 +356,141 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
     passed: duplicateOffenders.length === 0
   });
 
+  if (isActiveListings || isMixed) {
+    const activeList = isMixed ? includedListings.filter(l => l.lot_state !== 'finished') : includedListings;
+    
+    const criticalByReason = new Map<string, string[]>();
+    activeList.forEach(l => {
+      const dmg = ((l.damage_type || '') + ' ' + (l.secondary_damage || '')).trim().toLowerCase();
+      
+      let matchedKeyword = '';
+      for (const kw of CRITICAL_KEYWORDS) {
+        if (dmg.includes(kw)) {
+          matchedKeyword = kw;
+          break;
+        }
+      }
+      
+      const reasons: string[] = [];
+      if (matchedKeyword) {
+        reasons.push(matchedKeyword === 'storm' ? 'ambiguous storm damage' : `${matchedKeyword} damage`);
+      } else if (!l.damage_type || l.damage_type.trim() === '') {
+        reasons.push('unknown damage');
+      }
+      
+      if (l.runs_and_drives !== true) {
+        reasons.push('not confirmed run-and-drive');
+      }
+      
+      reasons.forEach(r => {
+        if (!criticalByReason.has(r)) criticalByReason.set(r, []);
+        criticalByReason.get(r)!.push(l.id);
+      });
+    });
+
+    criticalByReason.forEach((ids, reason) => {
+      checklistItems.push({
+        id: `critical_${reason.replace(/\s+/g, '_')}`,
+        type: 'CRITICAL',
+        message: `${ids.length} listing(s) flagged CRITICAL: ${reason}.`,
+        offenderIds: ids,
+        passed: false
+      });
+    });
+
+    // SPEC MATCH RULES
+    const brief = run.client_brief;
+    if (brief) {
+      const specCritical = new Map<string, string[]>();
+      const specWarn = new Map<string, string[]>();
+
+      const addSpecRule = (map: Map<string, string[]>, reason: string, id: string) => {
+        if (!map.has(reason)) map.set(reason, []);
+        map.get(reason)!.push(id);
+      };
+
+      activeList.forEach(l => {
+        // CRITICAL rules
+        if (brief.max_mileage != null && l.mileage_miles != null && l.mileage_miles > brief.max_mileage) {
+          addSpecRule(specCritical, `exceeds requested maximum mileage (${l.mileage_miles.toLocaleString()} vs ${brief.max_mileage.toLocaleString()} max)`, l.id);
+        }
+        if (brief.year_min != null && l.year != null && l.year < brief.year_min) {
+          addSpecRule(specCritical, `below minimum year (${l.year} vs ${brief.year_min} min)`, l.id);
+        }
+        if (brief.year_max != null && l.year != null && l.year > brief.year_max) {
+          addSpecRule(specCritical, `above maximum year (${l.year} vs ${brief.year_max} max)`, l.id);
+        }
+        if (brief.condition_required != null && brief.condition_required !== 'either' && brief.condition_required === 'run_and_drive') {
+          if (l.runs_and_drives !== true) {
+            addSpecRule(specCritical, `does not meet condition: Run and Drive`, l.id);
+          }
+        }
+        if (brief.titles_accepted != null && brief.titles_accepted.length > 0 && l.title_type != null) {
+          const title = l.title_type.toLowerCase();
+          let matched = false;
+          for (const accepted of brief.titles_accepted) {
+            const acc = accepted.toLowerCase();
+            let validTokens = [acc];
+            if (acc === 'clean' || acc === 'clear') validTokens = ['clean', 'clear', 'certificate of title', 'original'];
+            else if (acc === 'salvage') validTokens = ['salvage'];
+            else if (acc === 'rebuilt') validTokens = ['rebuilt', 'reconstructed'];
+            else if (acc === 'non_repairable' || acc === 'junk') validTokens = ['non-repairable', 'junk', 'parts', 'destruction'];
+            
+            if (validTokens.some(t => title.includes(t))) {
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) {
+            addSpecRule(specCritical, `title type not accepted (${l.title_type} vs [${brief.titles_accepted.join(',')}])`, l.id);
+          }
+        }
+
+        // WARN rules
+        if (brief.colour_preference != null && brief.colour_preference !== '' && brief.colour_preference.toLowerCase() !== 'either' && l.exterior_color != null) {
+          if (!l.exterior_color.toLowerCase().includes(brief.colour_preference.toLowerCase())) {
+            addSpecRule(specWarn, `colour differs (${l.exterior_color} vs ${brief.colour_preference} requested)`, l.id);
+          }
+        }
+        if (brief.transmission != null && brief.transmission !== '' && brief.transmission.toLowerCase() !== 'either' && l.transmission != null) {
+          if (!l.transmission.toLowerCase().includes(brief.transmission.toLowerCase())) {
+            addSpecRule(specWarn, `transmission differs (${l.transmission} vs ${brief.transmission} requested)`, l.id);
+          }
+        }
+        if (brief.fuel_type != null && brief.fuel_type !== '' && brief.fuel_type.toLowerCase() !== 'either' && l.fuel != null) {
+          if (!l.fuel.toLowerCase().includes(brief.fuel_type.toLowerCase())) {
+            addSpecRule(specWarn, `fuel type differs (${l.fuel} vs ${brief.fuel_type} requested)`, l.id);
+          }
+        }
+        if (brief.trim != null && brief.trim !== '' && brief.trim.toLowerCase() !== 'either' && l.trim != null) {
+          if (!l.trim.toLowerCase().includes(brief.trim.toLowerCase())) {
+            addSpecRule(specWarn, `trim differs (${l.trim} vs ${brief.trim} requested)`, l.id);
+          }
+        }
+      });
+
+      specCritical.forEach((ids, reason) => {
+        checklistItems.push({
+          id: `spec_critical_${Math.random()}`,
+          type: 'CRITICAL',
+          message: `${ids.length} listing(s) flagged CRITICAL: ${reason}.`,
+          offenderIds: ids,
+          passed: false
+        });
+      });
+
+      specWarn.forEach((ids, reason) => {
+        checklistItems.push({
+          id: `spec_warn_${Math.random()}`,
+          type: 'WARN',
+          message: `${ids.length} listing(s) flagged WARN: ${reason}.`,
+          offenderIds: ids,
+          passed: false
+        });
+      });
+    }
+  }
+
   // 5. No price (WARN)
   const noPriceOffenders = includedListings.filter(l => l.price_usd === null).map(l => l.id);
   checklistItems.push({
@@ -324,8 +512,8 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
   });
 
   if (isSoldComps || isMixed) {
-    const soldList = isMixed ? includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null) : includedListings;
-    const soldStats = getStats(soldList);
+    const soldList = isMixed ? includedListings.filter(l => l.lot_state === 'finished') : includedListings;
+    const soldStats = getStats(soldList, true);
     
     // 3. Limited sample (WARN)
     const limitedSample = soldStats.priceCount > 0 && soldStats.priceCount < 3;
@@ -373,13 +561,26 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       offenderIds: differentModelOffenders,
       passed: differentModelOffenders.length === 0
     });
+
+    // Unconfirmed Sale (WARN)
+    const unconfirmedSaleOffenders = soldList.filter(l => l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via)).map(l => l.id);
+    checklistItems.push({
+      id: 'unconfirmed_sale',
+      type: 'WARN',
+      message: unconfirmedSaleOffenders.length > 0 ? `${unconfirmedSaleOffenders.length} of ${soldList.length} included listings have unconfirmed sale status and are excluded from the average below.` : 'All sold listings are confirmed',
+      offenderIds: unconfirmedSaleOffenders,
+      passed: unconfirmedSaleOffenders.length === 0
+    });
   }
 
   const hasBlocks = checklistItems.some(i => i.type === 'BLOCK' && !i.passed);
+  const hasCriticals = checklistItems.some(i => i.type === 'CRITICAL' && !i.passed);
   const hasWarnings = checklistItems.some(i => i.type === 'WARN' && !i.passed);
-  const canShare = !hasBlocks && (!hasWarnings || warningsReviewed);
+  const canShare = !hasBlocks && 
+    (!hasCriticals || (warningsReviewed && criticalOverrideReason.trim().length >= 10)) &&
+    (!hasWarnings || warningsReviewed);
 
-  const listingBadges = new Map<string, { type: 'BLOCK' | 'WARN', text: string }[]>();
+  const listingBadges = new Map<string, { type: 'BLOCK' | 'CRITICAL' | 'WARN', text: string }[]>();
   checklistItems.filter(i => !i.passed).forEach(item => {
     item.offenderIds.forEach(id => {
       if (!listingBadges.has(id)) listingBadges.set(id, []);
@@ -388,6 +589,10 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
       else if (item.id === 'no_price') text = 'No price';
       else if (item.id === 'non_insurance') text = 'Non-insurance seller';
       else if (item.id === 'different_model') text = 'Different model';
+      else if (item.id === 'unconfirmed_sale') text = 'Unconfirmed sale';
+      else if (item.id.startsWith('critical_')) text = 'CRITICAL';
+      else if (item.id.startsWith('spec_critical_')) text = 'SPEC CRITICAL';
+      else if (item.id.startsWith('spec_warn_')) text = 'SPEC WARN';
       if (text) {
         listingBadges.get(id)!.push({ type: item.type, text });
       }
@@ -481,6 +686,26 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
           </div>
         </div>
 
+        {run.client_brief && (
+          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <h3 className="text-sm font-bold text-gray-700 mb-2">Linked Buying Brief Requirements</h3>
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+              {run.client_brief.year_min || run.client_brief.year_max ? (
+                <div><span className="text-gray-500">Year:</span> {run.client_brief.year_min || 'Any'} - {run.client_brief.year_max || 'Any'}</div>
+              ) : null}
+              {run.client_brief.max_mileage ? (
+                <div><span className="text-gray-500">Max Mileage:</span> {run.client_brief.max_mileage.toLocaleString()} mi</div>
+              ) : null}
+              {run.client_brief.condition_required && run.client_brief.condition_required !== 'either' ? (
+                <div><span className="text-gray-500">Condition:</span> {run.client_brief.condition_required === 'run_and_drive' ? 'Run & Drive' : run.client_brief.condition_required}</div>
+              ) : null}
+              {run.client_brief.titles_accepted && run.client_brief.titles_accepted.length > 0 ? (
+                <div><span className="text-gray-500">Titles:</span> {run.client_brief.titles_accepted.join(', ')}</div>
+              ) : null}
+            </div>
+          </div>
+        )}
+
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
           <textarea
@@ -523,16 +748,32 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
             })}
           </ul>
           
-          {hasWarnings && !hasBlocks && (
-            <label className="flex items-center gap-2 mt-4 text-sm font-medium text-gray-700 cursor-pointer">
-              <input 
-                type="checkbox"
-                checked={warningsReviewed}
-                onChange={e => setWarningsReviewed(e.target.checked)}
-                className="rounded text-[#a58039] focus:ring-[#a58039]"
-              />
-              I've reviewed these warnings
-            </label>
+          {(hasWarnings || hasCriticals) && !hasBlocks && (
+            <div className="mt-4 space-y-4">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+                <input 
+                  type="checkbox"
+                  checked={warningsReviewed}
+                  onChange={e => setWarningsReviewed(e.target.checked)}
+                  className="rounded text-[#a58039] focus:ring-[#a58039]"
+                />
+                I've reviewed these warnings
+              </label>
+
+              {hasCriticals && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Reason for sharing despite critical warnings (recorded):
+                  </label>
+                  <textarea
+                    value={criticalOverrideReason}
+                    onChange={e => setCriticalOverrideReason(e.target.value)}
+                    placeholder="Min 10 characters required..."
+                    className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#a58039] min-h-[60px]"
+                  />
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -547,7 +788,16 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
               className="sr-only peer" 
               checked={run.share_enabled}
               disabled={!canShare}
-              onChange={(e) => handleUpdate({ share_enabled: e.target.checked })}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                const patch: Partial<ResearchRun> = { share_enabled: checked };
+                if (checked && hasCriticals) {
+                  patch.critical_override_reason = criticalOverrideReason.trim();
+                  patch.critical_override_by = user?.id || null;
+                  patch.critical_override_at = new Date().toISOString();
+                }
+                handleUpdate(patch);
+              }}
             />
             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#a58039]"></div>
             <span className="ml-3 text-sm font-medium text-gray-700">
@@ -691,23 +941,27 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                     onDrop={(e) => handleDrop(e, index)}
                     onDragEnd={handleDragEnd}
                     onClick={() => setActiveListing(listing)}
-                    className={`transition-all cursor-pointer ${!listing.included ? 'opacity-60' : ''} ${dragOverIndex === index ? 'border-t-2 border-[#a58039]' : ''} ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK') ? 'bg-red-50 hover:bg-red-100' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'bg-yellow-50 hover:bg-yellow-100' : 'bg-white hover:bg-gray-50'} ${pulseListingId === listing.id ? 'animate-pulse ring-2 ring-[#a58039] z-10 relative' : ''}`}
+                    className={`transition-all cursor-pointer ${!listing.included ? 'opacity-60' : ''} ${dragOverIndex === index ? 'border-t-2 border-[#a58039]' : ''} ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK' || b.type === 'CRITICAL') ? 'bg-red-50 hover:bg-red-100' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'bg-yellow-50 hover:bg-yellow-100' : 'bg-white hover:bg-gray-50'} ${pulseListingId === listing.id ? 'animate-pulse ring-2 ring-[#a58039] z-10 relative' : ''}`}
                   >
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing opacity-50 hover:opacity-100 transition-opacity">
+                    <td className="px-4 py-3">
+                      <div 
+                        className="flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing opacity-50 hover:opacity-100 transition-opacity"
+                        onClick={e => e.stopPropagation()}
+                      >
                         <GripVertical className="w-5 h-5 text-gray-400" />
                         <span className="w-4 text-center text-xs font-medium text-gray-500">{index + 1}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center">
                       <input 
                         type="checkbox"
                         checked={listing.included}
+                        onClick={e => e.stopPropagation()}
                         onChange={e => handleToggleIncluded(listing.id, e.target.checked)}
                         className="rounded text-[#a58039] focus:ring-[#a58039] w-4 h-4 cursor-pointer"
                       />
                     </td>
-                    <td className={`px-4 py-3 border-l-4 ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK') ? 'border-red-500' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'border-yellow-500' : 'border-transparent'}`} onClick={e => e.stopPropagation()}>
+                    <td className={`px-4 py-3 border-l-4 ${listingBadges.get(listing.id)?.some(b => b.type === 'BLOCK' || b.type === 'CRITICAL') ? 'border-red-500' : listingBadges.get(listing.id)?.some(b => b.type === 'WARN') ? 'border-yellow-500' : 'border-transparent'}`}>
                       <div className="flex items-start gap-3">
                         <div className="w-16 h-12 flex-shrink-0 bg-gray-200 rounded overflow-hidden">
                           {listing.stored_image_urls?.[0] && signedThumbnails[listing.stored_image_urls[0]] ? (
@@ -743,7 +997,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                           {(listingBadges.get(listing.id) || []).length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1.5">
                               {listingBadges.get(listing.id)!.map((b, bi) => (
-                                <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold whitespace-nowrap ${b.type === 'BLOCK' ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-yellow-100 text-yellow-700 border border-yellow-200'}`}>
+                                <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold whitespace-nowrap ${(b.type === 'BLOCK' || b.type === 'CRITICAL') ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-yellow-100 text-yellow-700 border border-yellow-200'}`}>
                                   {b.text}
                                 </span>
                               ))}
@@ -791,16 +1045,38 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
                         <div className="text-xs text-gray-500">
                           {listing.location || 'Unknown loc'}
                         </div>
+                        {(run.run_type === 'active_listings' || run.run_type === 'mixed') && (
+                          <div className="pt-1 border-t border-gray-100">
+                            <AuctionCountdown saleDateText={listing.sale_date || null} />
+                          </div>
+                        )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
-                      <button 
-                        onClick={() => handleRemove(listing.id)}
-                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                        title="Remove from run"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        {role === 'superadmin' && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteCapturePermanent(listing.id, listing.sighting_id, listing.asset_id, listing.make, listing.model, listing.year);
+                            }}
+                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            title="Delete capture permanently"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemove(listing.id);
+                          }}
+                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                          title="Remove from run"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

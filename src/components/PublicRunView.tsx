@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Calendar, MapPin, AlertTriangle, FileText, Info } from 'lucide-react';
 import VehicleDetailModal, { DisplayListing } from './VehicleDetailModal';
+import AuctionCountdown from './AuctionCountdown';
 
 interface PublicRunViewProps {
   token: string;
@@ -29,6 +30,7 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeListing, setActiveListing] = useState<any | null>(null);
+
 
   const fetchRun = async () => {
     setLoading(true);
@@ -172,6 +174,12 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
               </span>
             )}
           </div>
+
+          {!isSold && (
+            <div className="mb-4 p-2.5 bg-gray-50 rounded-lg border border-gray-100">
+              <AuctionCountdown saleDateText={listing.sale_date || null} />
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 font-medium mt-auto pb-3 border-b border-gray-100">
             {listing.mileage_miles !== null && listing.mileage_miles !== undefined && (

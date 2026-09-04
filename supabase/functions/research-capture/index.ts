@@ -49,10 +49,13 @@ interface ResearchCapturePayload {
     estimated_cost_high_usd?: number | null;
     seller_type?: string | null;
     source_auction_platform?: string | null;
+    sale_confirmed?: boolean | null;
+    auction_appearance_count?: number | null;
   };
   image_urls: string[];
   lot_state?: string;
   raw_dom_snapshot?: string;
+  auction_history?: any[];
 }
 
 serve(async (req: Request) => {
@@ -229,10 +232,8 @@ serve(async (req: Request) => {
       rawPayloadToSave.attempted_currency = listedCurrency;
     }
 
-    // Insert into sightings
-    const { data: newSighting, error: sightingError } = await supabase
-      .from('sightings')
-      .insert({
+    // Sighting Data
+    const sightingData = {
         org_id: defaultOrgId,
         logged_via: 'extension_dom_capture',
         asset_id: assetId,
@@ -267,12 +268,80 @@ serve(async (req: Request) => {
         estimated_cost_low_usd: cf.estimated_cost_low_usd ?? null,
         estimated_cost_high_usd: cf.estimated_cost_high_usd ?? null,
         seller_type: cf.seller_type ?? null,
-        source_auction_platform: cf.source_auction_platform ?? null
-      })
-      .select('id')
-      .single();
+        source_auction_platform: cf.source_auction_platform ?? null,
+        sale_confirmed: cf.sale_confirmed ?? null,
+        auction_appearance_count: cf.auction_appearance_count ?? null
+    };
 
-    if (sightingError) throw sightingError;
+    let newSightingId: string;
+    
+    // Check existing
+    let existingQuery = supabase
+        .from('sightings')
+        .select('id, lot_state')
+        .eq('asset_id', assetId)
+        .eq('source_platform', payload.source_platform)
+        .eq('lot_number', cf.lot_number);
+
+    if (payload.lot_state === 'finished') {
+        existingQuery = existingQuery.eq('lot_state', 'finished');
+    } else {
+        existingQuery = existingQuery.neq('lot_state', 'finished');
+    }
+
+    const { data: existingSightings, error: checkError } = await existingQuery.limit(1);
+    if (checkError) throw checkError;
+
+    if (existingSightings && existingSightings.length > 0) {
+        newSightingId = existingSightings[0].id;
+        if (payload.lot_state !== 'finished') {
+            // Update active sighting
+            const { error: updateError } = await supabase
+                .from('sightings')
+                .update({ ...sightingData, captured_at: new Date().toISOString() })
+                .eq('id', newSightingId);
+            if (updateError) throw updateError;
+        }
+    } else {
+        // Insert new
+        const { data: inserted, error: insertSightingError } = await supabase
+            .from('sightings')
+            .insert(sightingData)
+            .select('id')
+            .single();
+        if (insertSightingError) throw insertSightingError;
+        newSightingId = inserted.id;
+    }
+
+    if (payload.auction_history && payload.auction_history.length > 0) {
+      try {
+        const historyRecords = payload.auction_history.map((h: any) => ({
+          org_id: defaultOrgId,
+          asset_id: assetId,
+          sighting_id: newSightingId,
+          auction_platform: h.auction_platform ?? null,
+          auction_date: h.auction_date ?? null,
+          lot_number: h.lot_number ?? null,
+          bid_amount_usd: h.bid_amount_usd ?? null,
+          odometer_miles: h.odometer_miles ?? null,
+          status: h.status ?? null,
+          seller_type: h.seller_type ?? null
+        }));
+
+        const { error: historyError } = await supabase
+          .from('auction_history')
+          .upsert(historyRecords, { 
+            onConflict: 'asset_id,auction_date,lot_number,bid_amount_usd',
+            ignoreDuplicates: true 
+          });
+
+        if (historyError) {
+          console.error("Failed to insert auction_history (non-fatal):", historyError);
+        }
+      } catch (err) {
+        console.error("Failed to process auction_history (non-fatal):", err);
+      }
+    }
 
     // Optional research_run insertion
     let runListingId = undefined;
@@ -293,7 +362,7 @@ serve(async (req: Request) => {
          .insert({
             org_id: defaultOrgId,
             run_id: payload.research_run_id,
-            sighting_id: newSighting.id,
+            sighting_id: newSightingId,
             position: maxPos + 1
          })
          .select('id')
@@ -305,7 +374,7 @@ serve(async (req: Request) => {
     return new Response(JSON.stringify({
       success: true,
       asset_id: assetId,
-      sighting_id: newSighting.id,
+      sighting_id: newSightingId,
       fingerprint: fingerprintHash,
       run_listing_id: runListingId,
       was_duplicate: wasDuplicate

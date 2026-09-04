@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { AvailableSighting, listAvailableSightings, attachSightingToRun } from '../services/researchService';
-import { Loader2, X, Search, Image as ImageIcon } from 'lucide-react';
+import { AvailableSighting, listAvailableSightings, attachSightingToRun, deleteSighting } from '../services/researchService';
+import { Loader2, X, Search, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface AddCapturesModalProps {
   runId: string;
@@ -12,6 +13,7 @@ interface AddCapturesModalProps {
 }
 
 const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, orgId, existingSightingIds, onClose, onAdded }) => {
+  const { role } = useAuth();
   const [sightings, setSightings] = useState<AvailableSighting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,9 +42,10 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
         const isFinished = (l: any) => l.lot_state === 'finished';
         const isAuctionSource = (l: any) => ['copart','bidcars','iaai'].includes(l.source_platform);
         const hasValue = (v: any) => v !== null && v !== undefined;
+        const isUnconfirmed = (l: any) => l.sale_confirmed === false;
 
         const eligibleActive = (l: any) => isAuctionSource(l) && !isFinished(l);
-        const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active';
+        const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active' && !isUnconfirmed(l);
         const eligibleMixed = (l: any) => eligibleActive(l) || eligibleSold(l);
 
         const eligibleData = data.filter(s => {
@@ -96,6 +99,23 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
     } catch (err: any) {
       alert(err.message || 'Failed to add captures');
       setAdding(false);
+    }
+  };
+
+  const handleDeleteSighting = async (e: React.MouseEvent, s: AvailableSighting) => {
+    e.stopPropagation();
+    const confirmed = window.confirm(`Delete ${s.year || ''} ${s.make} ${s.model} permanently? This removes it from the ledger and from any research runs. This cannot be undone.`);
+    if (!confirmed) return;
+    
+    // Optimistic UI update
+    setSightings(prev => prev.filter(item => item.sighting_id !== s.sighting_id));
+    
+    try {
+      await deleteSighting(s.sighting_id, s.asset_id);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete sighting');
+      // Revert optimistic update (requires re-fetch, simplest is to reload or fetch again)
+      // For now, let's just alert since it's a superadmin tool.
     }
   };
 
@@ -179,6 +199,7 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
                   <th className="px-4 py-3">Vehicle</th>
                   <th className="px-4 py-3">Platform</th>
                   <th className="px-4 py-3 text-right">Captured</th>
+                  {role === 'superadmin' && <th className="px-4 py-3 w-12 text-center"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
@@ -244,6 +265,17 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
                       <td className="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
                         {new Date(s.captured_at).toLocaleDateString()}
                       </td>
+                      {role === 'superadmin' && (
+                        <td className="px-4 py-3 text-center">
+                          <button 
+                            onClick={(e) => handleDeleteSighting(e, s)}
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                            title="Delete capture permanently"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

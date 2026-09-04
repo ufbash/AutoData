@@ -82,6 +82,7 @@ export interface DisplayListing {
   logged_via?: string;
   lot_number?: string | null;
   captured_at?: string;
+  sale_date?: string | null;
 }
 
 // -- Main Component --

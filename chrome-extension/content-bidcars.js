@@ -86,6 +86,73 @@ function extractFinalSalePrice(text) {
   return null;
 }
 
+function extractSalesHistory() {
+  const history = [];
+  const tables = Array.from(document.querySelectorAll('table'));
+  const salesTable = tables.find(t => {
+    const headers = Array.from(t.querySelectorAll('th, td')).map(h => h.innerText || '');
+    return headers.some(h => /Auction/i.test(h)) && headers.some(h => /Final bid/i.test(h));
+  });
+
+  if (!salesTable) return { history: [], found: false };
+
+  const rows = Array.from(salesTable.querySelectorAll('tr'));
+  for (let i = 1; i < rows.length; i++) {
+    const cells = rows[i].cells;
+    if (!cells || cells.length < 7) continue;
+    
+    const auction_platform = cells[0]?.innerText.trim() || null;
+    const auction_date = cells[1]?.innerText.trim() || null;
+    if (!auction_date || !/^\d{4}-\d{2}-\d{2}$/.test(auction_date)) {
+        continue;
+    }
+    
+    let lot_number = null;
+    if (cells[2]) {
+        let clean = cells[2].innerText.replace(/\s+/g, '');
+        const parts = clean.split('-');
+        lot_number = parts.length > 1 ? parts[1] : clean;
+    }
+
+    let bid_amount_usd = null;
+    if (cells[3]) {
+        const rawBid = cells[3].innerText.trim();
+        if (/^\$[\d,]+/.test(rawBid)) {
+            const num = parseFloat(rawBid.replace(/[$,\s]/g, ''));
+            if (!isNaN(num)) bid_amount_usd = num;
+        }
+    }
+
+    let odometer_miles = null;
+    if (cells[4]) {
+        const num = parseInt(cells[4].innerText.replace(/[a-z\s]/gi, ''), 10);
+        if (!isNaN(num)) odometer_miles = num;
+    }
+
+    const status = cells[5]?.innerText.trim() || null;
+    const seller_type = cells[6]?.innerText.trim() || null;
+
+    if (status) {
+        const s = status.toLowerCase();
+        if (!/(not sold|no sale|withdrawn|cancell?ed|pending|sold|sale)/.test(s)) {
+            console.warn("[AutoData] Unrecognised Sales History status:", status);
+        }
+    }
+
+    history.push({
+      auction_platform,
+      auction_date,
+      lot_number,
+      bid_amount_usd,
+      odometer_miles,
+      status,
+      seller_type
+    });
+  }
+
+  return { history, found: true };
+}
+
 function isBidcarsLotPage() {
     const isLotUrl = /^\/en\/lot\//.test(location.pathname);
     const bodyText = document.body.innerText || '';
@@ -278,6 +345,27 @@ function captureCurrentLot() {
         }
     }
 
+    const { history: auctionHistoryArray, found: hasSalesTable } = extractSalesHistory();
+    let auction_appearance_count = hasSalesTable ? auctionHistoryArray.length : null;
+    let sale_confirmed = null;
+
+    if (auctionHistoryArray.length > 0) {
+        const sorted = [...auctionHistoryArray].sort((a, b) => {
+            const d1 = a.auction_date ? new Date(a.auction_date).getTime() : 0;
+            const d2 = b.auction_date ? new Date(b.auction_date).getTime() : 0;
+            return d1 - d2;
+        });
+        const latest = sorted[sorted.length - 1];
+        if (latest && latest.status) {
+            const s = latest.status.toLowerCase();
+            if (/(not sold|no sale|withdrawn|cancell?ed|pending)/.test(s)) {
+                sale_confirmed = false;
+            } else if (/(sold|sale)/.test(s) && !s.includes('not')) {
+                sale_confirmed = true;
+            }
+        }
+    }
+
     const payload = {
         source_platform: 'bidcars',
         source_url: window.location.href,
@@ -313,11 +401,14 @@ function captureCurrentLot() {
             listed_currency: listed_currency,
             sale_date: sale_date,
             estimated_cost_low_usd: estLow,
-            estimated_cost_high_usd: estHigh
+            estimated_cost_high_usd: estHigh,
+            sale_confirmed: sale_confirmed,
+            auction_appearance_count: auction_appearance_count
         },
         lot_state: lot_state,
         sale_date_unavailable: sale_date_unavailable,
-        image_urls: []
+        image_urls: [],
+        auction_history: auctionHistoryArray
     };
 
     if (location.search.includes('archived=true')) {

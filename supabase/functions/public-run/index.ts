@@ -195,7 +195,8 @@ serve(async (req) => {
           return sighting.image_urls;
         })(),
         source_platform: sighting.source_platform,
-        captured_at: sighting.captured_at
+        captured_at: sighting.captured_at,
+        sale_date: sighting.sale_date
       };
 
       if (sighting.lot_state === 'finished') {

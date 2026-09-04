@@ -1,5 +1,38 @@
 import { supabase } from './supabaseClient';
 
+export interface Client {
+  id: string;
+  full_name: string;
+  email?: string | null;
+  phone?: string | null;
+  preferred_contact?: 'phone' | 'whatsapp' | 'email' | null;
+  assigned_agent?: string | null;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface ClientBrief {
+  id: string;
+  client_id: string;
+  make?: string | null;
+  model?: string | null;
+  trim?: string | null;
+  year_min?: number | null;
+  year_max?: number | null;
+  max_mileage?: number | null;
+  transmission?: 'automatic' | 'manual' | 'either' | null;
+  fuel_type?: 'petrol' | 'diesel' | 'hybrid' | 'electric' | 'either' | null;
+  condition_required?: 'run_and_drive' | 'starts_needs_work' | 'non_running' | 'salvage_only' | 'either' | null;
+  titles_accepted?: string[] | null;
+  colour_preference?: string | null;
+  interior_preference?: string | null;
+  quantity: number;
+  max_budget_usd?: number | null;
+  max_bid_usd?: number | null;
+  additional_notes?: string | null;
+  created_at: string;
+}
+
 export interface ResearchRun {
   id: string;
   client_name: string;
@@ -14,6 +47,13 @@ export interface ResearchRun {
   created_at: string;
   updated_at: string;
   listing_count?: number;
+  critical_override_reason?: string | null;
+  critical_override_by?: string | null;
+  critical_override_at?: string | null;
+  client_id?: string | null;
+  client_brief_id?: string | null;
+  client?: Client | null;
+  client_brief?: ClientBrief | null;
 }
 
 export interface RunListing {
@@ -48,6 +88,7 @@ export interface RunListing {
   captured_at: string;
   price_usd: number | null;
   lot_state: 'active' | 'finished' | 'unknown' | null;
+  sale_confirmed?: boolean | null;
   make: string;
   model: string;
   trim: string | null;
@@ -69,7 +110,7 @@ export interface RunListing {
 export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
   const { data, error } = await supabase
     .from('research_runs')
-    .select('*, research_run_listings(count)')
+    .select('*, research_run_listings(count), client:clients(*), client_brief:client_briefs(*)')
     .eq('org_id', orgId)
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
@@ -84,7 +125,7 @@ export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
   }));
 };
 
-export const createRun = async (orgId: string, input: { client_name: string; run_type: 'sold_comps' | 'active_listings' | 'mixed'; notes?: string; target_spec?: object }): Promise<ResearchRun> => {
+export const createRun = async (orgId: string, input: { client_name: string; run_type: 'sold_comps' | 'active_listings' | 'mixed'; notes?: string; target_spec?: object; client_id?: string; client_brief_id?: string }): Promise<ResearchRun> => {
   const share_token = Array.from(crypto.getRandomValues(new Uint8Array(24)))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
@@ -97,10 +138,12 @@ export const createRun = async (orgId: string, input: { client_name: string; run
       run_type: input.run_type,
       notes: input.notes || null,
       target_spec: input.target_spec || null,
-      status: 'draft',
+      client_id: input.client_id || null,
+      client_brief_id: input.client_brief_id || null,
       share_token,
+      share_enabled: false
     })
-    .select()
+    .select('*, client:clients(*), client_brief:client_briefs(*)')
     .single();
 
   if (error) {
@@ -110,18 +153,193 @@ export const createRun = async (orgId: string, input: { client_name: string; run
   return data;
 };
 
-export const getRun = async (runId: string): Promise<ResearchRun | null> => {
+export const getRun = async (runId: string): Promise<ResearchRun> => {
   const { data, error } = await supabase
     .from('research_runs')
-    .select('*')
+    .select('*, client:clients(*), client_brief:client_briefs(*)')
     .eq('id', runId)
+    .is('deleted_at', null)
     .single();
 
-  if (error && error.code !== 'PGRST116') { // PGRST116 is multiple rows or 0 rows for single()
-    throw new Error(`Failed to fetch research run: ${error.message}`);
+  if (error) {
+    throw new Error(`Failed to fetch run: ${error.message}`);
   }
 
-  return data || null;
+  return data;
+};
+
+// --- Clients and Briefs API ---
+
+export const listClients = async (orgId: string): Promise<Client[]> => {
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('org_id', orgId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(`Failed to list clients: ${error.message}`);
+  return data || [];
+};
+
+export const createClient = async (orgId: string, client: Partial<Client>): Promise<Client> => {
+  const { data, error } = await supabase
+    .from('clients')
+    .insert({ ...client, org_id: orgId })
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to create client: ${error.message}`);
+  return data;
+};
+
+export const listClientBriefs = async (orgId: string, clientId?: string): Promise<ClientBrief[]> => {
+  let q = supabase
+    .from('client_briefs')
+    .select('*')
+    .eq('org_id', orgId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
+  
+  if (clientId) {
+    q = q.eq('client_id', clientId);
+  }
+
+  const { data, error } = await q;
+  if (error) throw new Error(`Failed to list client briefs: ${error.message}`);
+  return data || [];
+};
+
+export const createClientBrief = async (orgId: string, clientId: string, brief: Partial<ClientBrief>): Promise<ClientBrief> => {
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .insert({ ...brief, org_id: orgId, client_id: clientId })
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to create client brief: ${error.message}`);
+  return data;
+};
+
+export const updateClient = async (clientId: string, patch: Partial<Client>): Promise<Client> => {
+  const { data, error } = await supabase
+    .from('clients')
+    .update(patch)
+    .eq('id', clientId)
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to update client: ${error.message}`);
+  return data;
+};
+
+export const updateClientBrief = async (briefId: string, patch: Partial<ClientBrief>): Promise<ClientBrief> => {
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .update(patch)
+    .eq('id', briefId)
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to update client brief: ${error.message}`);
+  return data;
+};
+
+export const softDeleteClient = async (clientId: string, userId: string): Promise<void> => {
+  // Check for active briefs
+  const { count: briefCount, error: briefError } = await supabase
+    .from('client_briefs')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .is('deleted_at', null);
+  
+  if (briefError) throw new Error(`Failed to check client briefs: ${briefError.message}`);
+  
+  // Check for active runs
+  const { count: runCount, error: runError } = await supabase
+    .from('research_runs')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .is('deleted_at', null);
+
+  if (runError) throw new Error(`Failed to check client runs: ${runError.message}`);
+
+  if ((briefCount && briefCount > 0) || (runCount && runCount > 0)) {
+    const msgs = [];
+    if (runCount && runCount > 0) msgs.push(`${runCount} active run(s)`);
+    if (briefCount && briefCount > 0) msgs.push(`${briefCount} active brief(s)`);
+    throw new Error(`Cannot delete this client because they still have ${msgs.join(' and ')}. Please delete or reassign them first.`);
+  }
+
+  const { error } = await supabase
+    .from('clients')
+    .update({ 
+      deleted_at: new Date().toISOString(),
+      deleted_by: userId
+    })
+    .eq('id', clientId);
+
+  if (error) throw new Error(`Failed to delete client: ${error.message}`);
+};
+
+export const softDeleteClientBrief = async (briefId: string, userId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('client_briefs')
+    .update({ 
+      deleted_at: new Date().toISOString(),
+      deleted_by: userId
+    })
+    .eq('id', briefId);
+
+  if (error) throw new Error(`Failed to delete client brief: ${error.message}`);
+};
+
+export const listDeletedClients = async (orgId: string): Promise<Client[]> => {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('org_id', orgId)
+    .not('deleted_at', 'is', null)
+    .gte('deleted_at', thirtyDaysAgo.toISOString())
+    .order('deleted_at', { ascending: false });
+
+  if (error) throw new Error(`Failed to list deleted clients: ${error.message}`);
+  return data || [];
+};
+
+export const restoreClient = async (clientId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('clients')
+    .update({ deleted_at: null, deleted_by: null })
+    .eq('id', clientId);
+  if (error) throw new Error(`Failed to restore client: ${error.message}`);
+};
+
+export const listDeletedClientBriefs = async (orgId: string): Promise<ClientBrief[]> => {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .select('*')
+    .eq('org_id', orgId)
+    .not('deleted_at', 'is', null)
+    .gte('deleted_at', thirtyDaysAgo.toISOString())
+    .order('deleted_at', { ascending: false });
+
+  if (error) throw new Error(`Failed to list deleted briefs: ${error.message}`);
+  return data || [];
+};
+
+export const restoreClientBrief = async (briefId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('client_briefs')
+    .update({ deleted_at: null, deleted_by: null })
+    .eq('id', briefId);
+  if (error) throw new Error(`Failed to restore brief: ${error.message}`);
 };
 
 export const updateRun = async (runId: string, patch: Partial<Pick<ResearchRun, 'client_name' | 'notes' | 'status' | 'share_enabled' | 'run_type'>>): Promise<ResearchRun> => {
@@ -137,6 +355,29 @@ export const updateRun = async (runId: string, patch: Partial<Pick<ResearchRun, 
   }
 
   return data;
+};
+
+export const deleteSighting = async (sightingId: string, assetId: string): Promise<void> => {
+  const { error: deleteError } = await supabase
+    .from('sightings')
+    .delete()
+    .eq('id', sightingId);
+  
+  if (deleteError) {
+    throw new Error(`Failed to delete sighting: ${deleteError.message}`);
+  }
+
+  // Check if any other sightings exist for this asset
+  const { data: remainingSightings, error: checkError } = await supabase
+    .from('sightings')
+    .select('id')
+    .eq('asset_id', assetId)
+    .limit(1);
+
+  if (!checkError && (!remainingSightings || remainingSightings.length === 0)) {
+    // Attempt to delete asset (best effort)
+    await supabase.from('assets').delete().eq('id', assetId);
+  }
 };
 
 export const listRunListings = async (runId: string): Promise<RunListing[]> => {
@@ -172,6 +413,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
         listed_currency,
         price_usd,
         lot_state,
+        sale_confirmed,
         stored_image_urls,
         image_store_status,
         images_stored_at,
@@ -235,6 +477,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       captured_at: sighting.captured_at,
       price_usd: sighting.price_usd ?? null,
       lot_state: sighting.lot_state ?? null,
+      sale_confirmed: sighting.sale_confirmed ?? null,
       make: asset.make || 'Unknown',
       model: asset.model || 'Unknown',
       trim: asset.trim || null,
@@ -305,7 +548,7 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
   
   const { data: sightingData, error: sightingError } = await supabase
     .from('sightings')
-    .select('price_usd, lot_state, raw_payload, listed_price, source_platform')
+    .select('price_usd, lot_state, raw_payload, listed_price, source_platform, sale_confirmed, logged_via')
     .eq('id', sightingId)
     .single();
     
@@ -315,15 +558,17 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
     source_platform: sightingData.source_platform,
     lot_state: sightingData.lot_state,
     price_usd: sightingData.price_usd,
-    current_bid_usd: sightingData.raw_payload?.current_bid_usd ?? null
+    current_bid_usd: sightingData.raw_payload?.current_bid_usd ?? null,
+    sale_confirmed: sightingData.sale_confirmed
   };
 
   const isFinished = (l: any) => l.lot_state === 'finished';
   const isAuctionSource = (l: any) => ['copart','bidcars','iaai'].includes(l.source_platform);
   const hasValue = (v: any) => v !== null && v !== undefined;
+  const isUnconfirmed = l => l.sale_confirmed === false;
 
   const eligibleActive = (l: any) => isAuctionSource(l) && !isFinished(l);
-  const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active';
+  const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active' && !isUnconfirmed(l);
 
   if (runData.run_type === 'sold_comps') {
     if (!eligibleSold(sightingObj)) {
@@ -406,6 +651,7 @@ export const rotateShareToken = async (runId: string): Promise<string> => {
 
 export interface AvailableSighting {
   sighting_id: string;
+  asset_id: string;
   make: string;
   model: string;
   trim: string | null;
@@ -422,6 +668,7 @@ export interface AvailableSighting {
   price_usd: number | null;
   lot_state: string | null;
   current_bid_usd: number | null;
+  sale_confirmed?: boolean | null;
 }
 
 export async function listAvailableSightings(
@@ -445,8 +692,10 @@ export async function listAvailableSightings(
       listed_currency,
       price_usd,
       lot_state,
+      sale_confirmed,
       raw_payload,
       assets (
+        id,
         make,
         model,
         trim,
@@ -468,6 +717,7 @@ export async function listAvailableSightings(
       const asset = Array.isArray(row.assets) ? row.assets[0] : (row.assets || {});
       return {
         sighting_id: row.id,
+        asset_id: asset.id || '',
         make: asset.make || 'Unknown',
         model: asset.model || 'Unknown',
         trim: asset.trim || null,
@@ -483,6 +733,7 @@ export async function listAvailableSightings(
         listed_currency: row.listed_currency ?? null,
         price_usd: row.price_usd ?? null,
         lot_state: row.lot_state ?? null,
+        sale_confirmed: row.sale_confirmed ?? null,
         current_bid_usd: row.raw_payload?.current_bid_usd ?? null,
       };
     });

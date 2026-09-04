@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Download, Plus, LayoutDashboard, List, Car, Upload, X, Globe, Loader2, LogOut } from 'lucide-react';
+import { Download, Plus, LayoutDashboard, List, Car, Upload, X, Globe, Loader2, LogOut, Users } from 'lucide-react';
 import { CarSale, Currency, CarStats, RecordType } from './types';
 import { getStoredSales, deleteSale, deleteSales, mergeSales, importSales, standardizeTrims, executeTrimCleanup, supabase, ingestSales, AppIngestPayload } from './services/storageService';
 import { fetchExchangeRates, convertToUSD, convertFromUSD } from './services/currencyService';
@@ -14,6 +14,7 @@ import LoginScreen from './components/LoginScreen';
 import ResearchRuns from './components/ResearchRuns';
 import ResearchRunDetail from './components/ResearchRunDetail';
 import PublicRunView from './components/PublicRunView';
+import { ClientsList } from './components/ClientsList';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -115,7 +116,7 @@ const MainDashboard: React.FC = () => {
   const { user, role, signOut } = useAuth();
   const [sales, setSales] = useState<CarSale[]>([]);
   const [salesLoading, setSalesLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail'>(role === 'superadmin' ? 'dashboard' : 'research');
+  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail' | 'clients'>(role === 'superadmin' ? 'dashboard' : 'research');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingSale, setEditingSale] = useState<CarSale | null>(null);
@@ -651,6 +652,9 @@ const MainDashboard: React.FC = () => {
             <button onClick={() => setView('research')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'research' || view === 'research-detail' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
               <Globe className="w-4 h-4" /> Research Runs
             </button>
+            <button onClick={() => setView('clients')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'clients' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+              <Users className="w-4 h-4" /> Clients
+            </button>
           </div>
           {role === 'superadmin' && (
             <button onClick={() => { setShowForm(!showForm); setEditingSale(null); }} className="flex items-center gap-2 bg-[#403f4c] text-[#F0EDDE] px-5 py-2.5 rounded-lg hover:bg-[#403f4c]/90 transition-all shadow-lg shadow-[#403f4c]/20 active:scale-95 border border-[#403f4c]">
@@ -700,6 +704,9 @@ const MainDashboard: React.FC = () => {
         )}
         {!salesLoading && view === 'research-detail' && activeRunId && (
           <ResearchRunDetail runId={activeRunId} onBack={() => { setView('research'); setActiveRunId(null); }} />
+        )}
+        {!salesLoading && view === 'clients' && (
+          <ClientsList />
         )}
       </main>
     </div>

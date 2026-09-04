@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { listRuns, createRun, listDeletedRuns, restoreRun, ResearchRun } from '../services/researchService';
+import { listRuns, createRun, listDeletedRuns, restoreRun, listClients, listClientBriefs, ResearchRun, Client, ClientBrief } from '../services/researchService';
 import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car } from 'lucide-react';
 
 interface ResearchRunsProps {
@@ -21,6 +21,12 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
   const [newClientName, setNewClientName] = useState('');
   const [newRunType, setNewRunType] = useState<'sold_comps' | 'active_listings' | 'mixed'>('active_listings');
   const [newNotes, setNewNotes] = useState('');
+  
+  const [clients, setClients] = useState<Client[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string>('');
+  const [briefs, setBriefs] = useState<ClientBrief[]>([]);
+  const [selectedBriefId, setSelectedBriefId] = useState<string>('');
+
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -31,19 +37,40 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
       return;
     }
 
-    const fetchRuns = async () => {
+    const fetchRunsAndClients = async () => {
       try {
-        const data = await listRuns(orgId);
-        setRuns(data);
+        const [runsData, clientsData] = await Promise.all([
+          listRuns(orgId),
+          listClients(orgId)
+        ]);
+        setRuns(runsData);
+        setClients(clientsData);
       } catch (err: any) {
-        setError(err.message || 'Failed to load research runs');
+        setError(err.message || 'Failed to load data');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchRuns();
+    fetchRunsAndClients();
   }, [orgId, orgLoading]);
+
+  useEffect(() => {
+    if (!orgId || !selectedClientId) {
+      setBriefs([]);
+      setSelectedBriefId('');
+      return;
+    }
+    const fetchBriefs = async () => {
+      try {
+        const b = await listClientBriefs(orgId, selectedClientId);
+        setBriefs(b);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchBriefs();
+  }, [orgId, selectedClientId]);
 
   const handleCreateRun = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,12 +82,16 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
         client_name: newClientName.trim(),
         run_type: newRunType,
         notes: newNotes.trim() || undefined,
+        client_id: selectedClientId || undefined,
+        client_brief_id: selectedBriefId || undefined
       });
       setRuns([newRun, ...runs]);
       setShowNewForm(false);
       setNewClientName('');
       setNewRunType('active_listings');
       setNewNotes('');
+      setSelectedClientId('');
+      setSelectedBriefId('');
       onOpenRun(newRun.id);
     } catch (err: any) {
       alert(err.message || 'Failed to create run');
@@ -150,6 +181,47 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#a58039]"
                 placeholder="e.g. Acme Corp"
               />
+              <p className="text-xs text-gray-500 mt-1">This is the display name on the share page.</p>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-100 pt-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Link to Client (Optional)</label>
+                <select
+                  value={selectedClientId}
+                  onChange={(e) => {
+                    setSelectedClientId(e.target.value);
+                    if (e.target.value) {
+                      const c = clients.find(c => c.id === e.target.value);
+                      if (c && !newClientName) setNewClientName(c.full_name);
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#a58039]"
+                >
+                  <option value="">-- No client link --</option>
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>{c.full_name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedClientId && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Link to Buying Brief (Optional)</label>
+                  <select
+                    value={selectedBriefId}
+                    onChange={(e) => setSelectedBriefId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#a58039]"
+                  >
+                    <option value="">-- No brief link --</option>
+                    {briefs.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.year_min || 'Any'}-{b.year_max || 'Any'} {b.make || 'Any Make'} {b.model || 'Any Model'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Run Type *</label>
