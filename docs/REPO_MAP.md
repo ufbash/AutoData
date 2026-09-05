@@ -340,6 +340,12 @@ contains the inline creation form — there is no separate creation-form compone
 inside `src/components/ResearchRunDetail.tsx` (the per-run detail page reached by clicking a
 run card) is included below.
 
+**Row count: 31, counted directly from the table below (5 Sep 2026).** A prior verbal summary
+of this section stated 26 — that number was never written into this file, only reported in
+conversation, and was wrong. **The table itself is authoritative; do not trust a spoken or
+remembered count over it** — this is the second undercount found in this document (the
+spec-rule `if` blocks in §B.6 were miscounted as 8 when the line-by-line list there has 9).
+
 | Feature | What it does | File:Line |
 |---|---|---|
 | Loading spinner | Shown while org/runs are loading | `ResearchRuns.tsx:132-138` |

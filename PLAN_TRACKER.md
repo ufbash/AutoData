@@ -158,20 +158,22 @@ pre-existing `.delete()` calls, none touching `clients`/`client_briefs`/`sightin
 this rule cares about). No migration, no new columns — flags derived at read time per
 `PROJECT_CHARTER.md` §5.8.
 
-**Coverage limitation (recorded 4 Sep 2026, not a defect — the rule is right, the data it
-needs is not yet arriving on active lots):**
-1. `auction_history` is populated from the bid.cars Sales History panel only. A vehicle
-   captured solely from Copart has no history rows. Rule 3 renders this honestly as "not
-   checkable" — but it means the block cannot fire on Copart-only captures at all.
+**Coverage limitation — permanent, not pending B2 (updated 4 Sep 2026 after B2 was retired,
+see B2 below — not a defect in the rule itself):**
+1. `auction_history` is populated from the bid.cars Sales History panel only, **and stays
+   that way permanently** — B2 (Copart Sales History) is retired as not buildable (Copart
+   exposes no such panel). A vehicle captured solely from Copart has no history rows and
+   never will via this mechanism. Rule 3 renders this honestly as "not checkable" — the block
+   cannot fire on Copart-only captures, permanently, not as a temporary gap.
 2. Every asset currently holding auction history has `lot_state = 'finished'` in its
    sightings — none are `'active'`. Rule 1 only applies to active listings and the active
    portion of mixed runs. So **on real data as it stands today, the hard block cannot fire.**
    Demonstrating Checkpoint 3 case 1 required temporarily flipping the Tesla's own
    `lot_state` to `'active'` and reverting it afterward (see evidence above).
 
-**Consequence: A2's real-world catch rate is currently zero.** B2 (Copart Sales History) is
-therefore the next build, sequenced ahead of P1 (client-hub restructure) — see `MASTER_PLAN.md`
-Part XII, corrected to match.
+**Consequence: A2's real-world catch rate is currently zero, and its coverage stays
+bid.cars-only permanently** — not "until B2 lands," since B2 does not exist. With B2 retired,
+**P1 (client-hub restructure) is next** — see `MASTER_PLAN.md` Part XII, corrected to match.
 
 **Odometer-rollback rule (Rule 2), verified 4 Sep 2026 via a throwaway in-memory script
 against the real `deriveAuctionHistoryFlags` function** (no fabricated database row): fires
@@ -192,14 +194,48 @@ Dropdown of active runs, replacing the current typed UUID.
 
 ## 3. Structure and navigation
 
-### 3.1 Client-hub restructure — **NOT STARTED**
-Per `DECISIONS.md` §8. Client page becomes the hub (details, briefs, their runs, a
-"New research run" button pre-filling client + brief). All-runs page stays as a cross-client
-index. **`ResearchRunDetail` is not moved.** No router in this step.
+### 3.1 Client-hub restructure (P1) — **DONE** (5 Sep 2026)
+Per `DECISIONS.md` §8. Client page is now the hub: details, briefs, and — added this cycle —
+**that client's research runs**, listed with status, run type, listing count, created date,
+and sharing status, matching the all-runs card's informative fields. A **"New Research Run"**
+button on the client page opens the same creation form pre-filled with that client (name +
+`client_id`) and the brief selector already scoped to their briefs.
 
-Depends on 1.3 (audit) landing first.
+**`ResearchRunDetail.tsx` was not touched — `git diff` confirms zero lines changed.** Both the
+client-page route and the all-runs-page route call the identical `onOpenRun` callback into
+the identical component (`App.tsx`); verified by opening the same run from both places.
+The all-runs page is unchanged as a cross-client index — worked through `docs/REPO_MAP.md`
+§C's feature inventory line by line (the table there has **31 rows**, not the 26 the
+document's own prose claims — counted directly rather than trusting either number). All 31
+are still present; three were intentionally changed, not lost, all required by this same
+build: the client link went from optional to required (Phase 1 below), the brief selector is
+now always rendered but disabled until a client is chosen rather than hidden entirely, and
+the Create button's disabled condition was extended to require a client. No router was added
+— deferred to Phase D per `DECISIONS.md` 8.4, unchanged.
 
-**Open first:** `DECISIONS.md` 8.5 — may a run exist without a client?
+**Placeholder client and the client requirement (`DECISIONS.md` 8.5, LOCKED):**
+- `Internal / Market Research` created **through the app UI** (not SQL) — id
+  `571748aa-afe0-4eb1-806a-004aef9012f7`, `org_id` confirmed correct
+  (`a93378ea-33ef-4c75-97c4-44c37f2e9002`). `created_by` came back `NULL` — a pre-existing gap
+  in `createClient()` (`researchService.ts:186-195` never sets it), not caused by this task
+  and not fixed here.
+- All 14 client-less runs repointed to it (SQL `UPDATE`, confirmed with Bashir first):
+  `Bm`, `Nafisah Bashir`, `Test Market`, `Blessing`, `Mrs Mabruka Bashir`, `Mr Ademola kadiri`
+  (lowercase-k duplicate), `Mr Ademola Kadiri`, `Tesla`, `25-26 Camry`, `Hail Camry`, and four
+  `ZZZ TEST` artifacts. Verified one repointed run (`Tesla`, `981b0f63…`) still renders with
+  its listings intact.
+- The client field is now **required** on run creation — enforced in the form (native
+  `required` + disabled submit) and the service call (`handleCreateRun` refuses and alerts if
+  no client is selected), **not** a database constraint — no migration, no `NOT NULL` added.
+- **Brief-repointing bug fixed in the same change:** the client-brief selector previously did
+  not clear a stale brief selection when the client dropdown changed mid-form — switching
+  clients kept the old client's brief id in state even though it no longer appeared as a
+  selectable option, which would have silently saved a run with a `client_brief_id` belonging
+  to a different client than its `client_id`. Fixed in `ResearchRuns.tsx`'s brief-fetch effect
+  (unconditional `setSelectedBriefId('')` on every client change). Verified: switching from
+  Khalifah (brief: Honda Civic) to Mr Ademola Kadiri correctly reset the brief selector and
+  repopulated with only his own brief; the resulting run saved with matching `client_id` and
+  `client_brief_id`.
 
 ---
 
@@ -245,10 +281,24 @@ Must build **after** 1.1/1.2 so it writes into a complete, editable brief.
 Same schema; image permutation `[2,1,4,3]`. Present in the original Camry sheet; the one
 source still missing.
 
-### B2. Copart Sales History — **NOT STARTED**
-Parity with bid.cars, if exposed. **Currently the reason every Copart sighting carries
-"Unconfirmed sale" permanently** — there is no history to derive `sale_confirmed` from.
-Raises the value of A1 considerably.
+### B2. Copart Sales History — **RETIRED — NOT BUILDABLE** (4 Sep 2026)
+Would have given parity with bid.cars, if exposed. **Copart does not expose the data.**
+DOM recon on a live Copart lot (4 Sep 2026, `https://www.copart.com/lot/49917586/...`) found:
+three `<table>` elements, all vehicle specification (option codes; style/model/trim; engine
+specs) — none carrying auction dates, bids, or sale outcomes; the only "history-ish" heading
+matches were this lot's own live "Current bid$0USD" and a footer navigation link labelled
+"Auctions"; the only date-related element was a label for this lot's own upcoming "Sale
+date:", not a record of past appearances; no sold/not-sold/final-bid text anywhere on the
+page. One page is thin evidence for a permanent claim on its own, but it directly confirms
+the standing understanding that Copart has no such panel, and no counter-evidence has been
+supplied.
+
+**This is retired, not done and not merely unstarted** — those would mean opposite things to
+a future reader. The reason every Copart sighting carries "Unconfirmed sale" permanently is
+therefore Copart's own data model, not a gap awaiting this build. See `SCHEMA.md` §7 and A2
+above, both updated to match. If a different Copart page type (e.g. a **sold**/archived lot)
+is later shown to expose something this recon didn't reach, that would need re-opening this
+item with new evidence — not assumed from this single page.
 
 ---
 
@@ -369,3 +419,4 @@ as evidence (public link renders the fix live).
 | 17 | A2 rule base: 74 assets / 110 `auction_history` rows (dated 4 Sep 2026) | Useful to compare against later as B2 (Copart Sales History) grows the base |
 | 18 | `pluto.bid.car` is the working image domain; `images.bid.cars` fails CORS from page context (dated 4 Sep 2026) | Do not flip the dedup preference in `content-bidcars.js` back to `images.bid.cars` — confirmed live, see `docs/SOLVED.md` §1 |
 | 19 | Two `content-bidcars.js` defects fixed (dated 4 Sep 2026) | (a) `'No information'` Sales History status was missing from the recognised-status regex, causing a false console warning on every archived capture carrying it — added, stored raw and unmapped. (b) `isBidcarsLotPage()` was a single synchronous DOM check with no readiness wait, intermittently reporting a real lot page as unsupported — replaced with a short retry-until-found-or-timeout on the DOM-dependent part only, no fixed delay, non-lot pages still rejected instantly on URL shape alone |
+| 20 | `createClient()` never sets `created_by` (`researchService.ts:186-195`, dated 5 Sep 2026) | Every client row has a null creator, including the placeholder "Internal / Market Research" client created 5 Sep 2026. A one-line fix, deliberately not made here — belongs with a scoped audit-fields pass (`created_by`/`updated_by` across all tables), not bolted onto a navigation prompt |

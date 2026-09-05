@@ -176,11 +176,15 @@ Toyota Yaris ran **16 times over two months and never sold**, bids $875–$1,650
 "Not sold" — yet the page displayed "Final bid $1,100 USD". Sold comps built naively on that
 field are polluted with rejected bids.
 
-**Coverage gap:** the Sales History scan exists for bid.cars only. **Copart has none**, so
-every Copart sighting has `sale_confirmed = null` permanently. This is honest (we genuinely
-cannot confirm), but it means Copart cars always carry the "Unconfirmed sale" badge until
-B2 (Copart Sales History) is built. Captures made before the scan existed (pre-03 Aug 2026)
-are also permanently null unless re-captured.
+**Coverage gap — permanent, not pending.** The Sales History scan exists for bid.cars only.
+**Copart has none, and B2 (Copart Sales History) is retired as not buildable** — DOM recon on
+a live Copart lot (4 Sep 2026, lot 49917586) found no prior-sales or auction-history panel of
+any kind (see `PLAN_TRACKER.md` B2 for the recon evidence). Every Copart sighting therefore
+has `sale_confirmed = null` **permanently**, by design of the source, not as a temporary gap.
+This is honest (we genuinely cannot confirm), but the "Unconfirmed sale" badge on Copart cars
+is now a permanent property of that source, not a state pending a future build. Captures made
+before the bid.cars scan existed (pre-03 Aug 2026) are also permanently null unless
+re-captured.
 
 ---
 

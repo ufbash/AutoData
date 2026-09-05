@@ -550,11 +550,11 @@ NOW ──▶ Q1 brief form fields
         Q4 sold-comps brief warning   │
                                       │
 NEXT ─▶ A2 derived flags ★ fraud gap  │
-        B2 Copart Sales History ◀──────── (promoted; A2's hard block needs its coverage)
+        B2 Copart Sales History — RETIRED, NOT BUILDABLE (4 Sep 2026 recon; Copart exposes no such panel)
         A1b population coherence      │
         A3 extension run-picker       │
                                       │
-THEN ─▶ P1 client-hub restructure ◀───┘ (depends on Q3)
+NOW  ─▶ P1 client-hub restructure ◀───┘ (depends on Q3; B2 retired, so P1 is next — no longer waiting behind it)
         N1 auction alerts
         N2 client intake form ◀──────── (depends on Q1, Q2)
         N3 approval trail
