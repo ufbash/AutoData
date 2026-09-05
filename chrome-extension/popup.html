@@ -3,17 +3,73 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { font-family: -apple-system, sans-serif; width: 300px; padding: 15px; }
-    button { background: #333; color: #fff; border: 0; padding: 10px; width: 100%; border-radius: 4px; cursor: pointer; }
-    input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 10px; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", sans-serif; width: 340px; padding: 14px; margin: 0; color: #1a1a1a; }
+    h3 { margin: 0 0 10px; font-size: 15px; }
+    button { background: #222; color: #fff; border: 0; padding: 10px; width: 100%; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    button:hover { background: #000; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 6px; border: 1px solid #ddd; border-radius: 6px; }
     #status { margin-top: 10px; font-size: 12px; color: #666; }
-    #options-link { display: block; margin-top: 15px; font-size: 11px; text-align: center; color: #0066cc; text-decoration: none; cursor: pointer;}
+    #options-link { display: block; margin-top: 14px; font-size: 11px; text-align: center; color: #0066cc; text-decoration: none; cursor: pointer; }
+
+    /* Active session view */
+    #active_view { background: #eef6ee; border: 1px solid #c9e2c9; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    #active_run_client { font-weight: 700; font-size: 14px; }
+    #active_run_sub { font-size: 12px; color: #5a7a5a; margin: 2px 0 10px; }
+    #end-session-btn { background: transparent; color: #666; border: 1px solid #bbb; padding: 6px 10px; font-size: 12px; width: auto; }
+    #end-session-btn:hover { background: #f5f5f5; }
+
+    /* Picker view */
+    #run_fetch_status { font-size: 12px; color: #999; padding: 8px 0; }
+    #run_search { margin-bottom: 8px; }
+    #no_run_card { display: flex; align-items: center; padding: 9px 10px; border: 1px solid #eee; border-radius: 7px; margin-bottom: 8px; cursor: pointer; font-size: 12px; color: #888; }
+    #no_run_card:hover { background: #f7f7f7; border-color: #ddd; }
+    #no_results { font-size: 12px; color: #999; padding: 10px 0; text-align: center; }
+
+    .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #999; margin: 10px 0 5px; }
+    .section-label:first-of-type { margin-top: 0; }
+    .run-list { max-height: 260px; overflow-y: auto; margin-bottom: 8px; }
+    .run-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid #eee; border-radius: 7px; margin-bottom: 6px; cursor: pointer; }
+    .run-card:hover { background: #f5f8ff; border-color: #cddcf7; }
+    .run-card:active { background: #eaf1fd; }
+    .run-card-main { min-width: 0; }
+    .run-card-client { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-card-label { font-size: 11px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-card-date { font-size: 10px; color: #aaa; white-space: nowrap; flex-shrink: 0; margin-top: 1px; }
+
+    .badge { display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; padding: 2px 6px; border-radius: 10px; margin-top: 3px; }
+    .badge-active_listings { background: #dceafd; color: #1a5a9e; }
+    .badge-sold_comps { background: #dcf5ea; color: #17734a; }
+    .badge-mixed { background: #ede4fb; color: #5a3a99; }
+
+    #manual_toggle { display: block; font-size: 11px; color: #888; text-align: center; margin-top: 4px; cursor: pointer; text-decoration: underline; }
+    #manual_entry { display: none; margin-top: 8px; }
+    #manual_use_btn { background: #555; }
   </style>
 </head>
 <body>
   <h3>AutoData Research</h3>
-  <input type="text" id="run_id" placeholder="Optional Research Run ID">
-  <button id="capture-btn">Capture This Lot</button>
+
+  <div id="active_view" style="display:none">
+    <div id="active_run_client"></div>
+    <div id="active_run_sub"></div>
+    <button id="end-session-btn">End run</button>
+  </div>
+
+  <div id="picker_view">
+    <div id="run_fetch_status">Loading runs...</div>
+    <input type="text" id="run_search" placeholder="Search client or run..." style="display:none">
+    <div id="no_run_card">— Capture without linking to a run —</div>
+    <div id="run_list" class="run-list"></div>
+    <div id="no_results" style="display:none">No matching runs</div>
+    <div id="manual_toggle">Enter run ID manually</div>
+    <div id="manual_entry">
+      <input type="text" id="run_id_manual" placeholder="Run ID">
+      <button id="manual_use_btn">Use this run</button>
+    </div>
+  </div>
+
+  <button id="capture-btn" style="display:none">Capture this lot</button>
   <div id="status"></div>
   <a id="options-link">Open Options</a>
   <script src="popup.js"></script>

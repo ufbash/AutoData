@@ -12,3 +12,6 @@ verify_jwt = false
 
 [functions.upload-images]
 verify_jwt = false
+
+[functions.list-active-runs]
+verify_jwt = false

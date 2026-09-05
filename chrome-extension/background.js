@@ -1,4 +1,28 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "fetchActiveRuns") {
+    chrome.storage.local.get(["supabaseUrl", "researchSecret"], async (result) => {
+      if (!result.supabaseUrl || !result.researchSecret) {
+        sendResponse({ success: false, error: "Settings not configured. Check Options." });
+        return;
+      }
+      try {
+        const url = `${result.supabaseUrl}/functions/v1/list-active-runs`;
+        const res = await fetch(url, {
+          method: "GET",
+          headers: { "X-Research-Secret": result.researchSecret }
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Edge Function returned an error");
+        }
+        sendResponse({ success: true, runs: data.runs || [] });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message || String(e) });
+      }
+    });
+    return true; // Keep message channel open for async fetch
+  }
+
   if (request.action === "executeCaptureToSupabase") {
     chrome.storage.local.get(["supabaseUrl", "researchSecret"], async (result) => {
       if (!result.supabaseUrl || !result.researchSecret) {
