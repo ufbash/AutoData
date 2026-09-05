@@ -118,6 +118,7 @@ const MainDashboard: React.FC = () => {
   const [salesLoading, setSalesLoading] = useState(true);
   const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail' | 'clients'>(role === 'superadmin' ? 'dashboard' : 'research');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [prefillClientId, setPrefillClientId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingSale, setEditingSale] = useState<CarSale | null>(null);
   const [displayCurrency, setDisplayCurrency] = useState<Currency>(Currency.NGN);
@@ -700,13 +701,20 @@ const MainDashboard: React.FC = () => {
           }} currentRates={exchangeRates} />
         )}
         {!salesLoading && view === 'research' && (
-          <ResearchRuns onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); }} />
+          <ResearchRuns
+            onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); }}
+            initialClientId={prefillClientId}
+            onConsumedInitialClient={() => setPrefillClientId(null)}
+          />
         )}
         {!salesLoading && view === 'research-detail' && activeRunId && (
           <ResearchRunDetail runId={activeRunId} onBack={() => { setView('research'); setActiveRunId(null); }} />
         )}
         {!salesLoading && view === 'clients' && (
-          <ClientsList />
+          <ClientsList
+            onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); }}
+            onNewRunForClient={(clientId) => { setPrefillClientId(clientId); setView('research'); }}
+          />
         )}
       </main>
     </div>

@@ -5,9 +5,11 @@ import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car } from 'lucid
 
 interface ResearchRunsProps {
   onOpenRun: (runId: string) => void;
+  initialClientId?: string | null;
+  onConsumedInitialClient?: () => void;
 }
 
-const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
+const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId, onConsumedInitialClient }) => {
   const { orgId, orgLoading, role } = useAuth();
   const [runs, setRuns] = useState<ResearchRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,9 +58,12 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
   }, [orgId, orgLoading]);
 
   useEffect(() => {
+    // Always clear the brief selection on any client change - a brief carries a client_id of
+    // its own, and a stale selection from a previously-selected client must never survive a
+    // client switch (it would silently apply a different client's spec rules to this run).
+    setSelectedBriefId('');
     if (!orgId || !selectedClientId) {
       setBriefs([]);
-      setSelectedBriefId('');
       return;
     }
     const fetchBriefs = async () => {
@@ -72,9 +77,24 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
     fetchBriefs();
   }, [orgId, selectedClientId]);
 
+  useEffect(() => {
+    if (!initialClientId || clients.length === 0) return;
+    const c = clients.find(c => c.id === initialClientId);
+    if (c) {
+      setSelectedClientId(c.id);
+      setNewClientName(c.full_name);
+      setShowNewForm(true);
+    }
+    onConsumedInitialClient?.();
+  }, [initialClientId, clients]);
+
   const handleCreateRun = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!orgId || !newClientName.trim()) return;
+    if (!selectedClientId) {
+      alert('Please select a client. Every research run must belong to a client — use "Internal / Market Research" for internal work.');
+      return;
+    }
 
     setCreating(true);
     try {
@@ -82,7 +102,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
         client_name: newClientName.trim(),
         run_type: newRunType,
         notes: newNotes.trim() || undefined,
-        client_id: selectedClientId || undefined,
+        client_id: selectedClientId,
         client_brief_id: selectedBriefId || undefined
       });
       setRuns([newRun, ...runs]);
@@ -186,8 +206,9 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-100 pt-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Link to Client (Optional)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Link to Client *</label>
                 <select
+                  required
                   value={selectedClientId}
                   onChange={(e) => {
                     setSelectedClientId(e.target.value);
@@ -198,30 +219,29 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#a58039]"
                 >
-                  <option value="">-- No client link --</option>
+                  <option value="">-- Select a client --</option>
                   {clients.map(c => (
                     <option key={c.id} value={c.id}>{c.full_name}</option>
                   ))}
                 </select>
               </div>
 
-              {selectedClientId && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Link to Buying Brief (Optional)</label>
-                  <select
-                    value={selectedBriefId}
-                    onChange={(e) => setSelectedBriefId(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#a58039]"
-                  >
-                    <option value="">-- No brief link --</option>
-                    {briefs.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.year_min || 'Any'}-{b.year_max || 'Any'} {b.make || 'Any Make'} {b.model || 'Any Model'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Link to Buying Brief (Optional)</label>
+                <select
+                  value={selectedBriefId}
+                  onChange={(e) => setSelectedBriefId(e.target.value)}
+                  disabled={!selectedClientId}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#a58039] disabled:bg-gray-100 disabled:text-gray-400"
+                >
+                  <option value="">{selectedClientId ? '-- No brief link --' : '-- Select a client first --'}</option>
+                  {briefs.map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.year_min || 'Any'}-{b.year_max || 'Any'} {b.make || 'Any Make'} {b.model || 'Any Model'}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Run Type *</label>
@@ -269,7 +289,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun }) => {
               </button>
               <button
                 type="submit"
-                disabled={creating || !newClientName.trim()}
+                disabled={creating || !newClientName.trim() || !selectedClientId}
                 className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white rounded-md font-bold hover:bg-[#2d2c35] transition-colors disabled:opacity-50"
               >
                 {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Create Run'}

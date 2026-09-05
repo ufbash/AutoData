@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief } from '../services/researchService';
-import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw } from 'lucide-react';
+import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car } from 'lucide-react';
 
 // --- Brief Form Component ---
 const BriefForm = ({ 
@@ -205,7 +205,12 @@ const ClientEditForm = ({
   );
 };
 
-export const ClientsList: React.FC = () => {
+interface ClientsListProps {
+  onOpenRun?: (runId: string) => void;
+  onNewRunForClient?: (clientId: string) => void;
+}
+
+export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunForClient }) => {
   const { orgId, orgLoading, role, user } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -785,6 +790,56 @@ export const ClientsList: React.FC = () => {
                   ))}
                 </div>
               )}
+
+              <div className="mt-8 pt-6 border-t border-gray-200">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-bold text-gray-800">Research Runs</h3>
+                  <button
+                    onClick={() => onNewRunForClient?.(selectedClient.id)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-[#403f4c] text-white text-sm rounded-lg font-bold hover:bg-[#2d2c35] transition-colors"
+                  >
+                    <Plus className="w-4 h-4" /> New Research Run
+                  </button>
+                </div>
+                {(() => {
+                  const clientRuns = allRuns.filter(r => r.client_id === selectedClient.id);
+                  if (clientRuns.length === 0) {
+                    return <div className="text-center text-gray-500 py-8 text-sm">No research runs yet for this client.</div>;
+                  }
+                  return (
+                    <div className="space-y-3">
+                      {clientRuns.map(r => (
+                        <div
+                          key={r.id}
+                          onClick={() => onOpenRun?.(r.id)}
+                          className="flex justify-between items-center p-4 bg-white border border-gray-200 hover:border-[#a58039] rounded-lg cursor-pointer transition-colors group"
+                        >
+                          <div>
+                            <div className="font-bold text-[#403f4c] group-hover:text-[#a58039] transition-colors">{r.client_name}</div>
+                            <div className="text-xs text-gray-500 mt-1 flex items-center gap-3">
+                              <span>{r.run_type === 'sold_comps' ? 'Market Research' : r.run_type === 'active_listings' ? 'Client Options' : 'Mixed'}</span>
+                              <span className="flex items-center gap-1"><Car className="w-3 h-3" /> {r.listing_count || 0}</span>
+                              <span>{new Date(r.created_at).toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className={`text-xs px-2 py-1 rounded-full font-medium whitespace-nowrap ${
+                              r.status === 'active' ? 'bg-green-100 text-green-700' :
+                              r.status === 'completed' ? 'bg-blue-100 text-blue-700' :
+                              r.status === 'archived' ? 'bg-gray-100 text-gray-700' :
+                              'bg-yellow-100 text-yellow-700'
+                            }`}>
+                              {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
+                            </span>
+                            <span className={`w-2 h-2 rounded-full ${r.share_enabled ? 'bg-green-500' : 'bg-gray-300'}`} title={`Sharing ${r.share_enabled ? 'On' : 'Off'}`} />
+                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#a58039] transition-colors" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           </>
         )}
