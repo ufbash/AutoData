@@ -778,3 +778,111 @@ once for reuse — `app-ingest/index.ts:86-111`'s logic is not factored into a s
   returning `null` for an unparseable string (topic 4) — here the extension knows in advance,
   from `lot_state`, that bid.cars simply does not expose a sale date on finished lots, and
   says so with a dedicated flag rather than leaving it to look like a parse failure.
+
+---
+
+## 10. The `research_run_listings` duplicate-key bug
+
+**Symptom:** Re-capturing a lot already attached to a given research run threw `Server Error:
+duplicate key value violates unique constraint "research_run_listings_run_id_sighting_id_key"`
+instead of succeeding. Surfaced through the extension's new session-based run picker (topic
+11) — once a run stays selected across many captures, re-capturing the same lot into the same
+run (e.g. to refresh its data) became a routine action rather than a rare edge case.
+
+**Cause:** `research-capture/index.ts`'s optional run-attachment step did a plain `.insert()`
+into `research_run_listings` with no conflict handling:
+```ts
+const { data: runListing, error: rlErr } = await supabase
+  .from('research_run_listings')
+  .insert({ org_id: defaultOrgId, run_id: payload.research_run_id, sighting_id: newSightingId, position: maxPos + 1 })
+  .select('id')
+  .single();
+if (rlErr) throw rlErr;
+```
+`research_run_listings` has a `unique(run_id, sighting_id)` constraint
+(`002_create_assets_sightings.sql`). Any second capture of the same lot into the same run hit
+that constraint and the raw Postgres error propagated straight to the client as a 500.
+
+**Fix:** Check for an existing `(run_id, sighting_id)` row first and reuse its `id` rather than
+re-inserting; only compute a new `position` and insert when no row exists yet:
+```ts
+const { data: existing } = await supabase
+  .from('research_run_listings')
+  .select('id')
+  .eq('run_id', payload.research_run_id)
+  .eq('sighting_id', newSightingId)
+  .maybeSingle();
+
+if (existing) {
+  runListingId = existing.id;
+} else {
+  // existing get-max-position + insert, unchanged
+}
+```
+This required a `research-capture` redeploy — editing the function source alone has no effect
+in production until deployed (`AGENTS.md` §4.4).
+
+**Why this way:** A re-capture of a lot already in a run is not an error condition; it is
+either a no-op (nothing changed) or a data refresh, and either way should succeed silently
+rather than surface a constraint violation the client has no way to act on. Checking first
+avoids the constraint entirely rather than catching the resulting exception.
+
+**How to extend it:** Any future write path that can attach the same `(run_id, sighting_id)`
+pair more than once must follow the same check-first pattern, or catch Postgres error code
+`23505` on this specific constraint and treat it as success. There is a small race window
+between the `SELECT` and the `INSERT` (not atomic) — acceptable here because captures are
+single-secret, effectively serialized per user action, not because the race is impossible.
+
+---
+
+## 11. The extension session model (run picker)
+
+**Symptom/context:** Before this build, the Chrome extension required either a typed run UUID
+or (briefly, mid-build) a dropdown re-selected before every single capture. Re-selecting a run
+for every lot on a multi-lot research session was the exact friction the picker redesign was
+built to remove.
+
+**Solution — where the state lives:** Entirely in `chrome.storage.local`, read and written from
+`chrome-extension/popup.js`. Four keys form the session:
+- `sessionActive` (boolean) — whether a session is currently considered live.
+- `activeRunId` (string or `null`) — the run to attach captures to (`null` is a valid, deliberate
+  choice meaning "capture without linking," not "no session").
+- `activeRunClient` / `activeRunSub` — display labels only, shown in the popup's active-session
+  view; not read by any capture logic.
+- `activeRunLastActivity` (epoch ms) — updated on every successful capture.
+
+**How it is set:** `selectRunAndCapture()` (`popup.js`) fires on a run-card click (or the "no
+run" card, or manual entry). It performs the capture *and*, only on success, writes all four
+keys together — picking a run and starting the session are the same action, not two steps.
+
+**How it is cleared:** Two paths, both intentional:
+1. **Explicit** — the "End run" button clears `sessionActive`/`activeRunId`/`activeRunClient`/
+   `activeRunSub` directly and re-renders the picker.
+2. **Idle expiry** — `initSessionState()` runs on every popup open and computes
+   `Date.now() - activeRunLastActivity`. If that exceeds `SESSION_IDLE_MS` (10 minutes) *or*
+   `sessionActive` is falsy, the session is treated as not live: if it had been marked active,
+   the stale keys are cleared back to `false`/`null`, and the picker is shown. Verified by
+   direct comparison-function testing (Phase 1 of the prompt that added this entry) — the
+   boundary at exactly 10 minutes is treated as expired (`<` not `<=`), and a missing/`undefined`
+   timestamp safely resolves to "not live" rather than defaulting to "just active."
+
+**The failure mode to name explicitly: a capture landing in a stale session the user believed
+had ended.** Expiry is only ever *evaluated* when the popup is opened — there is no background
+timer independent of that. If a user ends work on a run, does not click "End run," and reopens
+the popup within 10 minutes (even on an unrelated tab, even much later the same sitting), the
+session is still live and the next capture silently attaches to the old run. This is the
+scenario to check first when a capture turns up in a run nobody meant to select: look at
+`activeRunLastActivity` versus the capture's own timestamp before assuming the extension
+mis-selected anything — it more likely never re-evaluated because the popup was reopened inside
+the 10-minute window.
+
+**Why this way:** A Chrome extension popup is not a persistent process — it is torn down each
+time it closes, so there is nowhere to run a live countdown. `chrome.storage.local` plus a
+check-on-open is the only mechanism available without a background service-worker timer
+(`chrome.alarms`), which this build does not use.
+
+**How to extend it:** Any new code path that captures (a future bulk-capture button, say) must
+read the same four keys and go through the same is-it-live check before trusting `activeRunId`
+— duplicating the check inline rather than centralizing it in one helper is the current state
+of the code and a risk if a second capture path is ever added without also duplicating the
+expiry logic correctly.

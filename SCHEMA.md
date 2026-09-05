@@ -307,6 +307,17 @@ trusted from the client.
 
 Getting `verify_jwt` wrong surfaces as a CORS error in the browser. See `AGENTS.md` §4.3.
 
+**The extension's session state — not server-side, but shapes what `research-capture` receives.**
+`list-active-runs` only ever returns a pick-list; which run a given capture attaches to is
+decided entirely client-side, in the extension's `chrome.storage.local`
+(`sessionActive`/`activeRunId`/`activeRunClient`/`activeRunSub`/`activeRunLastActivity`), not by
+anything server-side. Once a run is picked, every later capture across tabs reuses it silently
+for up to 10 minutes of inactivity, or until "End run" is clicked — `research_run_id` on the
+`research-capture` payload is simply whatever the popup's session state currently holds at
+capture time. A capture landing in an unexpected run is a client-side session question, not a
+server-side one; see `docs/SOLVED.md` topic 11 for the full mechanism and its stale-session
+failure mode.
+
 **`public-run` carries a strict field allow-list.** `sale_date` was added 28 Aug 2026 to
 enable the public countdown. Any new public field requires an allow-list edit **and** a
 redeploy.
