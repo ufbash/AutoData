@@ -346,29 +346,43 @@ serve(async (req: Request) => {
     // Optional research_run insertion
     let runListingId = undefined;
     if (payload.research_run_id) {
-       // get max position
-       const { data: listings, error: lsError } = await supabase
+       // A re-capture of the same lot into the same run should not create a duplicate
+       // attachment or reorder it - (run_id, sighting_id) is unique. Check first.
+       const { data: existing, error: existErr } = await supabase
          .from('research_run_listings')
-         .select('position')
-         .eq('run_id', payload.research_run_id)
-         .order('position', { ascending: false })
-         .limit(1);
-       if (lsError) throw lsError;
-
-       const maxPos = (listings && listings.length > 0) ? listings[0].position : 0;
-
-       const { data: runListing, error: rlErr } = await supabase
-         .from('research_run_listings')
-         .insert({
-            org_id: defaultOrgId,
-            run_id: payload.research_run_id,
-            sighting_id: newSightingId,
-            position: maxPos + 1
-         })
          .select('id')
-         .single();
-       if (rlErr) throw rlErr;
-       runListingId = runListing.id;
+         .eq('run_id', payload.research_run_id)
+         .eq('sighting_id', newSightingId)
+         .maybeSingle();
+       if (existErr) throw existErr;
+
+       if (existing) {
+         runListingId = existing.id;
+       } else {
+         // get max position
+         const { data: listings, error: lsError } = await supabase
+           .from('research_run_listings')
+           .select('position')
+           .eq('run_id', payload.research_run_id)
+           .order('position', { ascending: false })
+           .limit(1);
+         if (lsError) throw lsError;
+
+         const maxPos = (listings && listings.length > 0) ? listings[0].position : 0;
+
+         const { data: runListing, error: rlErr } = await supabase
+           .from('research_run_listings')
+           .insert({
+              org_id: defaultOrgId,
+              run_id: payload.research_run_id,
+              sighting_id: newSightingId,
+              position: maxPos + 1
+           })
+           .select('id')
+           .single();
+         if (rlErr) throw rlErr;
+         runListingId = runListing.id;
+       }
     }
 
     return new Response(JSON.stringify({
