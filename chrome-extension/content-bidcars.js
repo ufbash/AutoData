@@ -134,7 +134,11 @@ function extractSalesHistory() {
 
     if (status) {
         const s = status.toLowerCase();
-        if (!/(not sold|no sale|withdrawn|cancell?ed|pending|sold|sale)/.test(s)) {
+        // 'no information' is a real, valid status (16 live rows) - it means unknown, not an
+        // anomaly, and the A2 derivation (auctionHistoryFlags.ts) deliberately treats it as
+        // unknown rather than counting it toward previously_unsold (AGENTS.md 6: absence is
+        // not violation). Stored raw either way - this only silences the false warning.
+        if (!/(not sold|no sale|no information|withdrawn|cancell?ed|pending|sold|sale)/.test(s)) {
             console.warn("[AutoData] Unrecognised Sales History status:", status);
         }
     }
@@ -157,6 +161,22 @@ function isBidcarsLotPage() {
     const isLotUrl = /^\/en\/lot\//.test(location.pathname);
     const bodyText = document.body.innerText || '';
     return isLotUrl && /[A-HJ-NPR-Z0-9]{17}/.test(bodyText) && bodyText.includes('Sale Document');
+}
+
+// Detection-only retry, not a fixed delay. The URL path is available immediately, but the
+// VIN string and "Sale Document" are DOM text that may not have rendered yet on a freshly
+// loaded page - checking once at a fixed moment is the same defect class as the image-timing
+// bug. Checks immediately first (zero delay if already rendered), then polls briefly only if
+// the URL genuinely looks like a lot page. Non-lot pages (homepage, search results) fail the
+// URL check and return false with no retry at all. This does not change what
+// captureCurrentLot() extracts - detection only.
+async function isBidcarsLotPageWithRetry(maxAttempts = 8, intervalMs = 250) {
+    if (!/^\/en\/lot\//.test(location.pathname)) return false;
+    for (let i = 0; i < maxAttempts; i++) {
+        if (isBidcarsLotPage()) return true;
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    return false;
 }
 
 function normalizeMakeModel(make, model) {
@@ -333,6 +353,24 @@ function captureCurrentLot() {
         listed_price = extractFinalSalePrice(headText);
     }
 
+    // Active-lot date: the live page's own displayed date/time has no year
+    // ("Friday, 4 September, 14:30"), so parseAuctionDate() correctly rejects it rather
+    // than guessing a year (AGENTS.md 4.12). Instead read the machine-readable countdown
+    // offset from #time-left and compute an absolute instant from it. Per the element's own
+    // tooltip, this is when BIDDING CLOSES, ~30 minutes before the live auction itself
+    // starts - it is stored as sale_date because that is the only date field available, but
+    // it is not the auction start time. Stored as an ISO string, which parseAuctionDate()
+    // already parses via `new Date(string)` - no second parser, no change to that helper.
+    if (lot_state === 'active') {
+        const timeLeftEl = document.getElementById('time-left');
+        const totalSeconds = timeLeftEl ? parseInt(timeLeftEl.getAttribute('data-initial-total-seconds'), 10) : NaN;
+        if (timeLeftEl && !isNaN(totalSeconds)) {
+            sale_date = new Date(Date.now() + totalSeconds * 1000).toISOString();
+        }
+        // If #time-left or the attribute is absent, sale_date stays null - absence is not
+        // violation (AGENTS.md 6), and this must never fall back to a guessed date.
+    }
+
     let sale_date_unavailable = false;
     if (lot_state === 'finished') {
         current_bid_usd = null;
@@ -428,19 +466,34 @@ function captureCurrentLot() {
         if (m) m.forEach(u => found.add(u));
       }
     });
+    // On an active lot the gallery carousel is empty at capture time - it fills in via the
+    // page's own lazy-load, which the DOM walk above runs before. The same pluto URLs are
+    // present at load inside inline <script> tags (preloadGalleryImage(...) calls), so scan
+    // those too. This is additive to the DOM walk, not a replacement - archived lots already
+    // work via the DOM walk and must keep doing so. Deliberately not scrolling/clicking to
+    // force the lazy-load: that would be timing-dependent; script text is present at load.
+    document.querySelectorAll('script').forEach(s => {
+      const text = s.textContent || '';
+      const m = text.match(rx);
+      if (m) m.forEach(u => found.add(u));
+    });
     const allUrls = [...found];
     
     // Filter by VIN
     let vinUrls = allUrls.filter(u => u.includes(vin));
     if (vinUrls.length === 0) vinUrls = allUrls; // fallback
 
-    // Dedupe prefer images.bid.cars over pluto.bid.car
+    // Dedupe prefer pluto.bid.car over images.bid.cars. Both domains can carry the same
+    // image on an active lot (confirmed 4 Sep 2026: images.bid.cars fetches from page
+    // context fail with a CORS policy block - no Access-Control-Allow-Origin header on the
+    // response - while the same image at pluto.bid.car fetches successfully). pluto.bid.car
+    // is also the only domain observed on archived lots, where capture already works.
     const imageMap = new Map(); // key -> url
     vinUrls.forEach(u => {
         const match = u.match(/-(\d+)\.jpg$/i);
         if (match) {
             const idx = parseInt(match[1], 10);
-            if (!imageMap.has(idx) || u.includes('images.bid.cars')) {
+            if (!imageMap.has(idx) || u.includes('pluto.bid.car')) {
                 imageMap.set(idx, u);
             }
         }
@@ -524,11 +577,12 @@ async function captureCurrentLotAsync() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "checkLotPage") {
-        const check = isBidcarsLotPage();
-        sendResponse({
-            isLotPage: check,
-            platform: check ? 'bidcars' : null,
-            url: window.location.href
+        isBidcarsLotPageWithRetry().then(check => {
+            sendResponse({
+                isLotPage: check,
+                platform: check ? 'bidcars' : null,
+                url: window.location.href
+            });
         });
         return true;
     }

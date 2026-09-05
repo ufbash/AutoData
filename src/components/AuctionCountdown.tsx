@@ -11,7 +11,7 @@ const AuctionCountdown: React.FC<AuctionCountdownProps> = ({ saleDateText }) => 
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(new Date());
-    }, 30000); // Tick every 30 seconds
+    }, 1000); // Tick every second
     return () => clearInterval(interval);
   }, []);
 
@@ -34,11 +34,12 @@ const AuctionCountdown: React.FC<AuctionCountdownProps> = ({ saleDateText }) => 
   const days = Math.floor(msRemaining / (1000 * 60 * 60 * 24));
   const hours = Math.floor((msRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   const mins = Math.floor((msRemaining % (1000 * 60 * 60)) / (1000 * 60));
-  
+  const secs = Math.floor((msRemaining % (1000 * 60)) / 1000);
+
   const isUrgent = msRemaining < 1000 * 60 * 60; // less than 1 hour
   const isRed = msRemaining < 1000 * 60 * 60 * 48; // less than 48 hours
-  
-  const timeStr = `${days > 0 ? `${days}d ` : ''}${hours}h ${mins}m`;
+
+  const timeStr = `${days > 0 ? `${days}d ` : ''}${hours}h ${mins}m ${secs}s`;
 
   let colorClass = 'text-amber-500';
   if (isUrgent) {
