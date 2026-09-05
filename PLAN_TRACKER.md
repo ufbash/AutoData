@@ -318,6 +318,34 @@ flicker.
 
 ---
 
+## 10a. bid.cars active-lot capture fix (4 September 2026)
+
+**Fixed:** active bid.cars lots captured with zero images and no auction date; archived lots
+were already correct. Diagnosed from real DOM recon (both page kinds) — a timing defect
+(active-lot images load into the DOM after capture already ran) and a missing extraction
+(no code read the live page's countdown element at all). See `docs/SOLVED.md` §1 and §4 for
+the full mechanism.
+
+| Fix | Evidence |
+|---|---|
+| Inline-`<script>` URL scan added, additive to the existing DOM/attribute walk | `content-bidcars.js`; archived-lot capture confirmed unchanged (still `pluto.bid.car`, `image_store_status='complete'`) |
+| Image-domain dedup preference flipped `images.bid.cars` → `pluto.bid.car` | Found live: `images.bid.cars` fetches from bid.cars page context fail CORS (`No 'Access-Control-Allow-Origin' header`); `pluto.bid.car` succeeds. Two active lots captured after the flip: 12/12 images stored, `image_store_status='complete'` (sightings `49804e7e…`, `2a130af2…`) |
+| `#time-left`'s `data-initial-total-seconds` read; absolute ISO instant computed and stored in `sale_date` for active lots only | DB: `sale_date = '2026-09-04T13:30:04.181Z'` on a fresh active capture; archived capture in the same session stayed `sale_date = NULL`, unchanged |
+| Staff + public countdown verified against the live bid.cars page | Displayed date (`Fri 4 Sept, 14:30`) matched the live page directly, confirmed by side-by-side comparison |
+| `parseAuctionDate()` untouched — ISO string was already a supported format | No second parser added |
+| `public-run` allow-list untouched, no Edge Function redeploy | Countdown and images rendered on the public share page with no allow-list change |
+| Bid-closing vs auction-start distinction recorded | `docs/SOLVED.md` §4 update, `SCHEMA.md` §6 |
+
+**Also fixed the same session, not part of the original diagnosis:** `AuctionCountdown.tsx`
+ticked every 30 seconds without a page refresh already, but only displayed hours/minutes.
+Changed to a 1-second tick with seconds displayed (`"6h 27m 47s"`), verified live-ticking on
+both the staff view and the public share page without any refresh.
+
+Test artifacts: `ZZZ TEST - Prompt9 Countdown Check` run, left in place with sharing enabled
+as evidence (public link renders the fix live).
+
+---
+
 ## 11. Debt register
 
 | # | Item | Note |
@@ -339,3 +367,5 @@ flicker.
 | 15 | Legacy `sheet_url` / `drive_folder_url` columns on `research_runs` | Drive/Sheets dropped; columns remain |
 | 16 | `docs/REPO_MAP.md` and `docs/BRIEF_WRITE_PATH.md` are untracked | Confirmed via `git status` 4 Sep 2026 — exist on disk, not yet committed |
 | 17 | A2 rule base: 74 assets / 110 `auction_history` rows (dated 4 Sep 2026) | Useful to compare against later as B2 (Copart Sales History) grows the base |
+| 18 | `pluto.bid.car` is the working image domain; `images.bid.cars` fails CORS from page context (dated 4 Sep 2026) | Do not flip the dedup preference in `content-bidcars.js` back to `images.bid.cars` — confirmed live, see `docs/SOLVED.md` §1 |
+| 19 | Two `content-bidcars.js` defects fixed (dated 4 Sep 2026) | (a) `'No information'` Sales History status was missing from the recognised-status regex, causing a false console warning on every archived capture carrying it — added, stored raw and unmapped. (b) `isBidcarsLotPage()` was a single synchronous DOM check with no readiness wait, intermittently reporting a real lot page as unsupported — replaced with a short retry-until-found-or-timeout on the DOM-dependent part only, no fixed delay, non-lot pages still rejected instantly on URL shape alone |

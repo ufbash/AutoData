@@ -132,9 +132,21 @@ Real observed values:
 | `"Thu. Aug 06, 2026 03:00 PM GMT+1"` | Full date + time + timezone (Copart, most common) |
 | `"Future"` | Auction scheduled, date not yet published |
 | `null` | Not captured |
+| `"2026-09-04T13:30:04.181Z"` (ISO 8601) | bid.cars **active** lot only — see below |
 
 Full date-and-time **is** available, which is what makes both the countdown and a 1-hour
 email alert possible.
+
+**bid.cars active lots — added 4 Sep 2026, and what the value means.** The live page's own
+displayed date has no year (`"Friday, 4 September, 14:30"`), which `parseAuctionDate()`
+correctly rejects rather than guess a year. Instead, capture reads the page's machine-readable
+countdown offset (`#time-left`'s `data-initial-total-seconds`) and stores an absolute ISO
+instant computed as capture time + offset seconds. **This value is bid-closing time, not
+auction-start time** — the source element's own tooltip states bidding closes 30 minutes
+before the live auction itself starts. Treat `sale_date` on an active bid.cars sighting as
+"when bidding closes," not "when the auction starts," anywhere it is read — including the
+alerts build (`PLAN_TRACKER.md` 4.1). Archived bid.cars lots are unaffected: `sale_date`
+stays `null` for them, as before. See `docs/SOLVED.md` §4 for the full mechanism.
 
 All time-based logic must use the shared helper:
 
