@@ -296,6 +296,7 @@ trusted from the client.
 | Function | Auth | Purpose | `verify_jwt` |
 |---|---|---|---|
 | `research-capture` | static `X-Research-Secret` | extension captures | **false** |
+| `list-active-runs` | static `X-Research-Secret` | extension run pick-list, org-scoped | **false** |
 | `upload-images` | static `X-Research-Secret` | extension-side image bytes (bid.cars) | **false** |
 | `app-ingest` | JWT + superadmin | CarForm / BulkImport writes | true |
 | `extract-vehicle-vision` | JWT + superadmin | server-side Gemini vision | true |

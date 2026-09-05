@@ -652,6 +652,42 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       passed: differentModelOffenders.length === 0
     });
 
+    // A1b — population coherence (WARN). sale_confirmed says "is this a real sale?" but not
+    // "is this the same kind of price, from the same population?" Mixing US auction results
+    // with non-auction prices (dealer asking prices, manual entries) in one average compares
+    // different markets. Does not touch the average - flag only.
+    const US_AUCTION_SOURCES = ['copart', 'bidcars', 'iaai'];
+    let usAuctionCount = 0;
+    let nonAuctionCount = 0;
+    let unknownCount = 0;
+    const nonAuctionOffenders: string[] = [];
+    soldList.forEach(l => {
+      const sp = l.source_platform ? l.source_platform.toLowerCase() : null;
+      if (!sp) {
+        unknownCount++;
+      } else if (US_AUCTION_SOURCES.includes(sp)) {
+        usAuctionCount++;
+      } else {
+        nonAuctionCount++;
+        nonAuctionOffenders.push(l.id);
+      }
+    });
+    const populationMixed = usAuctionCount > 0 && nonAuctionCount > 0;
+    let populationMsg = 'Comps are from a single population';
+    if (populationMixed) {
+      populationMsg = `Average mixes ${usAuctionCount} US auction comp${usAuctionCount === 1 ? '' : 's'} with ${nonAuctionCount} non-auction comp${nonAuctionCount === 1 ? '' : 's'}; these are different markets.`;
+      if (unknownCount > 0) {
+        populationMsg += ` ${unknownCount} listing${unknownCount === 1 ? '' : 's'} with unknown source platform excluded from this comparison.`;
+      }
+    }
+    checklistItems.push({
+      id: 'population_mismatch',
+      type: 'WARN',
+      message: populationMsg,
+      offenderIds: populationMixed ? nonAuctionOffenders : [],
+      passed: !populationMixed
+    });
+
     // Unconfirmed Sale (WARN)
     const unconfirmedSaleOffenders = soldList.filter(l => l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via)).map(l => l.id);
     checklistItems.push({
@@ -679,6 +715,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       else if (item.id === 'no_price') text = 'No price';
       else if (item.id === 'non_insurance') text = 'Non-insurance seller';
       else if (item.id === 'different_model') text = 'Different model';
+      else if (item.id === 'population_mismatch') text = 'Population mismatch';
       else if (item.id === 'unconfirmed_sale') text = 'Unconfirmed sale';
       else if (item.id.startsWith('critical_')) text = 'CRITICAL';
       else if (item.id.startsWith('spec_critical_')) text = 'SPEC CRITICAL';

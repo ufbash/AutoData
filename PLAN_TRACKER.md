@@ -106,14 +106,31 @@ excluded from the average. Verified by reading quoted code in
 Known cosmetic debt: `isUnconfirmed` is duplicated in two files rather than shared. Not a
 bug; will drift if one copy is edited. One-line fix, unqueued.
 
-### A1b. Source/population coherence guard — **NOT STARTED**
+### A1b. Source/population coherence guard — **DONE** (6 Sep 2026)
 Distinct axis from A1. `logged_via` answers "is this a real sale?" but not "is this the same
 kind of price, from the same population?" A `manual_entry` sighting can carry a **Nigerian
 dealer asking price**, which is neither a concluded sale nor the same market as a US auction
 comp. Asking ≠ sold; NG retail ≠ US auction.
 
-Should WARN when a sold-comps average mixes materially different populations (by
-`source_platform`). Deeper form of the existing mixed-models rule.
+WARNs (never blocks, never touches the average) when a sold-comps run — or the sold portion
+of a mixed run — groups by `source_platform` and spans both a US auction source
+(`copart`/`bidcars`/`iaai`) and a non-auction source (dealer, manual entry, anything else). A
+null/unrecognised `source_platform` counts as unknown and is called out rather than assigned
+to either side. Implemented in `ResearchRunDetail.tsx` as the `population_mismatch` checklist
+item, alongside the existing mixed-models warn.
+
+**Evidence — three cases verified in the browser (run "ZZZ TEST - A2 Case2 SoldComps"
+`61d919e9-3ce6-4498-b37c-1542810b51c9` for cases 1 & 2, "ZZZ TEST - A2 Case1 ActiveBlock"
+`b5d32961-ec28-4648-964d-832fb3da223e` for case 3):**
+1. Sold-comps run mixing 4 bidcars comps with 1 manual comp → warn: "Average mixes 4 US
+   auction comps with 1 non-auction comp; these are different markets." Manual listing badged
+   POPULATION MISMATCH.
+2. Same run type, auction-only ("Hail Camry" run) → checklist shows the passing state "Comps
+   are from a single population", no warn.
+3. Active-listings run mixing bidcars/copart/manual → no population-mismatch warn or badge at
+   all (rule correctly gated to sold-comps/mixed-sold-portion only).
+Average unaffected in all cases — the rule reads `soldList` for grouping only and never
+touches `getStats`/the average pipeline.
 
 ### A2. Derived asset flags — **DONE** (4 Sep 2026)
 Shared derivation `src/utils/auctionHistoryFlags.ts` (`deriveAuctionHistoryFlags`, one place,
@@ -187,8 +204,25 @@ suspicious flatness. A real gap, deliberately left open pending a separate decis
 Commercial upside beyond fraud detection: rejected-bid history reveals the seller's reserve
 and the market's repeated refusal — bidding intelligence no competitor has.
 
-### A3. Extension run-picker — **NOT STARTED**
-Dropdown of active runs, replacing the current typed UUID.
+### A3. Extension run-picker — **DONE** (6 Sep 2026)
+Replaced the typed run UUID with a new `list-active-runs` Edge Function (static-secret auth
+and CORS copied verbatim from `research-capture`, org-scoped by `DEFAULT_ORG_ID`) feeding a
+card-based picker in the extension popup: cards grouped by run type, client name as the
+headline, run label as subtitle, a search box once the list exceeds 6 runs. Picking a run
+performs the capture immediately and starts a **session** — every later capture (any tab)
+reuses that run silently until "End run" is clicked or 10 minutes pass idle, rather than
+re-prompting per capture. Manual run-ID entry remains as a fallback if the list fails to load.
+
+Also fixed, same cycle: `research-capture` inserted into `research_run_listings` without
+checking for an existing `(run_id, sighting_id)` row first, so re-capturing a lot already
+attached to the selected run threw a unique-constraint error instead of succeeding — now
+checks first and reuses the existing attachment.
+
+**Evidence:** deployed `list-active-runs`; curl-verified missing/wrong secret → 401, POST →
+rejected, valid GET → 200 with org-scoped list. Confirmed in the database that a capture
+through the new picker attached to a non-first run in the list (`942a03dd-...`/"ZZZ TEST - P1
+Client Required"), and that re-capturing the same lot into a different run created a second
+legitimate `research_run_listings` row rather than erroring or duplicating.
 
 ---
 
