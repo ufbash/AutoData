@@ -26,9 +26,10 @@ import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Lin
 interface ResearchRunDetailProps {
   runId: string;
   onBack: () => void;
+  onOpenClient?: (clientId: string, briefId?: string) => void;
 }
 
-const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) => {
+const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, onOpenClient }) => {
   const { orgId, user, role } = useAuth();
   
   const [run, setRun] = useState<ResearchRun | null>(null);
@@ -742,6 +743,28 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack }) 
             
             <div className="flex items-center gap-4 text-sm text-gray-500">
               <span>Created {new Date(run.created_at).toLocaleDateString()}</span>
+              {run.client && (
+                <span>
+                  For{' '}
+                  <button
+                    onClick={() => onOpenClient?.(run.client!.id, run.client_brief?.id)}
+                    className="font-bold text-[#a58039] hover:underline"
+                  >
+                    {run.client.full_name}
+                  </button>
+                  {run.client_brief && (
+                    <>
+                      {' · Brief: '}
+                      <button
+                        onClick={() => onOpenClient?.(run.client!.id, run.client_brief!.id)}
+                        className="font-bold text-[#a58039] hover:underline"
+                      >
+                        {run.client_brief.year_min || 'Any'}-{run.client_brief.year_max || 'Any'} {run.client_brief.make || 'Any Make'} {run.client_brief.model || 'Any Model'}
+                      </button>
+                    </>
+                  )}
+                </span>
+              )}
             </div>
           </div>
 

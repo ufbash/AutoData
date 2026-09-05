@@ -208,9 +208,12 @@ const ClientEditForm = ({
 interface ClientsListProps {
   onOpenRun?: (runId: string) => void;
   onNewRunForClient?: (clientId: string) => void;
+  initialClientId?: string | null;
+  initialBriefId?: string | null;
+  onConsumedInitialSelection?: () => void;
 }
 
-export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunForClient }) => {
+export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunForClient, initialClientId, initialBriefId, onConsumedInitialSelection }) => {
   const { orgId, orgLoading, role, user } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -270,6 +273,30 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
     };
     loadClientsAndRuns();
   }, [orgId, orgLoading]);
+
+  useEffect(() => {
+    if (!initialClientId || clients.length === 0) return;
+    const applySelection = async () => {
+      let target = clients.find(c => c.id === initialClientId) || null;
+      if (!target && orgId) {
+        // A run can still point at a soft-deleted client (must render, not crash) - it won't
+        // be in the active clients list, so fall back to the deleted-clients lookup rather
+        // than silently failing to open the hub.
+        try {
+          const dc = await listDeletedClients(orgId);
+          target = dc.find(c => c.id === initialClientId) || null;
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      if (target) {
+        setSelectedClient(target);
+        if (initialBriefId) setSelectedBriefId(initialBriefId);
+      }
+      onConsumedInitialSelection?.();
+    };
+    applySelection();
+  }, [initialClientId, clients]);
 
   useEffect(() => {
     if (!orgId || !selectedClient) return;
@@ -438,7 +465,9 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
     return <div className="p-6 text-red-600 bg-red-50 rounded-lg">{error}</div>;
   }
 
-  const selectedBrief = selectedBriefId ? briefs.find(b => b.id === selectedBriefId) : null;
+  // Also check deletedBriefs: a soft-deleted brief's runs must still be reachable from the
+  // deleted-items view, and this is the same lookup the brief-detail render below uses.
+  const selectedBrief = selectedBriefId ? (briefs.find(b => b.id === selectedBriefId) || deletedBriefs.find(b => b.id === selectedBriefId)) : null;
   const val = (v: any) => (v === null || v === undefined || v === '') ? 'No preference' : v;
   const isSelectedBriefEditing = editingBriefId === selectedBriefId && selectedBriefId !== null;
 
@@ -512,12 +541,23 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                   </div>
                 ))}
                 {deletedBriefs.map(b => (
-                  <div key={'b_'+b.id} className="p-4 bg-orange-50 flex items-center justify-between">
+                  <div
+                    key={'b_'+b.id}
+                    onClick={() => {
+                      // A deleted brief's runs must still be reachable. deletedBriefs spans
+                      // the whole org, not just the currently selected client, so switch to
+                      // its owning client (active or itself soft-deleted) before selecting it.
+                      const owner = clients.find(c => c.id === b.client_id) || deletedClients.find(c => c.id === b.client_id) || null;
+                      if (owner) setSelectedClient(owner);
+                      setSelectedBriefId(b.id);
+                    }}
+                    className="p-4 bg-orange-50 hover:bg-orange-100 cursor-pointer flex items-center justify-between transition-colors"
+                  >
                     <div>
                       <div className="font-medium text-gray-900 line-through">Brief: {b.year_min||'Any'}-{b.year_max||'Any'} {b.make||'Any'} {b.model||'Any'}</div>
                       <div className="text-xs text-gray-500">Deleted {new Date(b.deleted_at!).toLocaleDateString()}</div>
                     </div>
-                    <button onClick={() => handleRestoreBrief(b.id)} className="text-sm font-bold text-gray-600 hover:text-green-600 flex items-center gap-1">
+                    <button onClick={(e) => { e.stopPropagation(); handleRestoreBrief(b.id); }} className="text-sm font-bold text-gray-600 hover:text-green-600 flex items-center gap-1">
                       <RefreshCw className="w-4 h-4" /> Restore
                     </button>
                   </div>
@@ -576,25 +616,31 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 <div className="text-sm text-gray-500 mt-1">For {selectedClient.full_name}</div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setEditingBriefId(selectedBrief.id)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
-                  <Edit2 className="w-4 h-4" /> Edit
-                </button>
-                {role === 'superadmin' && (
-                  <button 
-                    onClick={() => {
-                      const name = `${selectedBrief.year_min || 'Any'}-${selectedBrief.year_max || 'Any'} ${selectedBrief.make || 'Any Make'} ${selectedBrief.model || 'Any Model'}`;
-                      setDeleteTarget({ type: 'brief', id: selectedBrief.id, name });
-                      setDeleteConfirmName('');
-                      setShowDeleteModal(true);
-                    }}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 text-sm rounded-lg font-bold hover:bg-red-100 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" /> Delete
-                  </button>
+                {selectedBrief.deleted_at ? (
+                  <span className="text-sm font-bold text-orange-600 px-3 py-1.5 bg-orange-50 rounded-lg">Deleted brief (view only)</span>
+                ) : (
+                  <>
+                    <button onClick={() => setEditingBriefId(selectedBrief.id)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
+                      <Edit2 className="w-4 h-4" /> Edit
+                    </button>
+                    {role === 'superadmin' && (
+                      <button
+                        onClick={() => {
+                          const name = `${selectedBrief.year_min || 'Any'}-${selectedBrief.year_max || 'Any'} ${selectedBrief.make || 'Any Make'} ${selectedBrief.model || 'Any Model'}`;
+                          setDeleteTarget({ type: 'brief', id: selectedBrief.id, name });
+                          setDeleteConfirmName('');
+                          setShowDeleteModal(true);
+                        }}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 text-sm rounded-lg font-bold hover:bg-red-100 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" /> Delete
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
-            
+
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
               <div>
                 <h3 className="text-lg font-bold text-gray-900 mb-4 border-b pb-2">Vehicle Specification</h3>
@@ -674,18 +720,29 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                     <div className="text-gray-500 text-sm">No research runs are currently linked to this brief.</div>
                   ) : (
                     allRuns.filter(r => r.client_brief_id === selectedBrief.id).map(r => (
-                      <div key={r.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-100">
+                      <div
+                        key={r.id}
+                        onClick={() => onOpenRun?.(r.id)}
+                        className="flex justify-between items-center p-3 bg-gray-50 hover:bg-white hover:border-[#a58039] border border-gray-100 rounded-lg cursor-pointer transition-colors group"
+                      >
                         <div>
-                          <div className="font-bold text-[#403f4c]">{r.client_name}</div>
-                          <div className="text-xs text-gray-500 capitalize">{r.run_type.replace('_', ' ')} • {new Date(r.created_at).toLocaleDateString()}</div>
+                          <div className="font-bold text-[#403f4c] group-hover:text-[#a58039] transition-colors">{r.client_name}</div>
+                          <div className="text-xs text-gray-500 mt-1 flex items-center gap-3">
+                            <span className="capitalize">{r.run_type.replace('_', ' ')}</span>
+                            <span className="flex items-center gap-1"><Car className="w-3 h-3" /> {r.listing_count || 0}</span>
+                            <span>{new Date(r.created_at).toLocaleDateString()}</span>
+                          </div>
                         </div>
-                        <span className={`px-2 py-1 text-xs font-bold rounded uppercase ${
-                          r.status === 'active' ? 'bg-green-100 text-green-800' :
-                          r.status === 'completed' ? 'bg-blue-100 text-blue-800' :
-                          'bg-gray-200 text-gray-700'
-                        }`}>
-                          {r.status}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 text-xs font-bold rounded uppercase ${
+                            r.status === 'active' ? 'bg-green-100 text-green-800' :
+                            r.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                            'bg-gray-200 text-gray-700'
+                          }`}>
+                            {r.status}
+                          </span>
+                          <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#a58039] transition-colors" />
+                        </div>
                       </div>
                     ))
                   )}

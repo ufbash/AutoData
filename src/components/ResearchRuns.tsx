@@ -7,9 +7,10 @@ interface ResearchRunsProps {
   onOpenRun: (runId: string) => void;
   initialClientId?: string | null;
   onConsumedInitialClient?: () => void;
+  onOpenClient?: (clientId: string, briefId?: string) => void;
 }
 
-const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId, onConsumedInitialClient }) => {
+const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId, onConsumedInitialClient, onOpenClient }) => {
   const { orgId, orgLoading, role } = useAuth();
   const [runs, setRuns] = useState<ResearchRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -347,9 +348,33 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
               className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20 hover:border-[#a58039]/60 hover:shadow-md transition-all cursor-pointer group flex flex-col h-full"
             >
               <div className="flex justify-between items-start mb-4">
-                <h3 className="font-bold text-lg text-[#403f4c] group-hover:text-[#a58039] transition-colors line-clamp-2 mb-2">
-                  {run.client_name}
-                </h3>
+                <div>
+                  <h3 className="font-bold text-lg text-[#403f4c] group-hover:text-[#a58039] transition-colors line-clamp-2 mb-1">
+                    {run.client_name}
+                  </h3>
+                  {run.client && (
+                    <div className="text-xs text-gray-500 mb-2">
+                      For{' '}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onOpenClient?.(run.client!.id, run.client_brief?.id); }}
+                        className="font-bold text-[#a58039] hover:underline"
+                      >
+                        {run.client.full_name}
+                      </button>
+                      {run.client_brief && (
+                        <>
+                          {' · Brief: '}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onOpenClient?.(run.client!.id, run.client_brief!.id); }}
+                            className="font-bold text-[#a58039] hover:underline"
+                          >
+                            {run.client_brief.year_min || 'Any'}-{run.client_brief.year_max || 'Any'} {run.client_brief.make || 'Any Make'} {run.client_brief.model || 'Any Model'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap font-medium ${
                     run.status === 'active' ? 'bg-green-100 text-green-700' :
