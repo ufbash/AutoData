@@ -661,10 +661,12 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     let nonAuctionCount = 0;
     let unknownCount = 0;
     const nonAuctionOffenders: string[] = [];
+    const unknownSourceOffenders: string[] = [];
     soldList.forEach(l => {
       const sp = l.source_platform ? l.source_platform.toLowerCase() : null;
       if (!sp) {
         unknownCount++;
+        unknownSourceOffenders.push(l.id);
       } else if (US_AUCTION_SOURCES.includes(sp)) {
         usAuctionCount++;
       } else {
@@ -687,6 +689,21 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       offenderIds: populationMixed ? nonAuctionOffenders : [],
       passed: !populationMixed
     });
+
+    // A1b (Prompt 15) — report unknown source_platform even when the mismatch warn above
+    // doesn't fire. An all-unknown (or single-known-population-plus-unknown) run previously
+    // showed nothing at all, reading as a clean single-population average. INFO, not a warn:
+    // this states what is knowable, not a fault. Suppressed when the warn already fires and
+    // mentions the same unknown count, so it is never reported twice.
+    if (unknownCount > 0 && !populationMixed) {
+      checklistItems.push({
+        id: 'population_unknown',
+        type: 'INFO',
+        message: `${unknownCount} listing${unknownCount === 1 ? '' : 's'} with unknown source platform — excluded from the population comparison above, not counted as auction or non-auction.`,
+        offenderIds: unknownSourceOffenders,
+        passed: false
+      });
+    }
 
     // Unconfirmed Sale (WARN)
     const unconfirmedSaleOffenders = soldList.filter(l => l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via)).map(l => l.id);
@@ -716,6 +733,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       else if (item.id === 'non_insurance') text = 'Non-insurance seller';
       else if (item.id === 'different_model') text = 'Different model';
       else if (item.id === 'population_mismatch') text = 'Population mismatch';
+      else if (item.id === 'population_unknown') text = 'Unknown source';
       else if (item.id === 'unconfirmed_sale') text = 'Unconfirmed sale';
       else if (item.id.startsWith('critical_')) text = 'CRITICAL';
       else if (item.id.startsWith('spec_critical_')) text = 'SPEC CRITICAL';
