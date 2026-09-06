@@ -886,3 +886,88 @@ read the same four keys and go through the same is-it-live check before trusting
 — duplicating the check inline rather than centralizing it in one helper is the current state
 of the code and a risk if a second capture path is ever added without also duplicating the
 expiry logic correctly.
+
+---
+
+## 12. The spec-match vocabulary layer (`src/utils/specVocabulary.ts`)
+
+**Symptom:** Two real bugs on the `2012-2016 BMW 535i` brief (Mr Ademola Kadiri). A colour
+preference of `"Any, except White"` produced `colour differs (Gray vs Any, except White
+requested)` on every listing, every time — the rule compared the listing's colour against the
+literal negative-preference string, which no colour will ever equal or contain. A fuel
+preference of `petrol` produced `fuel type differs (Gas vs petrol requested)` on listings that
+were, in fact, petrol — US auction sources record fuel as `Gas`/`Gasoline`, the client said
+`petrol`, same fuel, different word.
+
+**Cause — the exact code, before the fix:** three of the nine spec-match rule blocks in
+`ResearchRunDetail.tsx` compared a brief's free-text field directly against the listing's raw
+value with `.includes()`:
+```ts
+if (brief.colour_preference != null && brief.colour_preference !== '' && brief.colour_preference.toLowerCase() !== 'either' && l.exterior_color != null) {
+  if (!l.exterior_color.toLowerCase().includes(brief.colour_preference.toLowerCase())) {
+    addSpecRule(specWarn, `colour differs (${l.exterior_color} vs ${brief.colour_preference} requested)`, l.id);
+  }
+}
+```
+Two independent gaps in the same line: no vocabulary mapping (so a genuine synonym like
+`Gas`/`petrol` reads as a mismatch), and no parsing of a preference's *shape* — `"Any, except
+White"` is an exclusion, not a required value, but the code could not tell the difference.
+
+**Solution:** `src/utils/specVocabulary.ts` provides two independent pieces, both
+comparison-time only — **the stored value on `client_briefs` or `assets` is never rewritten**,
+per `PROJECT_CHARTER.md` §5.8 (raw at capture, classify at read):
+
+1. **Vocabulary groups** — `FUEL_GROUPS`, `COLOUR_GROUPS`, `TRANSMISSION_GROUPS`, each an array
+   of synonym arrays built from the live distinct values actually queried
+   (`SELECT DISTINCT fuel FROM assets`, etc.), plus a small number of near-certain pairs added
+   proactively because the intake form already offers them as options even though no live row
+   has one yet (`Hybrid`, `Grey`, `Auto`) — each addition is commented with why. `canonicalToken()`
+   maps a raw string to its group's first entry if it matches one of the mapped synonyms;
+   otherwise the value passes through unchanged. **An unmapped value is deliberately not an
+   error and not a match** — it simply compares as itself, so a genuinely new value (a new
+   colour, a new fuel type) degrades to "treated as its own literal string," not to a crash or
+   a silent false match.
+
+2. **`parsePreference()`** — classifies a brief's free-text field into exactly one of three
+   shapes: `{ kind: 'none' }` (blank, `any`, `either`, `no preference` — no rule should fire),
+   `{ kind: 'required', value }` (a specific requirement — compare normally), or
+   `{ kind: 'exclude', value }` (parsed out of `"Any, except X"` and the variants `apart from`,
+   `not`, `no`). Critically, **an exclusion phrase that doesn't cleanly match one of the known
+   shapes fails closed to `'none'`** rather than falling through to `'required'` with the whole
+   unparsed phrase as the value — that fallthrough is exactly how bug 1 happened, and turning it
+   into "no rule fires" trades a possible missed flag for the guarantee of never re-creating a
+   permanent false one.
+
+**Applied to exactly three of the nine spec-match blocks** — colour, transmission, fuel — since
+those are the only ones with both a free-text brief field and a vocabulary-prone listing value.
+`condition_required` is a controlled dropdown compared against a boolean (`runs_and_drives`),
+never free text, so it never had this bug. `titles_accepted` already had its own inline
+synonym table before this change (`clean`/`clear`/`certificate of title` etc.) and was left as
+is. `trim` is genuinely free text on both sides with no vocabulary to map (a real trim like
+`XLE` vs `SE` is not a synonym pair) and was not touched. The four numeric CRITICAL rules
+(mileage, year min/max) have no vocabulary dimension at all.
+
+**Known, deliberate limitation:** a multi-value exclusion like `"Any except white or black"`
+parses to `{ kind: 'exclude', value: 'white or black' }`, but the exclude-match check is a
+simple containment test (`colourMatches(listingColour, 'white or black')`), which will not
+correctly catch a plain `"White"` listing against that compound phrase — the containment
+direction is wrong once the excluded value itself has multiple words joined by "or". The one
+live exclusion value observed (`"Any, except White"`) is single-valued and works correctly;
+building a robust `"or"`-splitting parser for the compound case was judged out of scope here
+(`PLAN_TRACKER.md` debt: free-text exclusions are a workaround, not the structural fix).
+
+**Why this way:** This is deliberately **an early, narrow slice of the E2 standardisation
+resolver** that `SCHEMA.md` §4 and `PLAN_TRACKER.md`'s E1→E5 estimator pipeline (E1 harvest →
+E2 standardisation → E3 stats → E4 public MVP → E5 analytics) anticipate — built here only for
+spec-match comparison, not as a general classifier. The module's own header comment says this
+explicitly, so a future E2 build folds this in rather than duplicating it as a second,
+uncoordinated normalisation layer (`isUnconfirmed`'s two-file duplication is the precedent this
+was written to avoid repeating).
+
+**How to extend it:** A new fuel/colour/transmission value discovered in future live data does
+not need a code change unless it is a genuine synonym of an existing group — an unmapped value
+already compares safely as itself. Only add a new synonym pair when it is confirmed as the same
+underlying thing in different words (a live distinct-values query, not a guess) — the Hybrid/
+Electric/Petrol distinction is exactly the kind of pair that must **never** collapse together,
+and the module's own test coverage (a throwaway script, not committed) exists to catch that
+class of mistake before it ships.

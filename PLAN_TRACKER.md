@@ -388,6 +388,79 @@ wrongly blocking internal work). Override path verified separately: "Khalifah" (
 a typed reason recorded `deposit_override_reason`/`_by`/`_at` on the new run
 (`3babe481-...`).
 
+### 4.4 Spec-match false flags fixed; post-submission account offer — **DONE, partially verified** (6 Sep 2026)
+Two parts, Prompt 16.
+
+**Spec-match vocabulary fix — fully verified.** `src/utils/specVocabulary.ts` (new; see
+`docs/SOLVED.md` topic 12) fixes two real bugs on the BMW 535i brief: a negative preference
+(`"Any, except White"`) that flagged every listing forever, and a vocabulary mismatch
+(`Gas`/`petrol`) that flagged genuine matches. Applied to 3 of the 9 spec-match blocks
+(colour, transmission, fuel) — the other 6 untouched, 9 rules in, 9 rules out. Verified on the
+real brief: Gray car passes, White car flags, Gas-vs-petrol no longer flags, Diesel-vs-petrol
+still flags.
+
+**Post-submission account offer — built Google-only, not fully live-verified end to end.**
+`DECISIONS.md` §6 stays locked: no login to submit. Migration 026 adds `clients.user_id`
+(nullable, unique) and an `AFTER INSERT ON auth.users` trigger (`link_new_auth_user_to_client`)
+that matches a new account to an existing client by email (case/whitespace-insensitive) or
+phone (Nigerian-format-normalised via `normalize_ng_phone()`), links only on exactly one match,
+and never creates a client row from a signup. The success screen (`IntakeFormView.tsx`) offers
+"Continue with Google" only after submission, skippable, never earlier.
+
+**Verified:** offer appears only on the success screen (live). Skip leaves the submission
+intact (code has zero side effects on skip). Trigger matching logic proven directly via SQL
+against real data: a case-different email (`Khalifah.Tune@GMAIL.com`) matches; `0816...` and
+`+234816...` normalise to the same value; an unmatched email/phone returns zero rows; a
+deliberately-created duplicate-email test row proved the `array_length(...) = 1` guard refuses
+to link when two clients share an email.
+
+**Not verified — two real blockers found, not code defects:** (1) no spare Google identity was
+available to drive a genuinely new signup through the browser, so the trigger's live `INSERT`
+path was never exercised end to end. (2) the OAuth redirect landed on the production site root
+(`theautodata.com`) rather than back at `/intake/:token`, because Supabase only honours
+allow-listed redirect URLs (Dashboard → Authentication → URL Configuration) and `/intake/*`
+isn't in that list yet — debt #27. WhatsApp OTP is correctly not built this cycle (debt #24);
+Apple Sign In and Apple Messages for Business are correctly not built (debt #25, #26).
+
+### Client intake — phase close-out audit (6 Sep 2026)
+
+**What it does, end to end:** Staff create a client record and a brief, then generate a
+tokenized, unguessable link from the brief detail view (`share_token`/`share_enabled` on
+`client_briefs`, migration 025, mirroring `research_runs`' own share mechanism). The client
+opens `/intake/:token` on any device, no login, and completes a mobile-first form covering
+every intake field except images — vehicle spec, condition and title, preferences, budget,
+logistics, and two separately-answerable consents, with a review step before final submit. The
+`intake-brief` Edge Function enforces a strict field allow-list in both directions: `status`,
+`org_id`, `client_id`, and the token itself can never be set by the client no matter what the
+request body contains; `status` is force-set to `pending_review` and `submitted_at` to now,
+both server-side. A reformatted confirmation email (Resend) sends best-effort after the write
+completes; a failed send never unwinds the submission. The brief sits pending until a staff
+member reviews and approves it — a pending brief drives zero spec-match flags on any linked
+run, verified live. On the success screen, the client can optionally create a Google account,
+which links to their existing client record by email via a database trigger if exactly one
+match exists.
+
+**What it deliberately does not do:** no cold-web enquiry path or review queue (the estimator
+hasn't started; DECISIONS.md §6 route 1, direct-approach, is the only route built). No image
+uploads on the brief. No client portal, dashboard, or logged-in view — the account offer links
+an account to a client record and stops there; there is nothing yet for that account to log in
+and see. No payment integration — the Prompt 14 deposit gate is a manual staff toggle, untouched
+by this work. No budget or max-bid enforcement — captured, never enforced. No structured
+include/exclude preference fields — free-text exclusion parsing is a workaround. No WhatsApp
+OTP, no Apple Sign In, no Apple Messages for Business.
+
+**Every gap carried forward:** debt #21 (free-text exclusion parser can't handle a compound
+`"except X or Y"` phrase), #22 (A1b's unknown-source path unreachable against live data), #23
+(email-failure log line unverifiable from this CLI, DB-evidence only), #24 (WhatsApp OTP is
+blocked on the AutoData entity forming — `PROJECT_CHARTER.md` §2 — not on Meta itself; must
+never be registered under Caplimo's CAC documents), #25 (Apple Sign In needs an Apple Developer account, Services ID, private key), #26
+(Apple Messages for Business needs an approved Messaging Service Provider, Business Register
+account, Experience Review, own OAuth endpoints), #27 (the Supabase redirect-URL allowlist
+doesn't include `/intake/*`, so the post-signup "you're linked" screen doesn't complete
+correctly yet), and the account-linking trigger's live `INSERT` path was verified by direct SQL
+simulation against real data, not by a genuine end-to-end browser signup — no spare Google
+identity was available in this environment to drive one.
+
 ---
 
 ## 5. Phase B — coverage
@@ -523,7 +596,7 @@ as evidence (public link renders the fix live).
 | 6 | `standardizeTrims` / `executeTrimCleanup` stubbed | Superseded by the E2 resolver |
 | 7 | Copart model/trim duplication backfill | `model LIKE '% ' \|\| trim` |
 | 8 | Three client-side Gemini calls use `VITE_GEMINI_API_KEY` | Absent from Vercel; local dev only. Server-side at Phase F |
-| 9 | Gemini key should be reissued under the caplimoltd GCP project | |
+| 9 | Gemini key should be reissued under the caplimoltd GCP project | **Conflict, flagged not fixed (Prompt 16):** this contradicts `PROJECT_CHARTER.md` §2 (LOCKED), which states AutoData has its own Google Cloud project and Caplimo is licensee, never owner — reissuing under `caplimoltd` would run counter to that. The charter governs. Not re-keyed here; left as a decision for whoever resolves the conflict, not silently picked one way |
 | 10 | `sales` table physical drop | Currently RLS-locked, retained as backup |
 | 11 | Google Workspace decision for `theautodata.com` | Needed before Chrome Web Store private publish |
 | 12 | Google OAuth consent screen | Keep in "Testing" with explicit test-user list until the portal ships |
@@ -535,3 +608,10 @@ as evidence (public link renders the fix live).
 | 18 | `pluto.bid.car` is the working image domain; `images.bid.cars` fails CORS from page context (dated 4 Sep 2026) | Do not flip the dedup preference in `content-bidcars.js` back to `images.bid.cars` — confirmed live, see `docs/SOLVED.md` §1 |
 | 19 | Two `content-bidcars.js` defects fixed (dated 4 Sep 2026) | (a) `'No information'` Sales History status was missing from the recognised-status regex, causing a false console warning on every archived capture carrying it — added, stored raw and unmapped. (b) `isBidcarsLotPage()` was a single synchronous DOM check with no readiness wait, intermittently reporting a real lot page as unsupported — replaced with a short retry-until-found-or-timeout on the DOM-dependent part only, no fixed delay, non-lot pages still rejected instantly on URL shape alone |
 | 20 | `createClient()` never sets `created_by` (`researchService.ts:186-195`, dated 5 Sep 2026) | Every client row has a null creator, including the placeholder "Internal / Market Research" client created 5 Sep 2026. A one-line fix, deliberately not made here — belongs with a scoped audit-fields pass (`created_by`/`updated_by` across all tables), not bolted onto a navigation prompt |
+| 21 | Free-text colour/fuel/transmission exclusions (`"Any, except White"`) are a workaround (Prompt 16) | Structured include/exclude fields on the brief are the real fix. Also: the exclusion parser's containment-based match cannot correctly handle a compound exclusion like `"except white or black"` — only the single-value shape actually observed live works today |
+| 22 | A1b's `population_unknown` INFO path is unreachable against live data (Prompt 15/16) | `source_platform` is a `NOT NULL` Postgres enum with no null/empty value possible — correct defensive code, verified only via a throwaway script, not live-observable until the schema itself changes |
+| 23 | Prompt 15 Checkpoint 17 (email-failure log line) unverifiable from this CLI | This Supabase CLI version has no `functions logs` subcommand; the email-send-failure path is proven via DB-level evidence (`confirmation_sent_at` not advancing) only, not by reading the actual `console.error` line |
+| 24 | WhatsApp OTP signup — blocked on AutoData entity formation, not on Meta (Prompt 16) | `PROJECT_CHARTER.md` §2 (LOCKED): AutoData runs on its own resources — own Supabase, own domain, own Google Cloud project — and Caplimo is licensee, never owner. A Meta Business account verified today would necessarily use Caplimo's own CAC documents (AutoData's entity isn't formed yet), which would register Caplimo as owner of AutoData's client-signup channel — exactly the ownership erosion §2 exists to prevent. **Must not be registered under Caplimo.** Once the AutoData entity exists: a Meta Business account under AutoData, business verification with AutoData's own registration documents, an approved WhatsApp authentication message template, then delivery via Supabase's **Send SMS Hook** → a new Edge Function → the **WhatsApp Business Cloud API** directly. **Not Twilio** — evaluated and rejected: no viable free tier, and it resells the same underlying Meta pipe at a markup, needing the same approval regardless. Supabase Auth itself still owns OTP generation, expiry, rate limiting and replay protection via the hook; delivery is the only thing this project would ever supply |
+| 25 | Apple Sign In — not built (Prompt 16) | Needs an Apple Developer Program account, a Services ID, and a private key generated in Apple's developer portal, entered in the Supabase Dashboard's Auth → Providers → Apple settings. None of this exists. Available if wanted, once that setup is done |
+| 26 | Apple Messages for Business — not built (Prompt 16) | Genuinely supports in-thread authentication, but requires an Apple-approved Messaging Service Provider, an Apple Business Register account, an Experience Review, and our own OAuth 2.0 endpoints supplied to Apple — a channel wrapped around an identity provider, not one itself. Best revisited at Phase D alongside the portal, when its support-conversation and Apple Pay sides also become useful |
+| 27 | Supabase Auth redirect-URL allowlist doesn't include `/intake/*` (found Prompt 16) | The post-OAuth-signup redirect from the intake page's account offer currently lands on the site root (`theautodata.com`) instead of back at `/intake/:token`, because only allow-listed redirect URLs are honoured. **Exact fix:** Supabase Dashboard → Authentication → URL Configuration → Redirect URLs → add `https://theautodata.com/intake/*`. (For local testing against the same project, also add `http://localhost:3000/intake/*` — optional, dev convenience only.) Not fixable from the codebase or CLI; must be added there before the "you're now linked" confirmation screen can work end-to-end |

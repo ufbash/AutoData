@@ -126,21 +126,76 @@ serve(async (req: Request) => {
         const fromAddress = Deno.env.get("BACKUP_FROM") || "onboarding@resend.dev";
 
         if (resendApiKey && clientRow?.email) {
-          const rows = BRIEF_FIELDS.map((f) => {
-            const v = (updated as any)[f];
-            const display = v == null ? "Not answered"
-              : Array.isArray(v) ? (v.length ? v.join(", ") : "Not answered")
-              : typeof v === "boolean" ? (v ? "Yes" : "No")
-              : String(v);
-            return `<tr><td style="padding:4px 12px 4px 0;color:#666">${f.replace(/_/g, " ")}</td><td style="padding:4px 0"><b>${display}</b></td></tr>`;
+          // Grouped the same way the form itself is grouped, so the copy reads as a summary
+          // of what was submitted rather than a raw field dump. A field left unanswered still
+          // appears (never silently hidden), just visually de-emphasised.
+          const FIELD_LABELS: Record<string, string> = {
+            make: "Make", model: "Model", trim: "Trim", year_min: "Year from", year_max: "Year to",
+            quantity: "Quantity needed", max_mileage: "Max mileage", condition_required: "Condition required",
+            transmission: "Transmission", fuel_type: "Fuel type", titles_accepted: "Titles accepted",
+            damage_tolerance_accepted: "Damage tolerance", colour_preference: "Exterior colour preference",
+            interior_preference: "Interior preference", max_budget_usd: "Max budget (USD)",
+            max_bid_usd: "Max bid (USD)", preferred_auction_sources: "Preferred auction sources",
+            pickup_delivery_location: "Pickup / delivery location", inspection_required: "Inspection required",
+            inspection_scope: "Inspection scope", payment_method: "Payment method",
+            shipping_insurance_optin: "Shipping insurance", additional_notes: "Additional notes",
+            consent_to_bid: "Consent to bid on your behalf",
+            consent_share_with_auction_houses: "Consent to share details with auction houses",
+          };
+          const FIELD_GROUPS: { title: string; fields: string[] }[] = [
+            { title: "Vehicle", fields: ["make", "model", "trim", "year_min", "year_max", "quantity"] },
+            { title: "Condition and title", fields: ["max_mileage", "condition_required", "transmission", "fuel_type", "titles_accepted", "damage_tolerance_accepted"] },
+            { title: "Preferences", fields: ["colour_preference", "interior_preference", "preferred_auction_sources"] },
+            { title: "Budget", fields: ["max_budget_usd", "max_bid_usd"] },
+            { title: "Logistics", fields: ["pickup_delivery_location", "inspection_required", "inspection_scope", "payment_method", "shipping_insurance_optin"] },
+            { title: "Additional notes", fields: ["additional_notes"] },
+            { title: "Consent", fields: ["consent_to_bid", "consent_share_with_auction_houses"] },
+          ];
+
+          const formatValue = (v: unknown): { text: string; answered: boolean } => {
+            if (v == null) return { text: "Not answered", answered: false };
+            if (Array.isArray(v)) return v.length ? { text: v.join(", "), answered: true } : { text: "Not answered", answered: false };
+            if (typeof v === "boolean") return { text: v ? "Yes" : "No", answered: true };
+            return { text: String(v), answered: true };
+          };
+
+          const groupsHtml = FIELD_GROUPS.map((group) => {
+            const rows = group.fields.map((f) => {
+              const { text, answered } = formatValue((updated as any)[f]);
+              const valueColor = answered ? "#1a1a1a" : "#999";
+              return `<tr>
+                <td style="padding:6px 16px 6px 0;color:#666;font-size:13px;white-space:nowrap;vertical-align:top">${FIELD_LABELS[f] || f}</td>
+                <td style="padding:6px 0;color:${valueColor};font-size:13px;font-weight:${answered ? "600" : "400"}">${text}</td>
+              </tr>`;
+            }).join("");
+            return `
+              <tr><td colspan="2" style="padding:20px 0 6px;border-bottom:1px solid #e5e0d5;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#a58039">${group.title}</td></tr>
+              ${rows}
+            `;
           }).join("");
 
+          const submittedDate = new Date(patch.submitted_at as string).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+
           const html = `
-            <h2>Your submission to Caplimo</h2>
-            <p>Hi ${clientRow.full_name || ""}, this is a copy of the vehicle requirements you just submitted, for your own records.</p>
-            <table>${rows}</table>
-            <p>Submitted at: ${patch.submitted_at}</p>
-          `;
+          <div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;background:#F0EDDE;padding:24px">
+            <div style="background:#403f4c;color:#fff;padding:20px 28px;border-radius:12px 12px 0 0">
+              <div style="font-size:18px;font-weight:700;letter-spacing:0.01em">Caplimo</div>
+              <div style="font-size:13px;color:#c9c7d1;margin-top:2px">Vehicle sourcing &amp; brokerage</div>
+            </div>
+            <div style="background:#fff;padding:28px;border-radius:0 0 12px 12px">
+              <h1 style="font-size:16px;color:#403f4c;margin:0 0 4px">Your submission is in</h1>
+              <p style="font-size:13px;color:#666;margin:0 0 4px">
+                Hi ${clientRow.full_name || "there"}, this is a copy of the vehicle requirements you
+                submitted to Caplimo, for your own records. A member of our team will review it shortly.
+              </p>
+              <p style="font-size:12px;color:#999;margin:0 0 8px">Submitted ${submittedDate}</p>
+              <table style="width:100%;border-collapse:collapse">${groupsHtml}</table>
+              <p style="font-size:11px;color:#aaa;margin:24px 0 0;padding-top:16px;border-top:1px solid #eee">
+                This email was sent by Caplimo because you submitted a vehicle request through our intake form.
+                If this wasn't you, you can disregard this message.
+              </p>
+            </div>
+          </div>`;
 
           const resendResponse = await fetch("https://api.resend.com/emails", {
             method: "POST",
@@ -149,7 +204,7 @@ serve(async (req: Request) => {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              from: fromAddress,
+              from: `Caplimo <${fromAddress}>`,
               to: [clientRow.email],
               subject: "Your submission to Caplimo",
               html,

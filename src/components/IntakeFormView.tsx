@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, CheckCircle2, ChevronLeft } from 'lucide-react';
+import { supabase } from '../services/supabaseClient';
+
+// Set right before redirecting to Google, read back on the post-redirect reload so this page
+// can tell "we just returned from our own account offer" apart from an unrelated session
+// already sitting in the browser (e.g. a staff member who happens to open this link while
+// already logged in elsewhere in the same browser) - an ambient session must never be
+// mistaken for a fresh link.
+const ACCOUNT_OFFER_PENDING_KEY = 'intake_account_offer_pending_token';
 
 interface IntakeFormViewProps {
   token: string;
@@ -102,9 +110,12 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [clientName, setClientName] = useState<string | null>(null);
-  const [step, setStep] = useState<'form' | 'review' | 'success'>('form');
+  const [step, setStep] = useState<'form' | 'review' | 'success' | 'account-linked'>('form');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [accountOfferBusy, setAccountOfferBusy] = useState(false);
+  const [accountOfferError, setAccountOfferError] = useState<string | null>(null);
+  const [accountOfferDismissed, setAccountOfferDismissed] = useState(false);
 
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
@@ -133,10 +144,25 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
   const [consentShare, setConsentShare] = useState<TriState>('');
 
   useEffect(() => {
+    const checkAccountOfferReturn = async () => {
+      const pendingToken = sessionStorage.getItem(ACCOUNT_OFFER_PENDING_KEY);
+      if (pendingToken !== token) return false;
+      const { data } = await supabase.auth.getSession();
+      sessionStorage.removeItem(ACCOUNT_OFFER_PENDING_KEY);
+      if (data.session) {
+        setStep('account-linked');
+        setLoading(false);
+        return true;
+      }
+      return false;
+    };
+
     const load = async () => {
       setLoading(true);
       setLoadError(null);
       try {
+        const justLinked = await checkAccountOfferReturn();
+        if (justLinked) return;
         const baseUrl = import.meta.env.VITE_SUPABASE_URL;
         const res = await fetch(`${baseUrl}/functions/v1/intake-brief?token=${token}`);
         if (!res.ok) {
@@ -251,6 +277,39 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
     );
   }
 
+  const handleGoogleAccountOffer = async () => {
+    setAccountOfferBusy(true);
+    setAccountOfferError(null);
+    try {
+      sessionStorage.setItem(ACCOUNT_OFFER_PENDING_KEY, token);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.href },
+      });
+      if (error) throw error;
+      // Browser navigates away to Google here; nothing more to do on this page load.
+    } catch (err: any) {
+      sessionStorage.removeItem(ACCOUNT_OFFER_PENDING_KEY);
+      setAccountOfferError(err.message || 'Could not start sign-in. Please try again.');
+      setAccountOfferBusy(false);
+    }
+  };
+
+  if (step === 'account-linked') {
+    return (
+      <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center p-6">
+        <div className="max-w-sm text-center bg-white p-8 rounded-xl shadow-sm">
+          <CheckCircle2 className="w-12 h-12 text-green-600 mx-auto mb-4" />
+          <h1 className="text-lg font-bold text-[#403f4c] mb-2">You're signed in</h1>
+          <p className="text-sm text-gray-600">
+            Your account is now linked to your existing request with Caplimo. There's nothing
+            further to do here for now — we'll be in touch as your request moves forward.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (step === 'success') {
     return (
       <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center p-6">
@@ -262,6 +321,29 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
             a member of our team will review them shortly. A copy has been sent to your email on
             file, if one is on record.
           </p>
+
+          {!accountOfferDismissed && (
+            <div className="mt-6 pt-6 border-t border-gray-100 text-left">
+              <p className="text-sm font-bold text-[#403f4c] mb-1">Create an account to track your request</p>
+              <p className="text-xs text-gray-500 mb-3">
+                Optional. If you skip this, your request is already saved — nothing is lost.
+              </p>
+              {accountOfferError && <p className="text-xs text-red-600 mb-2">{accountOfferError}</p>}
+              <button
+                onClick={handleGoogleAccountOffer}
+                disabled={accountOfferBusy}
+                className="w-full py-2.5 bg-white border border-gray-300 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 disabled:opacity-50 mb-2"
+              >
+                {accountOfferBusy ? 'Redirecting...' : 'Continue with Google'}
+              </button>
+              <button
+                onClick={() => setAccountOfferDismissed(true)}
+                className="w-full py-1 text-xs text-gray-400 hover:text-gray-600"
+              >
+                Maybe later
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
