@@ -15,3 +15,6 @@ verify_jwt = false
 
 [functions.list-active-runs]
 verify_jwt = false
+
+[functions.intake-brief]
+verify_jwt = false

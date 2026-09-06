@@ -132,6 +132,18 @@ item, alongside the existing mixed-models warn.
 Average unaffected in all cases — the rule reads `soldList` for grouping only and never
 touches `getStats`/the average pipeline.
 
+**Closed gap (Prompt 15, 6 Sep 2026):** the unknown-source count was previously reported only
+when the mismatch warn also fired — an all-unknown-source sold-comps run showed nothing at
+all, reading as a clean single-population average. Added a `population_unknown` INFO checklist
+item that fires whenever `unknownCount > 0` and the mismatch warn does not, so unknowns are
+always surfaced, never silently dropped, and never reported twice when both would otherwise
+fire. Exercised via a throwaway script against all four cases (all-unknown, auction+unknown,
+auction+non-auction+unknown, auction-only) — all matched expectations exactly. Real finding:
+`source_platform` is a `NOT NULL` Postgres enum (`copart`/`iaai`/`bidcars`/`bidfax`/
+`instagram`/`manual`) in the live schema, so this path is currently unreachable against real
+data — correct defensive code for a case the schema itself forecloses today, not something
+live-verified in the browser.
+
 ### A2. Derived asset flags — **DONE** (4 Sep 2026)
 Shared derivation `src/utils/auctionHistoryFlags.ts` (`deriveAuctionHistoryFlags`, one place,
 not duplicated), wired through `listRunListings` (added `asset_id`) and a new
@@ -294,7 +306,7 @@ Requirements:
 Likely needs a stored timestamp column (parsed from `sale_date`) so cron can query
 efficiently rather than parsing text in SQL.
 
-### 4.2 Client intake form — **NOT STARTED** (schema ready, 6 Sep 2026)
+### 4.2 Client intake form — **DONE** (6 Sep 2026, direct-approach route only)
 Per `DECISIONS.md` §6. Web version of the existing Google Form, writing into the client
 record from 022. Tokenized link, no login required, staff review before the brief goes live.
 
@@ -315,14 +327,44 @@ captured/not enforced — see `SCHEMA.md` §10), `shipping_insurance_optin` (boo
 `consent_to_bid` and `consent_share_with_auction_houses` (separate booleans, never bundled),
 plus the review flow (`status` — `pending_review`/`approved`, defaults to the latter for the 8
 pre-existing briefs) and the submission evidence trail (`submitted_at`,
-`confirmation_sent_at`). All nullable, no defaults that imply an answer. The form itself — the
-UI that writes into these columns — is still not started; this is the schema only.
+`confirmation_sent_at`). All nullable, no defaults that imply an answer.
+
+**Built (Prompt 15):** `client_briefs.share_token`/`share_enabled` (migration 025, mirrors
+`research_runs`' own share-token columns and generation exactly, same `UNIQUE` constraint —
+reused, not a second scheme). A new `intake-brief` Edge Function
+(`supabase/functions/intake-brief/index.ts`, `verify_jwt = false`) serves the tokenized form:
+GET returns an explicit allow-list of the brief's own fields plus the client's name; POST
+accepts only that same allow-list — `status`, `org_id`, `client_id`, and the token itself are
+never read out of the request body regardless of what a client sends, then `status` is
+force-set to `pending_review` and `submitted_at` to now, both server-side. Staff generate/
+revoke the link from the brief detail view (`ClientsList.tsx`); the client-facing form lives at
+`/intake/:token` (`IntakeFormView.tsx`), grouped contact/vehicle/condition/preferences/budget/
+logistics/consents, year as a true "from"/"to" range, every boolean/consent field a tri-state
+Yes/No/unanswered control so an unasked question is never coerced to `false`. A confirmation
+email (Resend, same pattern as `monthly-backup`) is sent best-effort after the write completes
+— a failed send is caught, logged, and never unwinds the submission; `confirmation_sent_at`
+simply stays at its prior value, which is itself the record of failure.
+
+**Staff review is enforced, not cosmetic:** `ResearchRunDetail.tsx`'s spec-match gate now reads
+`run.client_brief.status !== 'pending_review' ? run.client_brief : null` — a pending brief
+drives zero spec-match flags no matter what it contains, verified against a real listing that
+massively violated its brief's year/mileage/condition (zero badges while pending, two SPEC
+CRITICAL badges the instant it was approved, same listing, same brief, only the status
+changed). Staff-created briefs (the internal "New Brief" form) are inserted as `approved`
+directly — the review gate exists for client self-submissions, not staff's own data entry,
+same reasoning as the migration 024 backfill.
 
 **Known, deliberately unaddressed:** the form asks for a single Year while the schema (and this
 migration) still maps it to `year_min`/`year_max` both set equal — a client wanting a 2018-2020
 range has no way to say so yet, though the schema already supports it. Cheap to widen the form
 to a range when it's built; awkward once real submissions exist under the single-year
-assumption.
+assumption. **Update:** the form itself now collects a true range ("from"/"to"), so this gap is
+closed for new submissions going through the built form; it only ever applied to a hypothetical
+single-year UI that was never shipped.
+
+**Flagged for later:** the confirmation email's HTML formatting is plain and unstyled (raw
+field-name-to-value table) — functionally correct and verified delivered, but not something to
+show a client as-is without a pass on the display format.
 
 ### 4.3 Deposit gate on run creation — **DONE** (6 Sep 2026)
 Per `DECISIONS.md` 2.7, adopted this cycle: a research run cannot start until the client's

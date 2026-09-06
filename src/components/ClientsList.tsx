@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief } from '../services/researchService';
-import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car } from 'lucide-react';
+import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief } from '../services/researchService';
+import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon } from 'lucide-react';
 
 // --- Brief Form Component ---
 const BriefForm = ({ 
@@ -242,6 +242,8 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const [creatingBrief, setCreatingBrief] = useState(false);
   const [editingBriefId, setEditingBriefId] = useState<string | null>(null);
   const [selectedBriefId, setSelectedBriefId] = useState<string | null>(null);
+  const [briefLinkBusy, setBriefLinkBusy] = useState(false);
+  const [briefLinkCopied, setBriefLinkCopied] = useState(false);
 
   // Deletion logic
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -610,8 +612,11 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 <button onClick={() => setSelectedBriefId(null)} className="text-sm font-bold text-[#a58039] hover:underline mb-2 flex items-center gap-1">
                   ← Back to Briefs
                 </button>
-                <h2 className="text-2xl font-bold text-[#403f4c]">
+                <h2 className="text-2xl font-bold text-[#403f4c] flex items-center gap-3">
                   {selectedBrief.year_min || 'Any'}-{selectedBrief.year_max || 'Any'} {selectedBrief.make || 'Any Make'} {selectedBrief.model || 'Any Model'}
+                  {selectedBrief.status === 'pending_review' && (
+                    <span className="bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wide">Pending review</span>
+                  )}
                 </h2>
                 <div className="text-sm text-gray-500 mt-1">For {selectedClient.full_name}</div>
               </div>
@@ -620,6 +625,17 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                   <span className="text-sm font-bold text-orange-600 px-3 py-1.5 bg-orange-50 rounded-lg">Deleted brief (view only)</span>
                 ) : (
                   <>
+                    {selectedBrief.status === 'pending_review' && (
+                      <button
+                        onClick={async () => {
+                          const b = await approveBrief(selectedBrief.id);
+                          setBriefs(briefs.map(br => br.id === b.id ? b : br));
+                        }}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg font-bold hover:bg-green-700 transition-colors"
+                      >
+                        <Check className="w-4 h-4" /> Approve
+                      </button>
+                    )}
                     <button onClick={() => setEditingBriefId(selectedBrief.id)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
                       <Edit2 className="w-4 h-4" /> Edit
                     </button>
@@ -710,6 +726,70 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 <div>
                   <h3 className="text-lg font-bold text-gray-900 mb-2 border-b pb-2">Additional Notes</h3>
                   <p className="text-gray-700 whitespace-pre-wrap">{selectedBrief.additional_notes}</p>
+                </div>
+              )}
+
+              {!selectedBrief.deleted_at && (
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 mb-4 border-b pb-2 flex items-center gap-2">
+                    <LinkIcon className="w-4 h-4 text-[#a58039]" /> Client Intake Link
+                  </h3>
+                  <p className="text-sm text-gray-500 mb-3">
+                    Send this link to the client so they can fill in their own vehicle requirements. No login required.
+                  </p>
+                  {selectedBrief.share_enabled && selectedBrief.share_token ? (
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={`${window.location.origin}/intake/${selectedBrief.share_token}`}
+                          className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/intake/${selectedBrief.share_token}`);
+                            setBriefLinkCopied(true);
+                            setTimeout(() => setBriefLinkCopied(false), 2000);
+                          }}
+                          className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors flex items-center gap-2"
+                        >
+                          <Copy className="w-4 h-4" /> {briefLinkCopied ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          setBriefLinkBusy(true);
+                          try {
+                            const b = await revokeBriefLink(selectedBrief.id);
+                            setBriefs(briefs.map(br => br.id === b.id ? b : br));
+                          } finally {
+                            setBriefLinkBusy(false);
+                          }
+                        }}
+                        disabled={briefLinkBusy}
+                        className="text-sm text-red-600 font-medium hover:underline disabled:opacity-50"
+                      >
+                        Revoke link
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        setBriefLinkBusy(true);
+                        try {
+                          const b = await generateBriefLink(selectedBrief.id);
+                          setBriefs(briefs.map(br => br.id === b.id ? b : br));
+                        } finally {
+                          setBriefLinkBusy(false);
+                        }
+                      }}
+                      disabled={briefLinkBusy}
+                      className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white text-sm rounded-lg font-bold hover:bg-[#2d2c35] transition-colors disabled:opacity-50"
+                    >
+                      {briefLinkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />} Generate link
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -835,8 +915,11 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                     <div key={b.id} onClick={() => setSelectedBriefId(b.id)} className="bg-white border border-gray-200 hover:border-[#a58039] rounded-lg p-5 shadow-sm cursor-pointer transition-colors group">
                       <div className="flex justify-between items-start mb-3">
                         <div>
-                          <h4 className="font-bold text-gray-900 text-lg group-hover:text-[#a58039] transition-colors">
+                          <h4 className="font-bold text-gray-900 text-lg group-hover:text-[#a58039] transition-colors flex items-center gap-2">
                             {b.year_min || 'Any'}-{b.year_max || 'Any'} {b.make || 'Any Make'} {b.model || 'Any Model'}
+                            {b.status === 'pending_review' && (
+                              <span className="bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide">Pending review</span>
+                            )}
                           </h4>
                           <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
                             Created {new Date(b.created_at).toLocaleDateString()}

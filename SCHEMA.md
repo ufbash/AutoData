@@ -309,6 +309,7 @@ trusted from the client.
 | `extract-vehicle-vision` | JWT + superadmin | server-side Gemini vision | true |
 | `store-images` | JWT + superadmin | server-side image fetch (Copart) | true |
 | `public-run` | none (share token) | public client deliverable | **false** |
+| `intake-brief` | none (share token) | client-facing intake form: read/write one brief, strict field allow-list both directions, confirmation email via Resend | **false** |
 | `monthly-backup` | static `X-Backup-Secret` | pg_cron monthly CSV export via Resend | **false** |
 | `daily-sniper` | static secret | built, unused | — |
 

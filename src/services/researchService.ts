@@ -32,6 +32,20 @@ export interface ClientBrief {
   max_budget_usd?: number | null;
   max_bid_usd?: number | null;
   additional_notes?: string | null;
+  preferred_auction_sources?: string[] | null;
+  pickup_delivery_location?: string | null;
+  inspection_required?: boolean | null;
+  inspection_scope?: string | null;
+  payment_method?: string | null;
+  damage_tolerance_accepted?: string[] | null;
+  shipping_insurance_optin?: boolean | null;
+  consent_to_bid?: boolean | null;
+  consent_share_with_auction_houses?: boolean | null;
+  status?: 'pending_review' | 'approved' | null;
+  submitted_at?: string | null;
+  confirmation_sent_at?: string | null;
+  share_token?: string | null;
+  share_enabled?: boolean | null;
   created_at: string;
 }
 
@@ -247,9 +261,13 @@ export const listClientBriefs = async (orgId: string, clientId?: string): Promis
 };
 
 export const createClientBrief = async (orgId: string, clientId: string, brief: Partial<ClientBrief>): Promise<ClientBrief> => {
+  // Staff entering a brief directly have already reviewed it by typing it themselves - the
+  // pending_review gate exists for client self-submissions via the intake form (intake-brief
+  // Edge Function), not staff's own data entry. Same reasoning as the migration 024 backfill
+  // of pre-existing briefs to approved.
   const { data, error } = await supabase
     .from('client_briefs')
-    .insert({ ...brief, org_id: orgId, client_id: clientId })
+    .insert({ ...brief, org_id: orgId, client_id: clientId, status: 'approved' })
     .select('*')
     .single();
 
@@ -266,6 +284,48 @@ export const updateClient = async (clientId: string, patch: Partial<Client>): Pr
     .single();
 
   if (error) throw new Error(`Failed to update client: ${error.message}`);
+  return data;
+};
+
+// Same generation as research_runs' share_token (createRun/rotateShareToken above) - reused
+// deliberately, not a second scheme (Prompt 15 Phase 2).
+export const generateBriefLink = async (briefId: string): Promise<ClientBrief> => {
+  const share_token = Array.from(crypto.getRandomValues(new Uint8Array(24)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .update({ share_token, share_enabled: true })
+    .eq('id', briefId)
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to generate brief link: ${error.message}`);
+  return data;
+};
+
+export const revokeBriefLink = async (briefId: string): Promise<ClientBrief> => {
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .update({ share_enabled: false })
+    .eq('id', briefId)
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to revoke brief link: ${error.message}`);
+  return data;
+};
+
+export const approveBrief = async (briefId: string): Promise<ClientBrief> => {
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .update({ status: 'approved' })
+    .eq('id', briefId)
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to approve brief: ${error.message}`);
   return data;
 };
 

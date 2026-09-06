@@ -14,6 +14,7 @@ import LoginScreen from './components/LoginScreen';
 import ResearchRuns from './components/ResearchRuns';
 import ResearchRunDetail from './components/ResearchRunDetail';
 import PublicRunView from './components/PublicRunView';
+import IntakeFormView from './components/IntakeFormView';
 import { ClientsList } from './components/ClientsList';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
@@ -751,9 +752,15 @@ const AuthGate: React.FC = () => {
 
 const App: React.FC = () => {
   const shareMatch = window.location.pathname.match(/^\/share\/([A-Za-z0-9]{32,128})$/);
-  
+
   if (shareMatch) {
     return <PublicRunView token={shareMatch[1]} />;
+  }
+
+  const intakeMatch = window.location.pathname.match(/^\/intake\/([A-Za-z0-9]{32,128})$/);
+
+  if (intakeMatch) {
+    return <IntakeFormView token={intakeMatch[1]} />;
   }
 
   return (

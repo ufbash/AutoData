@@ -417,7 +417,11 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     });
 
     // SPEC MATCH RULES
-    const brief = run.client_brief;
+    // A pending_review brief (client self-submitted, not yet staff-approved) must not drive
+    // flags - that is the entire reason review is mandatory (Prompt 15 Phase 6). Only an
+    // approved brief (or a legacy brief with no status column value at all, from before this
+    // concept existed) gates spec matching.
+    const brief = run.client_brief && run.client_brief.status !== 'pending_review' ? run.client_brief : null;
     if (brief) {
       const specCritical = new Map<string, string[]>();
       const specWarn = new Map<string, string[]>();
@@ -863,6 +867,12 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
               <div className="mb-3 flex items-start gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
                 <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
                 <span>Spec matching applies to active-listings runs only. This brief is stored with the run but no spec rules will run against it.</span>
+              </div>
+            )}
+            {run.client_brief.status === 'pending_review' && (
+              <div className="mb-3 flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>This brief is pending staff review. It is not driving any spec-match flags below until approved.</span>
               </div>
             )}
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
