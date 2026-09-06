@@ -71,14 +71,16 @@ serve(async (req: Request) => {
     }
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // A token must match an existing, enabled, non-deleted brief - same three-condition shape
-    // as public-run's research_runs lookup. No distinction is exposed between "no such token"
-    // and "token exists but disabled/deleted" - same generic 404 either way.
+    // A token must match an existing, non-deleted brief. Prompt 18 Phase 4: share_enabled is
+    // no longer "does this token resolve at all" - it is "is this brief open for editing".
+    // Approval always sets share_enabled false but the link must keep resolving, read-only,
+    // per the lifecycle rule (live while pending, read-only once approved, dead only on a
+    // manual revoke). So the lookup itself does not filter on share_enabled - the status/
+    // share_enabled combination below decides what the token is allowed to do.
     const { data: brief, error: briefError } = await supabase
       .from("client_briefs")
-      .select(`id, org_id, client_id, ${BRIEF_FIELDS.join(", ")}, client:clients(${CLIENT_FIELDS.join(", ")})`)
+      .select(`id, org_id, client_id, status, share_enabled, ${BRIEF_FIELDS.join(", ")}, client:clients(${CLIENT_FIELDS.join(", ")})`)
       .eq("share_token", token)
-      .eq("share_enabled", true)
       .is("deleted_at", null)
       .single();
 
@@ -89,12 +91,26 @@ serve(async (req: Request) => {
       });
     }
 
+    const isApproved = brief.status === "approved";
+    const isLive = brief.share_enabled === true;
+
+    // A brief that is neither approved nor live is a manual revoke on a still-pending brief -
+    // the one case that must be a dead link, same generic 404 as an unknown token so no
+    // distinction is exposed between "no such token" and "revoked".
+    if (!isApproved && !isLive) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (req.method === "GET") {
-      const { id, org_id, client_id, client, ...allowed } = brief as any;
+      const { id, org_id, client_id, status, share_enabled, client, ...allowed } = brief as any;
       return new Response(JSON.stringify({
         brief: allowed,
         client_name: client?.full_name ?? null,
         client: client ?? null,
+        read_only: isApproved,
       }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -102,6 +118,16 @@ serve(async (req: Request) => {
     }
 
     if (req.method === "POST") {
+      // The server-side rejection matters more than the client-side read-only view: a client
+      // with the form tab still open from before approval can still fire this request. If it
+      // silently succeeded (or worse, reverted status back to pending_review) it would undo a
+      // staff approval - and the spec rules it now drives - without anyone noticing.
+      if (isApproved) {
+        return new Response(JSON.stringify({ error: "This request has already been approved and can no longer be edited. Contact Caplimo to make a change." }), {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       // Allow-list by construction: only known intake-form keys are ever read out of the
       // body. status, org_id, client_id, and the token itself cannot reach the update payload
       // no matter what the client sends - they are simply never looked up.

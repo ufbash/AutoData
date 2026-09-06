@@ -364,9 +364,13 @@ export const revokeBriefLink = async (briefId: string): Promise<ClientBrief> => 
 };
 
 export const approveBrief = async (briefId: string): Promise<ClientBrief> => {
+  // Prompt 18 Phase 4: approval auto-revokes editing - the brief is now driving real spec
+  // rules and must not change underneath them. share_enabled: false here means "no longer
+  // editable", not "the link stops resolving" - intake-brief still serves an approved brief's
+  // token as a read-only summary, it just refuses writes to it (see intake-brief/index.ts).
   const { data, error } = await supabase
     .from('client_briefs')
-    .update({ status: 'approved' })
+    .update({ status: 'approved', share_enabled: false })
     .eq('id', briefId)
     .select('*')
     .single();

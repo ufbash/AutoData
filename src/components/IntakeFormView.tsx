@@ -52,9 +52,23 @@ type TriState = '' | 'yes' | 'no';
 const boolToTri = (v: boolean | null | undefined): TriState => v === true ? 'yes' : v === false ? 'no' : '';
 const triToBool = (v: TriState): boolean | null => v === 'yes' ? true : v === 'no' ? false : null;
 
-const TITLE_OPTIONS = ['Clean', 'Salvage', 'Rebuilt', 'Certificate of Destruction'];
-const DAMAGE_OPTIONS = ['Front end', 'Rear end', 'Side', 'Hail', 'Flood', 'Fire', 'Mechanical', 'Vandalism', 'None (clean only)'];
-const AUCTION_SOURCE_OPTIONS = ['Copart', 'IAAI', 'Bid.cars', 'Dealer / other'];
+// Verbatim from the live Google Form (Vehicle Purchase Inquiry Form) - Prompt 18 Phase 6.
+// Do not add, rename or reorder.
+const TITLE_OPTIONS = ['Clean', 'Salvage', 'Rebuilt', 'Flood', 'Other'];
+const DAMAGE_OPTIONS = ['No Damage', 'Minor (cosmetic)', 'Moderate (eg Doors/dent)', 'Major (eg Frame/chassis)'];
+const AUCTION_SOURCE_OPTIONS = ['Copart', 'IAAI', 'Local auctions', 'Dealers', 'Private sale', 'No preference'];
+const INTERIOR_OPTIONS = ['Cloth', 'Leather', 'No preference', 'Other'];
+
+// "Prior to 2000" has no single real year - stored as 1999 (the year immediately before the
+// boundary the option names), so ordinary numeric spec-match comparisons (year < year_min,
+// year > year_max) work unchanged at either end of the range with no special-casing elsewhere.
+const YEAR_OPTIONS: { label: string; value: string }[] = [
+  ...Array.from({ length: 2025 - 2000 + 1 }, (_, i) => {
+    const y = String(2025 - i);
+    return { label: y, value: y };
+  }),
+  { label: 'Prior to 2000', value: '1999' },
+];
 
 function toggleInArray(arr: string[], value: string): string[] {
   return arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value];
@@ -117,7 +131,7 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [clientName, setClientName] = useState<string | null>(null);
-  const [step, setStep] = useState<'form' | 'review' | 'success' | 'account-linked'>('form');
+  const [step, setStep] = useState<'form' | 'review' | 'success' | 'account-linked' | 'read-only'>('form');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [accountOfferBusy, setAccountOfferBusy] = useState(false);
@@ -139,8 +153,10 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
   const [fuelType, setFuelType] = useState('');
   const [conditionRequired, setConditionRequired] = useState('');
   const [titlesAccepted, setTitlesAccepted] = useState<string[]>([]);
+  const [titlesOtherText, setTitlesOtherText] = useState('');
   const [colourPreference, setColourPreference] = useState('');
-  const [interiorPreference, setInteriorPreference] = useState('');
+  const [interiorPreference, setInteriorPreference] = useState(''); // one of INTERIOR_OPTIONS, or 'Other'
+  const [interiorOtherText, setInteriorOtherText] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [maxBudgetUsd, setMaxBudgetUsd] = useState('');
   const [maxBidUsd, setMaxBidUsd] = useState('');
@@ -200,9 +216,25 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
         setTransmission(b.transmission || '');
         setFuelType(b.fuel_type || '');
         setConditionRequired(b.condition_required || '');
-        setTitlesAccepted(b.titles_accepted || []);
+        // "Other" is never stored literally - the client's own free text is stored in its
+        // place, so reconstruct the checkbox/select state by treating anything outside the
+        // known option set as the "Other" value.
+        const KNOWN_TITLES = ['Clean', 'Salvage', 'Rebuilt', 'Flood'];
+        const storedTitles = b.titles_accepted || [];
+        const knownTitles = storedTitles.filter(v => KNOWN_TITLES.includes(v));
+        const customTitle = storedTitles.find(v => !KNOWN_TITLES.includes(v));
+        setTitlesAccepted(customTitle ? [...knownTitles, 'Other'] : knownTitles);
+        setTitlesOtherText(customTitle || '');
+
         setColourPreference(b.colour_preference || '');
-        setInteriorPreference(b.interior_preference || '');
+        const storedInterior = b.interior_preference || '';
+        if (storedInterior && !INTERIOR_OPTIONS.includes(storedInterior)) {
+          setInteriorPreference('Other');
+          setInteriorOtherText(storedInterior);
+        } else {
+          setInteriorPreference(storedInterior);
+          setInteriorOtherText('');
+        }
         setQuantity(b.quantity != null ? String(b.quantity) : '1');
         setMaxBudgetUsd(b.max_budget_usd != null ? String(b.max_budget_usd) : '');
         setMaxBidUsd(b.max_bid_usd != null ? String(b.max_bid_usd) : '');
@@ -216,6 +248,9 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
         setShippingInsuranceOptin(boolToTri(b.shipping_insurance_optin));
         setConsentToBid(boolToTri(b.consent_to_bid));
         setConsentShare(boolToTri(b.consent_share_with_auction_houses));
+        if (json.read_only) {
+          setStep('read-only');
+        }
       } catch (err: any) {
         setLoadError(err.message || 'An unexpected error occurred.');
       } finally {
@@ -240,9 +275,16 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
     transmission: transmission || null,
     fuel_type: fuelType || null,
     condition_required: conditionRequired || null,
-    titles_accepted: titlesAccepted.length ? titlesAccepted : null,
+    // "Other" is never stored literally - replaced with the client's own free text if they
+    // gave one, so a future reader (staff, or this same form reloading) sees the actual
+    // answer rather than a placeholder word.
+    titles_accepted: titlesAccepted.length
+      ? titlesAccepted.map(v => (v === 'Other' && titlesOtherText.trim()) ? titlesOtherText.trim() : v)
+      : null,
     colour_preference: colourPreference.trim() || null,
-    interior_preference: interiorPreference.trim() || null,
+    interior_preference: (interiorPreference === 'Other' && interiorOtherText.trim())
+      ? interiorOtherText.trim()
+      : (interiorPreference || null),
     quantity: quantity ? parseInt(quantity, 10) : 1,
     max_budget_usd: maxBudgetUsd ? parseFloat(maxBudgetUsd) : null,
     max_bid_usd: maxBidUsd ? parseFloat(maxBidUsd) : null,
@@ -257,6 +299,33 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
     consent_to_bid: triToBool(consentToBid),
     consent_share_with_auction_houses: triToBool(consentShare),
   });
+
+  const buildSummaryRows = (p: ReturnType<typeof buildPayload>): [string, string][] => [
+    ['Full name', p.full_name || '—'], ['Mobile / WhatsApp', p.phone || '—'], ['Email', p.email || '—'],
+    ['Preferred contact', p.preferred_contact || 'No preference'],
+    ['Make', p.make || '—'], ['Model', p.model || '—'], ['Trim', p.trim || '—'],
+    ['Year range', `${p.year_min === 1999 ? 'Prior to 2000' : p.year_min ?? 'Any'} - ${p.year_max === 1999 ? 'Prior to 2000' : p.year_max ?? 'Any'}`],
+    ['Max mileage', p.max_mileage != null ? `${p.max_mileage.toLocaleString()} mi` : 'No preference'],
+    ['Transmission', p.transmission || 'No preference'],
+    ['Fuel type', p.fuel_type || 'No preference'],
+    ['Condition', p.condition_required || 'No preference'],
+    ['Titles accepted', p.titles_accepted?.join(', ') || 'No preference'],
+    ['Damage tolerance', p.damage_tolerance_accepted?.join(', ') || 'No preference'],
+    ['Colour preference', p.colour_preference || 'No preference'],
+    ['Interior preference', p.interior_preference || 'No preference'],
+    ['Quantity', String(p.quantity)],
+    ['Max budget (USD)', p.max_budget_usd != null ? `$${p.max_budget_usd.toLocaleString()}` : 'No preference'],
+    ['Max bid (USD)', p.max_bid_usd != null ? `$${p.max_bid_usd.toLocaleString()}` : 'No preference'],
+    ['Preferred auction sources', p.preferred_auction_sources?.join(', ') || 'No preference'],
+    ['Pickup / delivery location', p.pickup_delivery_location || '—'],
+    ['Inspection required', p.inspection_required == null ? 'Not answered' : (p.inspection_required ? 'Yes' : 'No')],
+    ['Inspection scope', p.inspection_scope || '—'],
+    ['Payment method', p.payment_method || '—'],
+    ['Shipping insurance', p.shipping_insurance_optin == null ? 'Not answered' : (p.shipping_insurance_optin ? 'Yes' : 'No')],
+    ['Additional notes', p.additional_notes || '—'],
+    ['Consent to bid on your behalf', p.consent_to_bid == null ? 'Not answered' : (p.consent_to_bid ? 'Yes' : 'No')],
+    ['Consent to share details with auction houses', p.consent_share_with_auction_houses == null ? 'Not answered' : (p.consent_share_with_auction_houses ? 'Yes' : 'No')],
+  ];
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -378,34 +447,31 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
     </div>
   );
 
+  if (step === 'read-only') {
+    const rows = buildSummaryRows(buildPayload());
+    return (
+      <div className="min-h-screen bg-[#F0EDDE] py-8 px-4">
+        <div className="max-w-lg mx-auto bg-white rounded-xl shadow-sm p-6">
+          <h1 className="text-lg font-bold text-[#403f4c] mb-1">Your submission</h1>
+          <p className="text-sm text-gray-600 mb-6">
+            This request is being worked on by our team and can no longer be edited here. If
+            anything needs to change, contact Caplimo directly.
+          </p>
+          <div className="space-y-3">
+            {rows.map(([label, value]) => (
+              <div key={label} className="flex justify-between gap-4 text-sm border-b border-gray-100 pb-2">
+                <span className="text-gray-500">{label}</span>
+                <span className="text-right font-medium text-gray-800">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (step === 'review') {
-    const p = buildPayload();
-    const rows: [string, string][] = [
-      ['Full name', p.full_name || '—'], ['Mobile / WhatsApp', p.phone || '—'], ['Email', p.email || '—'],
-      ['Preferred contact', p.preferred_contact || 'No preference'],
-      ['Make', p.make || '—'], ['Model', p.model || '—'], ['Trim', p.trim || '—'],
-      ['Year range', `${p.year_min ?? 'Any'} - ${p.year_max ?? 'Any'}`],
-      ['Max mileage', p.max_mileage != null ? `${p.max_mileage.toLocaleString()} mi` : 'No preference'],
-      ['Transmission', p.transmission || 'No preference'],
-      ['Fuel type', p.fuel_type || 'No preference'],
-      ['Condition', p.condition_required || 'No preference'],
-      ['Titles accepted', p.titles_accepted?.join(', ') || 'No preference'],
-      ['Damage tolerance', p.damage_tolerance_accepted?.join(', ') || 'No preference'],
-      ['Colour preference', p.colour_preference || 'No preference'],
-      ['Interior preference', p.interior_preference || 'No preference'],
-      ['Quantity', String(p.quantity)],
-      ['Max budget (USD)', p.max_budget_usd != null ? `$${p.max_budget_usd.toLocaleString()}` : 'No preference'],
-      ['Max bid (USD)', p.max_bid_usd != null ? `$${p.max_bid_usd.toLocaleString()}` : 'No preference'],
-      ['Preferred auction sources', p.preferred_auction_sources?.join(', ') || 'No preference'],
-      ['Pickup / delivery location', p.pickup_delivery_location || '—'],
-      ['Inspection required', p.inspection_required == null ? 'Not answered' : (p.inspection_required ? 'Yes' : 'No')],
-      ['Inspection scope', p.inspection_scope || '—'],
-      ['Payment method', p.payment_method || '—'],
-      ['Shipping insurance', p.shipping_insurance_optin == null ? 'Not answered' : (p.shipping_insurance_optin ? 'Yes' : 'No')],
-      ['Additional notes', p.additional_notes || '—'],
-      ['Consent to bid on your behalf', p.consent_to_bid == null ? 'Not answered' : (p.consent_to_bid ? 'Yes' : 'No')],
-      ['Consent to share details with auction houses', p.consent_share_with_auction_houses == null ? 'Not answered' : (p.consent_share_with_auction_houses ? 'Yes' : 'No')],
-    ];
+    const rows = buildSummaryRows(buildPayload());
     return (
       <div className="min-h-screen bg-[#F0EDDE] py-8 px-4">
         <div className="max-w-lg mx-auto bg-white rounded-xl shadow-sm p-6">
@@ -470,11 +536,17 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
             <Field label="Make"><input className={inputClass} value={make} onChange={e => setMake(e.target.value)} placeholder="e.g. Toyota" /></Field>
             <Field label="Model"><input className={inputClass} value={model} onChange={e => setModel(e.target.value)} placeholder="e.g. Camry" /></Field>
             <Field label="Trim"><input className={inputClass} value={trim} onChange={e => setTrim(e.target.value)} placeholder="e.g. SE, XLE" /></Field>
-            <Field label="Year range" hint="Looking for one specific year? Enter it as both from and to.">
+            <Field label="Year range" hint="Looking for one specific year? Set both ends the same.">
               <div className="flex items-center gap-2">
-                <input className={inputClass} type="number" value={yearFrom} onChange={e => setYearFrom(e.target.value)} placeholder="From" />
+                <select className={inputClass} value={yearFrom} onChange={e => setYearFrom(e.target.value)}>
+                  <option value="">From</option>
+                  {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+                </select>
                 <span className="text-gray-400">–</span>
-                <input className={inputClass} type="number" value={yearTo} onChange={e => setYearTo(e.target.value)} placeholder="To" />
+                <select className={inputClass} value={yearTo} onChange={e => setYearTo(e.target.value)}>
+                  <option value="">To</option>
+                  {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+                </select>
               </div>
             </Field>
             <Field label="Quantity needed">
@@ -487,10 +559,11 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
             <Field label="Condition required">
               <select className={inputClass} value={conditionRequired} onChange={e => setConditionRequired(e.target.value)}>
                 <option value="">No preference</option>
-                <option value="run_and_drive">Run and drive</option>
-                <option value="starts_needs_work">Starts, needs work</option>
+                <option value="run_and_drive">Run &amp; Drive</option>
+                <option value="starts_needs_work">Starts but needs work</option>
                 <option value="non_running">Non-running</option>
                 <option value="salvage_only">Salvage only</option>
+                <option value="either">Either</option>
               </select>
             </Field>
             <Field label="Transmission">
@@ -498,6 +571,7 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
                 <option value="">No preference</option>
                 <option value="automatic">Automatic</option>
                 <option value="manual">Manual</option>
+                <option value="either">Either</option>
               </select>
             </Field>
             <Field label="Fuel type">
@@ -507,15 +581,29 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
                 <option value="diesel">Diesel</option>
                 <option value="hybrid">Hybrid</option>
                 <option value="electric">Electric</option>
+                <option value="either">Either</option>
               </select>
             </Field>
-            <Field label="Titles accepted"><CheckboxGroup options={TITLE_OPTIONS} selected={titlesAccepted} onToggle={(v) => setTitlesAccepted(toggleInArray(titlesAccepted, v))} /></Field>
-            <Field label="Damage you would accept" hint="Select all that apply."><CheckboxGroup options={DAMAGE_OPTIONS} selected={damageToleranceAccepted} onToggle={(v) => setDamageToleranceAccepted(toggleInArray(damageToleranceAccepted, v))} /></Field>
+            <Field label="Titles accepted">
+              <CheckboxGroup options={TITLE_OPTIONS} selected={titlesAccepted} onToggle={(v) => setTitlesAccepted(toggleInArray(titlesAccepted, v))} />
+              {titlesAccepted.includes('Other') && (
+                <input className={`${inputClass} mt-2`} value={titlesOtherText} onChange={e => setTitlesOtherText(e.target.value)} placeholder="If other, please specify" />
+              )}
+            </Field>
+            <Field label="Damage tolerance" hint="Select all that apply."><CheckboxGroup options={DAMAGE_OPTIONS} selected={damageToleranceAccepted} onToggle={(v) => setDamageToleranceAccepted(toggleInArray(damageToleranceAccepted, v))} /></Field>
           </Section>
 
           <Section title="Preferences">
             <Field label="Exterior colour preference"><input className={inputClass} value={colourPreference} onChange={e => setColourPreference(e.target.value)} placeholder="e.g. Black, White" /></Field>
-            <Field label="Interior preference"><input className={inputClass} value={interiorPreference} onChange={e => setInteriorPreference(e.target.value)} placeholder="e.g. Leather, Black" /></Field>
+            <Field label="Interior preference">
+              <select className={inputClass} value={interiorPreference} onChange={e => setInteriorPreference(e.target.value)}>
+                <option value="">No answer</option>
+                {INTERIOR_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+              {interiorPreference === 'Other' && (
+                <input className={`${inputClass} mt-2`} value={interiorOtherText} onChange={e => setInteriorOtherText(e.target.value)} placeholder="If other, please specify" />
+              )}
+            </Field>
             <Field label="Preferred auction sources"><CheckboxGroup options={AUCTION_SOURCE_OPTIONS} selected={preferredAuctionSources} onToggle={(v) => setPreferredAuctionSources(toggleInArray(preferredAuctionSources, v))} /></Field>
           </Section>
 
@@ -530,7 +618,13 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
             {inspectionRequired === 'yes' && (
               <Field label="Describe inspection scope (if required)"><textarea className={inputClass} rows={2} value={inspectionScope} onChange={e => setInspectionScope(e.target.value)} /></Field>
             )}
-            <Field label="Payment method"><input className={inputClass} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} placeholder="e.g. Bank transfer" /></Field>
+            <Field label="Payment method">
+              <select className={inputClass} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+                <option value="">No answer</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="Bank Deposit">Bank Deposit</option>
+              </select>
+            </Field>
             <Field label="Shipping insurance"><TriStateButtons value={shippingInsuranceOptin} onChange={setShippingInsuranceOptin} /></Field>
           </Section>
 

@@ -1023,3 +1023,49 @@ does not remove the need for this banner, since Resend can still fail for other 
 email remains an optional field. Anything that changes how `confirmation_sent_at` is set (a
 retry mechanism, say) must keep this banner's two-state logic in sync, or it will start lying
 about which state a brief is actually in.
+
+---
+
+## 14. The deposit gate attached to the wrong entity
+
+**Symptom:** `clients.deposit_received_at` marked a client's commitment fee as paid at the
+**client** level. A client who paid for one vehicle was then treated as having paid for every
+subsequent one — the second car's research run started free, because
+`createRun()`'s deposit check (`researchService.ts`) read `input.client?.deposit_received_at`,
+a single boolean-ish timestamp shared across every brief and run that client would ever have.
+
+**Why this is a modelling bug, not a logic bug:** the code that read the flag was correct given
+what it was reading — the mistake was attaching a fact that is inherently **per purchase**
+(one commitment fee buys the right to research *one* vehicle) to an entity that is **per
+relationship** (one client, many vehicles over time). No amount of fixing the comparison logic
+at the client level could have closed this gap; the fee needed to live where the purchase
+lives, which is the brief, not the client.
+
+**Solution:** migration 027 adds `deposit_received_at`/`deposit_recorded_by` to
+`client_briefs`. The data move for existing deposits was itself a judgement call, not a
+mechanical copy: a client's deposit was allocated to every one of their **non-deleted briefs
+that already had a non-deleted run** — concrete evidence that specific vehicle's research was
+actually drawn on under the old, less granular model — and left unmarked on any brief with no
+run. Copying the same deposit onto *every* brief regardless of run history would have
+recreated a subtler version of the same over-crediting bug one level down.
+`clients.deposit_received_at`/`deposit_recorded_by` are deliberately **retained**, not dropped
+— there is no staging environment to test a drop against, so the old columns stay as a
+fallback until the move is proven (`PLAN_TRACKER.md` debt #28).
+
+`createRun()` now checks `input.brief?.deposit_received_at` when a brief is linked. A run with
+**no** brief linked has no deposit record to check at all — rather than treating that as "no
+deposit required," it always demands the superadmin override, since a briefless run is the
+exception this project wants surfaced, not a silent gap the client-level check would have
+let slide through unnoticed. The placeholder "Internal / Market Research" client remains
+exempt regardless, since it represents no paying client at all.
+
+**Why this way:** the fix is a straightforward column move once the modelling error is named,
+but naming it required looking past "is the deposit check firing correctly" (it was) to "is
+the deposit check reading the right column" (it wasn't). The staff-facing toggle moved with
+it — from the client record to the brief detail view — so there is exactly one place to mark
+a deposit, matching the one place it's actually checked.
+
+**How to extend it:** any future code that needs to know "has this vehicle's commitment fee
+landed" must read `client_briefs.deposit_received_at`, never `clients.deposit_received_at` —
+the latter now exists only as historical fallback data, not a live signal, and reintroducing a
+client-level check anywhere would silently resurrect this exact bug.

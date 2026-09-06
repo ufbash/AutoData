@@ -501,6 +501,83 @@ for the three new fields. Dropdowns for year/transmission/fuel/condition/interio
 titles/damage/auction-source (4.3) and the field-by-field parity table (4.5) could not proceed
 without the Google Form's exact option sets — deferred, now supplied, see Prompt 18 Phase 6.
 
+### 4.6 Intake link lifecycle, orphan cleanup, runs relocated to the brief, exact form parity — **DONE** (6 Sep 2026)
+Prompt 18 Stage 2.
+
+**Cancelling a link generation no longer leaves a brief.** The "Generate intake link" action
+on the client page now opens a confirmation first ("Generate a blank intake link for X?");
+the brief is created only by that confirmation's own click, never by opening it — cancelling
+leaves no trace, verified live (brief count unchanged before/after cancel). Two pre-existing
+orphans from earlier testing (never submitted, no runs) were found, shown, confirmed, and
+soft-deleted.
+
+**Link lifecycle re-architected.** `share_enabled` now means "open for editing", not "does
+this token resolve at all" — a brief stays live and editable while `pending_review`
+(re-submitting updates it, `submitted_at` advances, status stays `pending_review`); approval
+auto-sets `share_enabled = false` but the token keeps resolving, read-only, showing a summary
+of exactly what the client submitted (same field allow-list, nothing staff-only); a *manual*
+revoke on a still-`pending_review` brief is the one case that is a true dead link (404, same
+generic message as an unknown token). The POST handler explicitly rejects a write against an
+approved brief (409, "already been approved") **server-side** — verified directly via curl,
+not just hidden behind the client-side read-only view, since a client's stale form tab can
+still fire the request after approval and a silent success (or worse, a status revert) would
+undo a staff decision without anyone noticing.
+
+**Runs moved off the client page onto the brief.** The client page now shows each brief with a
+run count only; the brief detail page (unchanged since Prompt 12/17) is where runs actually
+live and where "New research run" already was. The all-runs page is untouched. Verified:
+opening a run from the brief page lands on the same `ResearchRunDetail` used everywhere else.
+
+**Form parity — exact option sets, verbatim from the live Google Form PDF.** Transmission,
+fuel type, condition required, interior preference, and payment method are now closed
+dropdowns; titles accepted and damage tolerance are closed multi-selects; year (both ends of
+the range) is a 2000–2025 dropdown plus "Prior to 2000" (stored as `1999` internally so
+ordinary numeric spec-match comparisons need no special-casing). Title and interior carry an
+"if other, please specify" companion exactly as the source form does — the free text replaces
+the literal word "Other" in storage, so a future reader sees the actual answer, not a
+placeholder; reloading a submitted brief correctly reconstructs which option was "Other" from
+whatever doesn't match the known set. Make and model stay free text — recorded as debt below.
+Verified live end-to-end on a narrow viewport: every dropdown value landed exactly as selected,
+and all four untouched Yes/No fields (`inspection_required`, `shipping_insurance_optin`,
+`consent_to_bid`, `consent_share_with_auction_houses`) stored `NULL`, not `false`, alongside
+the new dropdown answers in the same submission.
+
+**Parity table (Google Form → intake form):**
+
+| Form field | Status |
+|---|---|
+| Full name | Present |
+| Mobile/WhatsApp | Present |
+| Email | Present |
+| Preferred contact | Present |
+| Assigned agent | Deliberately excluded — staff-only, a client does not choose their own rep |
+| Make | Present (free text) |
+| Model | Present (free text) |
+| Trim | Present (free text) |
+| Year | Present, as a true range (both ends use the same 2000–2025 + "Prior to 2000" list) |
+| Quantity | Present |
+| Transmission | Present (exact dropdown) |
+| Fuel type | Present (exact dropdown) |
+| Max mileage | Present |
+| Condition required | Present (exact dropdown) |
+| Title required (+ if other) | Present (exact multi-select + specify field) |
+| Damage tolerance | Present (exact multi-select) |
+| Colour preference | Present (free text — not in the Phase 6 dropdown list) |
+| Interior preference (+ if other) | Present (exact dropdown + specify field) |
+| Max budget | Present |
+| Max bid | Present |
+| Shipping insurance opt-in | Present (tri-state Yes/No/unanswered) |
+| Preferred auction/source | Present (exact multi-select) |
+| Pickup/delivery location | Present |
+| Inspection required | Present (tri-state) |
+| Inspection scope | Present (conditional free text) |
+| Payment method | Present (exact dropdown) |
+| Additional notes | Present |
+| Example images | Deliberately excluded — out of scope for the whole intake build |
+| Consent to bid | Present (tri-state, separable) |
+| Consent to share with auction houses | Present (tri-state, separable) |
+| Final confirmation ("I confirm these details are correct") | **Gap** — the review-then-submit flow serves the same practical purpose, but the literal confirmation copy/checkbox from the source form was not reproduced |
+
 ---
 
 ## 5. Phase B — coverage
@@ -655,3 +732,6 @@ as evidence (public link renders the fix live).
 | 25 | Apple Sign In — not built (Prompt 16) | Needs an Apple Developer Program account, a Services ID, and a private key generated in Apple's developer portal, entered in the Supabase Dashboard's Auth → Providers → Apple settings. None of this exists. Available if wanted, once that setup is done |
 | 26 | Apple Messages for Business — not built (Prompt 16) | Genuinely supports in-thread authentication, but requires an Apple-approved Messaging Service Provider, an Apple Business Register account, an Experience Review, and our own OAuth 2.0 endpoints supplied to Apple — a channel wrapped around an identity provider, not one itself. Best revisited at Phase D alongside the portal, when its support-conversation and Apple Pay sides also become useful |
 | 27 | Supabase Auth redirect-URL allowlist doesn't include `/intake/*` (found Prompt 16) | The post-OAuth-signup redirect from the intake page's account offer currently lands on the site root (`theautodata.com`) instead of back at `/intake/:token`, because only allow-listed redirect URLs are honoured. **Exact fix:** Supabase Dashboard → Authentication → URL Configuration → Redirect URLs → add `https://theautodata.com/intake/*`. (For local testing against the same project, also add `http://localhost:3000/intake/*` — optional, dev convenience only.) Not fixable from the codebase or CLI; must be added there before the "you're now linked" confirmation screen can work end-to-end |
+| 28 | `clients.deposit_received_at`/`deposit_recorded_by` retained as fallback, not dropped (Prompt 18) | Migration 027 moved the deposit gate to `client_briefs`; the old client-level columns are kept only as a rollback path, since there is no staging environment to test a drop against. Dropping them is a separate, later step once the move is proven in production |
+| 29 | Make/model stay free text on the intake form (Prompt 18 Phase 6) | The Google Form's nine-make dropdown is a Forms limitation that forces "Other, please specify" onto everything else — not worth reproducing. Real dropdowns wait for the vehicle database (E-series estimator work) |
+| 30 | Intake form has no literal "I confirm these details are correct" confirmation (Prompt 18 Phase 6) | The review-then-submit flow serves the same practical purpose, but the source form's exact confirmation copy/checkbox was not reproduced — a parity gap, not a functional one |
