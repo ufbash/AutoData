@@ -46,6 +46,8 @@ export interface ClientBrief {
   confirmation_sent_at?: string | null;
   share_token?: string | null;
   share_enabled?: boolean | null;
+  deposit_received_at?: string | null;
+  deposit_recorded_by?: string | null;
   created_at: string;
 }
 
@@ -155,16 +157,32 @@ export const createRun = async (orgId: string, input: {
   client_id?: string;
   client_brief_id?: string;
   client?: Client | null;
+  brief?: ClientBrief | null;
   depositOverrideReason?: string;
   overrideBy?: string;
 }): Promise<ResearchRun> => {
-  // Per DECISIONS.md 2.7 (adopted): a research run cannot start until the client's commitment
-  // fee has landed. The placeholder internal client is exempt - it has no paying client.
+  // Per DECISIONS.md 2.7 (adopted) and Prompt 18 Phase 2: the commitment fee gates a research
+  // run per vehicle, not per client relationship - moved from clients.deposit_received_at to
+  // client_briefs.deposit_received_at (migration 027) so a second, unrelated vehicle for an
+  // already-paying client does not start free. The placeholder internal client is exempt - it
+  // has no paying client - regardless of brief.
   const isInternalClient = input.client?.full_name === INTERNAL_CLIENT_NAME;
-  const hasDeposit = !!input.client?.deposit_received_at;
+  let hasDeposit: boolean;
+  let depositSubject: string;
+  if (input.client_brief_id) {
+    hasDeposit = !!input.brief?.deposit_received_at;
+    depositSubject = input.brief
+      ? `${input.brief.year_min || 'Any'}-${input.brief.year_max || 'Any'} ${input.brief.make || 'Any Make'} ${input.brief.model || 'Any Model'}`
+      : 'this brief';
+  } else {
+    // No brief means no deposit record to check at all - a briefless run is the exception,
+    // not a free pass, so it always requires the override rather than silently succeeding.
+    hasDeposit = false;
+    depositSubject = 'this run (no brief linked)';
+  }
   if (input.client_id && !isInternalClient && !hasDeposit) {
     if (!input.depositOverrideReason || input.depositOverrideReason.trim().length < 10) {
-      throw new Error(`No commitment fee recorded for this client. Mark the deposit received on their client record, or a superadmin may override with a reason.`);
+      throw new Error(`No commitment fee recorded for ${depositSubject}. Mark the deposit received on the brief, or a superadmin may override with a reason.`);
     }
   }
 

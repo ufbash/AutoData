@@ -622,6 +622,28 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                   )}
                 </h2>
                 <div className="text-sm text-gray-500 mt-1">For {selectedClient.full_name}</div>
+                {selectedClient.full_name !== 'Internal / Market Research' && !selectedBrief.deleted_at && (
+                  <label className="flex items-center gap-2 mt-3 cursor-pointer w-fit">
+                    <input
+                      type="checkbox"
+                      checked={!!selectedBrief.deposit_received_at}
+                      onChange={async (e) => {
+                        const patch: Partial<ClientBrief> = e.target.checked
+                          ? { deposit_received_at: new Date().toISOString(), deposit_recorded_by: user?.id || null }
+                          : { deposit_received_at: null, deposit_recorded_by: null };
+                        const b = await updateClientBrief(selectedBrief.id, patch);
+                        setBriefs(briefs.map(br => br.id === b.id ? b : br));
+                      }}
+                      className="rounded text-[#a58039] focus:ring-[#a58039]"
+                    />
+                    <span className="text-sm font-medium text-gray-700">
+                      Commitment fee deposit received
+                      {selectedBrief.deposit_received_at && (
+                        <span className="text-gray-400 font-normal"> ({new Date(selectedBrief.deposit_received_at).toLocaleDateString()})</span>
+                      )}
+                    </span>
+                  </label>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {selectedBrief.deleted_at ? (
@@ -869,27 +891,6 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 <div className="text-sm text-gray-500 mt-1">Client since {new Date(selectedClient.created_at).toLocaleDateString()}</div>
                 {(selectedClient.email || selectedClient.phone) && (
                   <div className="text-sm text-gray-500 mt-1">{[selectedClient.email, selectedClient.phone].filter(Boolean).join(' · ')}</div>
-                )}
-                {selectedClient.full_name !== 'Internal / Market Research' && (
-                  <label className="flex items-center gap-2 mt-3 cursor-pointer w-fit">
-                    <input
-                      type="checkbox"
-                      checked={!!selectedClient.deposit_received_at}
-                      onChange={(e) => {
-                        const patch: Partial<Client> = e.target.checked
-                          ? { deposit_received_at: new Date().toISOString(), deposit_recorded_by: user?.id || null }
-                          : { deposit_received_at: null, deposit_recorded_by: null };
-                        handleUpdateClient(patch);
-                      }}
-                      className="rounded text-[#a58039] focus:ring-[#a58039]"
-                    />
-                    <span className="text-sm font-medium text-gray-700">
-                      Commitment fee deposit received
-                      {selectedClient.deposit_received_at && (
-                        <span className="text-gray-400 font-normal"> ({new Date(selectedClient.deposit_received_at).toLocaleDateString()})</span>
-                      )}
-                    </span>
-                  </label>
                 )}
               </div>
               <button onClick={() => setEditingClient(true)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">

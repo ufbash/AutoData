@@ -36,7 +36,14 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
 
   const INTERNAL_CLIENT_NAME = 'Internal / Market Research';
   const selectedClientObj = clients.find(c => c.id === selectedClientId) || null;
-  const depositMissing = !!selectedClientObj && selectedClientObj.full_name !== INTERNAL_CLIENT_NAME && !selectedClientObj.deposit_received_at;
+  const selectedBriefObj = briefs.find(b => b.id === selectedBriefId) || null;
+  // Prompt 18 Phase 2: the gate reads the brief's own deposit, not the client's - a client
+  // paying for one vehicle no longer covers every subsequent one. No brief selected means no
+  // deposit record exists to check at all, so a briefless run always needs the override
+  // (except the placeholder internal client, which is exempt regardless).
+  const isInternalClientSelected = !!selectedClientObj && selectedClientObj.full_name === INTERNAL_CLIENT_NAME;
+  const depositMissing = !!selectedClientObj && !isInternalClientSelected &&
+    (selectedBriefId ? !selectedBriefObj?.deposit_received_at : true);
 
   // Read via ref, not as a reactive effect dependency, below: clearing initialBriefId after
   // it's consumed would otherwise change the brief-fetch effect's own dependency array,
@@ -136,6 +143,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
         client_id: selectedClientId,
         client_brief_id: selectedBriefId || undefined,
         client: selectedClientObj,
+        brief: selectedBriefObj,
         depositOverrideReason: role === 'superadmin' ? depositOverrideReason : undefined,
         overrideBy: user?.id
       });
@@ -282,12 +290,14 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
             {depositMissing && (
               <div className="border border-red-200 bg-red-50 rounded-lg p-4 space-y-2">
                 <p className="text-sm font-bold text-red-700">
-                  No commitment fee recorded for {selectedClientObj?.full_name}.
+                  {selectedBriefId
+                    ? `No commitment fee recorded for ${selectedBriefObj ? `${selectedBriefObj.year_min || 'Any'}-${selectedBriefObj.year_max || 'Any'} ${selectedBriefObj.make || 'Any Make'} ${selectedBriefObj.model || 'Any Model'}` : 'this brief'}.`
+                    : 'No brief selected — a run with no linked brief has no deposit record to check.'}
                 </p>
                 <p className="text-sm text-red-600">
-                  Per the deposit policy, a research run cannot start until the client's
-                  commitment fee has landed. Mark the deposit received on their client record,
-                  or select a different client.
+                  {selectedBriefId
+                    ? 'Per the deposit policy, a research run cannot start until this vehicle’s commitment fee has landed. Mark the deposit received on the brief, or select a different one.'
+                    : 'A briefless run is the exception, not a free pass, and always needs a superadmin override.'}
                 </p>
                 {role === 'superadmin' && (
                   <div className="pt-1">
