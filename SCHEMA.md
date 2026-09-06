@@ -260,6 +260,13 @@ deleted_at · deleted_by                                                      (m
 `titles_accepted`, `fuel_type`, `trim`, `interior_preference`, `max_budget_usd`,
 `max_bid_usd`. The data has a home; the form does not ask for it. See `PLAN_TRACKER.md`.
 
+**Captured, never enforced:** `max_budget_usd` and `max_bid_usd` exist so the client's stated
+limit isn't lost, not because any code gates on it — `DECISIONS.md` 3.6 is explicit that no
+budget/max-bid enforcement exists until landed cost is calibrated. `damage_tolerance_accepted`
+(migration 024) has the same status: no spec rule reads it. All nine spec-rule `if` blocks in
+`ResearchRunDetail.tsx` are active-listings/client-risk checks unrelated to this field — a
+reader should not assume a captured preference is an enforced one.
+
 **Migration 023 (5 Aug 2026)** added `deleted_at`/`deleted_by` to `client_briefs` and
 `deleted_by` to `clients` (which already had `deleted_at`), plus indexes on both
 `deleted_at` columns. The columns exist; the view/edit/soft-delete UI that uses them does

@@ -11,7 +11,7 @@ interface ResearchRunsProps {
 }
 
 const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId, onConsumedInitialClient, onOpenClient }) => {
-  const { orgId, orgLoading, role } = useAuth();
+  const { orgId, orgLoading, role, user } = useAuth();
   const [runs, setRuns] = useState<ResearchRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +31,11 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
   const [selectedBriefId, setSelectedBriefId] = useState<string>('');
 
   const [creating, setCreating] = useState(false);
+  const [depositOverrideReason, setDepositOverrideReason] = useState('');
+
+  const INTERNAL_CLIENT_NAME = 'Internal / Market Research';
+  const selectedClientObj = clients.find(c => c.id === selectedClientId) || null;
+  const depositMissing = !!selectedClientObj && selectedClientObj.full_name !== INTERNAL_CLIENT_NAME && !selectedClientObj.deposit_received_at;
 
   useEffect(() => {
     if (orgLoading) return;
@@ -104,7 +109,10 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
         run_type: newRunType,
         notes: newNotes.trim() || undefined,
         client_id: selectedClientId,
-        client_brief_id: selectedBriefId || undefined
+        client_brief_id: selectedBriefId || undefined,
+        client: selectedClientObj,
+        depositOverrideReason: role === 'superadmin' ? depositOverrideReason : undefined,
+        overrideBy: user?.id
       });
       setRuns([newRun, ...runs]);
       setShowNewForm(false);
@@ -113,6 +121,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
       setNewNotes('');
       setSelectedClientId('');
       setSelectedBriefId('');
+      setDepositOverrideReason('');
       onOpenRun(newRun.id);
     } catch (err: any) {
       alert(err.message || 'Failed to create run');
@@ -244,6 +253,33 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
                 </select>
               </div>
             </div>
+
+            {depositMissing && (
+              <div className="border border-red-200 bg-red-50 rounded-lg p-4 space-y-2">
+                <p className="text-sm font-bold text-red-700">
+                  No commitment fee recorded for {selectedClientObj?.full_name}.
+                </p>
+                <p className="text-sm text-red-600">
+                  Per the deposit policy, a research run cannot start until the client's
+                  commitment fee has landed. Mark the deposit received on their client record,
+                  or select a different client.
+                </p>
+                {role === 'superadmin' && (
+                  <div className="pt-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Superadmin override reason (recorded, min 10 characters):
+                    </label>
+                    <textarea
+                      value={depositOverrideReason}
+                      onChange={e => setDepositOverrideReason(e.target.value)}
+                      placeholder="e.g. Deposit confirmed via WhatsApp, not yet logged"
+                      className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#a58039] min-h-[60px]"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Run Type *</label>
               <div className="space-y-2">
@@ -290,7 +326,10 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
               </button>
               <button
                 type="submit"
-                disabled={creating || !newClientName.trim() || !selectedClientId}
+                disabled={
+                  creating || !newClientName.trim() || !selectedClientId ||
+                  (depositMissing && (role !== 'superadmin' || depositOverrideReason.trim().length < 10))
+                }
                 className="flex items-center gap-2 px-4 py-2 bg-[#403f4c] text-white rounded-md font-bold hover:bg-[#2d2c35] transition-colors disabled:opacity-50"
               >
                 {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Create Run'}

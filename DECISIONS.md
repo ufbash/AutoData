@@ -51,13 +51,24 @@ produces a modest margin — correctly. Cost-plus would misprice both. The Niger
 listings already captured (manually and via Gemini Vision) **are** the comparison set:
 Copart/bid.cars comps price the brokerage product, Nigerian dealer comps price retail.
 
-**New — commitment fee (2.7): OPEN.** A competitor's process (received via WhatsApp,
+**Commitment fee (2.7): ADOPTED (6 Sep 2026).** A competitor's process (received via WhatsApp,
 5 Aug 2026) takes ₦500k *before* any work: deposit → preferences → contract → options →
-approval → 65% → buy → 35% on arrival. Caplimo currently performs the full research run —
-capture, curation, comps, a polished client link — for free, before any commitment. That is
+approval → 65% → buy → 35% on arrival. Caplimo previously performed the full research run —
+capture, curation, comps, a polished client link — for free, before any commitment. That was
 the most expensive labour in the business, given away to people who may never buy.
-**Recommendation: a refundable commitment fee gates the research run, not account creation.**
-Anyone may submit a brief; work starts when the fee lands. Not yet adopted.
+**Adopted as recommended: a refundable commitment fee gates the research run, not account
+creation and not the brief.** Anyone may submit a brief; work starts when the fee lands.
+
+**The gate's location:** a staff-controlled `deposit_received_at` / `deposit_recorded_by` pair
+on `clients` (migration 024) — the deposit is a relationship-level fact, not a brief or run
+fact, since a client pays once and may have several briefs and runs over time. `createRun()`
+(`src/services/researchService.ts`) refuses with a named reason when the selected client has
+no deposit marked; the placeholder "Internal / Market Research" client is exempt. A
+superadmin may override with a typed reason (min 10 characters), recorded on the new run via
+`deposit_override_reason`/`_by`/`_at` on `research_runs`, mirroring the existing
+`critical_override_*` pattern — real deposits sometimes arrive by WhatsApp before they land in
+the system, and a hard block with no override gets worked around by editing the database
+directly. No payment integration; a manual staff toggle only (`DECISIONS.md` 5.7).
 
 ---
 
@@ -339,7 +350,7 @@ users who matter most.
 | 2 | Collect 10+ assessment notices | Required before any duty model goes live |
 | 3 | Confirm tiered brokerage fee (2.5) | Recommended, not yet adopted |
 | 4 | Confirm retail discount band 8–12% (2.4) | May differ by segment |
-| 5 | Adopt a commitment fee before research runs (2.7) | Strongly recommended |
+| 5 | ~~Adopt a commitment fee before research runs (2.7)~~ | **ADOPTED 6 Sep 2026** — see §2.7 |
 | 6 | May a run exist without a client? (8.5) | Decides the restructure shape |
 | 7 | Post-2023 vehicles in the valuation table | Table ends 2023; extrapolation method undecided |
 | 8 | Publish the fee schedule publicly? | Transparency argues yes; negotiating room argues no |

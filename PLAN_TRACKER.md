@@ -294,7 +294,7 @@ Requirements:
 Likely needs a stored timestamp column (parsed from `sale_date`) so cron can query
 efficiently rather than parsing text in SQL.
 
-### 4.2 Client intake form — **NOT STARTED**
+### 4.2 Client intake form — **NOT STARTED** (schema ready, 6 Sep 2026)
 Per `DECISIONS.md` §6. Web version of the existing Google Form, writing into the client
 record from 022. Tokenized link, no login required, staff review before the brief goes live.
 
@@ -306,6 +306,45 @@ location · inspection required · inspection scope · payment method · additio
 example images · consent to bid · consent to share details with auction houses · confirmation
 
 Must build **after** 1.1/1.2 so it writes into a complete, editable brief.
+
+**Schema landed in migration `024_intake_schema_and_deposit_gate.sql`:** all fields above that
+lacked a column now have one on `client_briefs` — `preferred_auction_sources` (`text[]`),
+`pickup_delivery_location`, `inspection_required` (boolean), `inspection_scope` (`text`, free
+description, not multi-select), `payment_method`, `damage_tolerance_accepted` (`text[]`,
+captured/not enforced — see `SCHEMA.md` §10), `shipping_insurance_optin` (boolean),
+`consent_to_bid` and `consent_share_with_auction_houses` (separate booleans, never bundled),
+plus the review flow (`status` — `pending_review`/`approved`, defaults to the latter for the 8
+pre-existing briefs) and the submission evidence trail (`submitted_at`,
+`confirmation_sent_at`). All nullable, no defaults that imply an answer. The form itself — the
+UI that writes into these columns — is still not started; this is the schema only.
+
+**Known, deliberately unaddressed:** the form asks for a single Year while the schema (and this
+migration) still maps it to `year_min`/`year_max` both set equal — a client wanting a 2018-2020
+range has no way to say so yet, though the schema already supports it. Cheap to widen the form
+to a range when it's built; awkward once real submissions exist under the single-year
+assumption.
+
+### 4.3 Deposit gate on run creation — **DONE** (6 Sep 2026)
+Per `DECISIONS.md` 2.7, adopted this cycle: a research run cannot start until the client's
+commitment fee has landed. `deposit_received_at`/`deposit_recorded_by` live on `clients`
+(migration 024) — a relationship-level fact, not per-brief or per-run. `createRun()`
+(`src/services/researchService.ts`) refuses with a named reason when the selected client has
+no deposit marked; a staff-facing checkbox on the client record
+(`src/components/ClientsList.tsx`) sets/clears it. The placeholder "Internal / Market
+Research" client is exempt. Superadmin override follows the existing
+`critical_override_reason`/`_by`/`_at` pattern, mirrored here as `deposit_override_*` on
+`research_runs`, gated on a typed reason of at least 10 characters
+(`src/components/ResearchRuns.tsx`). No payment integration — a manual staff toggle only
+(`DECISIONS.md` 5.7).
+
+**Evidence — three cases verified in the browser:** (1) "Mr Ademola Kadiri" with no deposit →
+Create Run disabled, red warning naming the reason, clicking it created nothing (confirmed
+against the database — no new row). (2) Same client, deposit marked via the new checkbox →
+run created immediately, no warning (`92526662-...`). (3) "Internal / Market Research" →
+succeeded with no deposit and no warning shown at all (the case that would catch the gate
+wrongly blocking internal work). Override path verified separately: "Khalifah" (no deposit) +
+a typed reason recorded `deposit_override_reason`/`_by`/`_at` on the new run
+(`3babe481-...`).
 
 ---
 

@@ -766,6 +766,27 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 {(selectedClient.email || selectedClient.phone) && (
                   <div className="text-sm text-gray-500 mt-1">{[selectedClient.email, selectedClient.phone].filter(Boolean).join(' · ')}</div>
                 )}
+                {selectedClient.full_name !== 'Internal / Market Research' && (
+                  <label className="flex items-center gap-2 mt-3 cursor-pointer w-fit">
+                    <input
+                      type="checkbox"
+                      checked={!!selectedClient.deposit_received_at}
+                      onChange={(e) => {
+                        const patch: Partial<Client> = e.target.checked
+                          ? { deposit_received_at: new Date().toISOString(), deposit_recorded_by: user?.id || null }
+                          : { deposit_received_at: null, deposit_recorded_by: null };
+                        handleUpdateClient(patch);
+                      }}
+                      className="rounded text-[#a58039] focus:ring-[#a58039]"
+                    />
+                    <span className="text-sm font-medium text-gray-700">
+                      Commitment fee deposit received
+                      {selectedClient.deposit_received_at && (
+                        <span className="text-gray-400 font-normal"> ({new Date(selectedClient.deposit_received_at).toLocaleDateString()})</span>
+                      )}
+                    </span>
+                  </label>
+                )}
               </div>
               <button onClick={() => setEditingClient(true)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
                 <Edit2 className="w-4 h-4" /> Edit

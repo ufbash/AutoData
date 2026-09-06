@@ -9,6 +9,8 @@ export interface Client {
   assigned_agent?: string | null;
   notes?: string | null;
   created_at: string;
+  deposit_received_at?: string | null;
+  deposit_recorded_by?: string | null;
 }
 
 export interface ClientBrief {
@@ -50,6 +52,9 @@ export interface ResearchRun {
   critical_override_reason?: string | null;
   critical_override_by?: string | null;
   critical_override_at?: string | null;
+  deposit_override_reason?: string | null;
+  deposit_override_by?: string | null;
+  deposit_override_at?: string | null;
   client_id?: string | null;
   client_brief_id?: string | null;
   client?: Client | null;
@@ -126,24 +131,54 @@ export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
   }));
 };
 
-export const createRun = async (orgId: string, input: { client_name: string; run_type: 'sold_comps' | 'active_listings' | 'mixed'; notes?: string; target_spec?: object; client_id?: string; client_brief_id?: string }): Promise<ResearchRun> => {
+const INTERNAL_CLIENT_NAME = 'Internal / Market Research';
+
+export const createRun = async (orgId: string, input: {
+  client_name: string;
+  run_type: 'sold_comps' | 'active_listings' | 'mixed';
+  notes?: string;
+  target_spec?: object;
+  client_id?: string;
+  client_brief_id?: string;
+  client?: Client | null;
+  depositOverrideReason?: string;
+  overrideBy?: string;
+}): Promise<ResearchRun> => {
+  // Per DECISIONS.md 2.7 (adopted): a research run cannot start until the client's commitment
+  // fee has landed. The placeholder internal client is exempt - it has no paying client.
+  const isInternalClient = input.client?.full_name === INTERNAL_CLIENT_NAME;
+  const hasDeposit = !!input.client?.deposit_received_at;
+  if (input.client_id && !isInternalClient && !hasDeposit) {
+    if (!input.depositOverrideReason || input.depositOverrideReason.trim().length < 10) {
+      throw new Error(`No commitment fee recorded for this client. Mark the deposit received on their client record, or a superadmin may override with a reason.`);
+    }
+  }
+
   const share_token = Array.from(crypto.getRandomValues(new Uint8Array(24)))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 
+  const insertPayload: Record<string, unknown> = {
+    org_id: orgId,
+    client_name: input.client_name,
+    run_type: input.run_type,
+    notes: input.notes || null,
+    target_spec: input.target_spec || null,
+    client_id: input.client_id || null,
+    client_brief_id: input.client_brief_id || null,
+    share_token,
+    share_enabled: false
+  };
+
+  if (input.client_id && !isInternalClient && !hasDeposit && input.depositOverrideReason) {
+    insertPayload.deposit_override_reason = input.depositOverrideReason.trim();
+    insertPayload.deposit_override_by = input.overrideBy || null;
+    insertPayload.deposit_override_at = new Date().toISOString();
+  }
+
   const { data, error } = await supabase
     .from('research_runs')
-    .insert({
-      org_id: orgId,
-      client_name: input.client_name,
-      run_type: input.run_type,
-      notes: input.notes || null,
-      target_spec: input.target_spec || null,
-      client_id: input.client_id || null,
-      client_brief_id: input.client_brief_id || null,
-      share_token,
-      share_enabled: false
-    })
+    .insert(insertPayload)
     .select('*, client:clients(*), client_brief:client_briefs(*)')
     .single();
 
