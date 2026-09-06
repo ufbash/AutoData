@@ -180,7 +180,11 @@ serve(async (req: Request) => {
           .single();
 
         const resendApiKey = Deno.env.get("RESEND_API_KEY");
-        const fromAddress = Deno.env.get("BACKUP_FROM") || "onboarding@resend.dev";
+        // theautodata.com is the verified sending domain in Resend. Deliberately not the
+        // BACKUP_FROM secret - that address is for monthly-backup's admin-facing emails, a
+        // different sender identity for a different audience. A plain noreply@ address (not
+        // hello@/team@/news@) reads as transactional rather than a campaign sender.
+        const fromAddress = "noreply@theautodata.com";
 
         if (resendApiKey && clientRow?.email) {
           // Grouped the same way the form itself is grouped, so the copy reads as a summary
@@ -221,38 +225,62 @@ serve(async (req: Request) => {
               const { text, answered } = formatValue((updated as any)[f]);
               const valueColor = answered ? "#1a1a1a" : "#999";
               return `<tr>
-                <td style="padding:6px 16px 6px 0;color:#666;font-size:13px;white-space:nowrap;vertical-align:top">${FIELD_LABELS[f] || f}</td>
-                <td style="padding:6px 0;color:${valueColor};font-size:13px;font-weight:${answered ? "600" : "400"}">${text}</td>
+                <td style="padding:4px 16px 4px 0;color:#666;font-size:13px;white-space:nowrap;vertical-align:top">${FIELD_LABELS[f] || f}</td>
+                <td style="padding:4px 0;color:${valueColor};font-size:13px">${text}</td>
               </tr>`;
             }).join("");
             return `
-              <tr><td colspan="2" style="padding:20px 0 6px;border-bottom:1px solid #e5e0d5;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#a58039">${group.title}</td></tr>
+              <tr><td colspan="2" style="padding:16px 0 4px;font-size:12px;font-weight:bold;color:#444">${group.title}</td></tr>
               ${rows}
             `;
           }).join("");
 
           const submittedDate = new Date(patch.submitted_at as string).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 
+          // An HTML-only transactional email is itself a spam signal - a plain-text
+          // alternative is standard practice and costs nothing to generate from the same
+          // field data already being rendered above.
+          const textLines: string[] = [
+            `Your submission to Caplimo`,
+            ``,
+            `Hi ${clientRow.full_name || "there"}, this is a copy of the vehicle requirements you submitted to Caplimo, for your own records. A member of our team will review it shortly.`,
+            ``,
+            `Submitted ${submittedDate}`,
+            ``,
+          ];
+          FIELD_GROUPS.forEach((group) => {
+            textLines.push(`${group.title.toUpperCase()}`);
+            group.fields.forEach((f) => {
+              const { text } = formatValue((updated as any)[f]);
+              textLines.push(`  ${FIELD_LABELS[f] || f}: ${text}`);
+            });
+            textLines.push(``);
+          });
+          textLines.push(`This email was sent by Caplimo because you submitted a vehicle request through our intake form. If this wasn't you, you can disregard this message.`);
+          const text = textLines.join("\n");
+
+          // Deliberately no logo, no colour banner, no rounded cards, no links - a marketing-
+          // style template is a Promotions-tab signal in Gmail even when authentication and
+          // spam checks pass clean. This should read as a plain receipt, not a campaign email.
           const html = `
-          <div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;background:#F0EDDE;padding:24px">
-            <div style="background:#403f4c;color:#fff;padding:20px 28px;border-radius:12px 12px 0 0">
-              <div style="font-size:18px;font-weight:700;letter-spacing:0.01em">Caplimo</div>
-              <div style="font-size:13px;color:#c9c7d1;margin-top:2px">Vehicle sourcing &amp; brokerage</div>
-            </div>
-            <div style="background:#fff;padding:28px;border-radius:0 0 12px 12px">
-              <h1 style="font-size:16px;color:#403f4c;margin:0 0 4px">Your submission is in</h1>
-              <p style="font-size:13px;color:#666;margin:0 0 4px">
-                Hi ${clientRow.full_name || "there"}, this is a copy of the vehicle requirements you
-                submitted to Caplimo, for your own records. A member of our team will review it shortly.
-              </p>
-              <p style="font-size:12px;color:#999;margin:0 0 8px">Submitted ${submittedDate}</p>
-              <table style="width:100%;border-collapse:collapse">${groupsHtml}</table>
-              <p style="font-size:11px;color:#aaa;margin:24px 0 0;padding-top:16px;border-top:1px solid #eee">
-                This email was sent by Caplimo because you submitted a vehicle request through our intake form.
-                If this wasn't you, you can disregard this message.
-              </p>
-            </div>
+          <div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
+            <p style="font-size:14px;margin:0 0 12px">Hi ${clientRow.full_name || "there"},</p>
+            <p style="font-size:14px;margin:0 0 12px">
+              This is a copy of the vehicle request you submitted to Caplimo, for your records.
+              A member of our team will review it shortly.
+            </p>
+            <p style="font-size:12px;color:#666;margin:0 0 16px">Submitted ${submittedDate}</p>
+            <table style="width:100%;border-collapse:collapse">${groupsHtml}</table>
+            <p style="font-size:12px;color:#666;margin:20px 0 0">
+              This email was sent because you submitted a vehicle request through the Caplimo intake form.
+              If this wasn't you, you can disregard this message.
+            </p>
           </div>`;
+
+          const vehicleDesc = [(updated as any).make, (updated as any).model].filter(Boolean).join(" ");
+          const subject = vehicleDesc
+            ? `Your submission to Caplimo: ${vehicleDesc}`
+            : "Your submission to Caplimo";
 
           const resendResponse = await fetch("https://api.resend.com/emails", {
             method: "POST",
@@ -263,8 +291,10 @@ serve(async (req: Request) => {
             body: JSON.stringify({
               from: `Caplimo <${fromAddress}>`,
               to: [clientRow.email],
-              subject: "Your submission to Caplimo",
+              reply_to: fromAddress,
+              subject,
               html,
+              text,
             }),
           });
 
