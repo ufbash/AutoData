@@ -18,6 +18,7 @@ import {
   deleteSighting
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
+import { parsePreference, colourMatches, transmissionMatches, fuelMatches } from '../utils/specVocabulary';
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
@@ -469,19 +470,46 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
         }
 
         // WARN rules
-        if (brief.colour_preference != null && brief.colour_preference !== '' && brief.colour_preference.toLowerCase() !== 'either' && l.exterior_color != null) {
-          if (!l.exterior_color.toLowerCase().includes(brief.colour_preference.toLowerCase())) {
-            addSpecRule(specWarn, `colour differs (${l.exterior_color} vs ${brief.colour_preference} requested)`, l.id);
+        // colour/transmission/fuel_type go through parsePreference (Any/Either/blank -> no
+        // rule; "Any, except X" -> flag only on a match to the excluded value; anything else
+        // -> a required value) and the vocabulary matchers (Gas/Petrol, Gray/Grey,
+        // Automatic/Auto) so wording differences no longer read as mismatches. Prompt 16 -
+        // previously these compared the raw brief string directly, so a negative preference
+        // like "Any, except White" matched nothing, ever, and "petrol" never matched "Gas".
+        if (l.exterior_color != null) {
+          const colourPref = parsePreference(brief.colour_preference);
+          if (colourPref.kind === 'exclude') {
+            if (colourMatches(l.exterior_color, colourPref.value)) {
+              addSpecRule(specWarn, `colour excluded (${l.exterior_color} matches "${colourPref.value}", which was excluded)`, l.id);
+            }
+          } else if (colourPref.kind === 'required') {
+            if (!colourMatches(l.exterior_color, colourPref.value)) {
+              addSpecRule(specWarn, `colour differs (${l.exterior_color} vs ${colourPref.value} requested)`, l.id);
+            }
           }
         }
-        if (brief.transmission != null && brief.transmission !== '' && brief.transmission.toLowerCase() !== 'either' && l.transmission != null) {
-          if (!l.transmission.toLowerCase().includes(brief.transmission.toLowerCase())) {
-            addSpecRule(specWarn, `transmission differs (${l.transmission} vs ${brief.transmission} requested)`, l.id);
+        if (l.transmission != null) {
+          const transmissionPref = parsePreference(brief.transmission);
+          if (transmissionPref.kind === 'exclude') {
+            if (transmissionMatches(l.transmission, transmissionPref.value)) {
+              addSpecRule(specWarn, `transmission excluded (${l.transmission} matches "${transmissionPref.value}", which was excluded)`, l.id);
+            }
+          } else if (transmissionPref.kind === 'required') {
+            if (!transmissionMatches(l.transmission, transmissionPref.value)) {
+              addSpecRule(specWarn, `transmission differs (${l.transmission} vs ${transmissionPref.value} requested)`, l.id);
+            }
           }
         }
-        if (brief.fuel_type != null && brief.fuel_type !== '' && brief.fuel_type.toLowerCase() !== 'either' && l.fuel != null) {
-          if (!l.fuel.toLowerCase().includes(brief.fuel_type.toLowerCase())) {
-            addSpecRule(specWarn, `fuel type differs (${l.fuel} vs ${brief.fuel_type} requested)`, l.id);
+        if (l.fuel != null) {
+          const fuelPref = parsePreference(brief.fuel_type);
+          if (fuelPref.kind === 'exclude') {
+            if (fuelMatches(l.fuel, fuelPref.value)) {
+              addSpecRule(specWarn, `fuel type excluded (${l.fuel} matches "${fuelPref.value}", which was excluded)`, l.id);
+            }
+          } else if (fuelPref.kind === 'required') {
+            if (!fuelMatches(l.fuel, fuelPref.value)) {
+              addSpecRule(specWarn, `fuel type differs (${l.fuel} vs ${fuelPref.value} requested)`, l.id);
+            }
           }
         }
         if (brief.trim != null && brief.trim !== '' && brief.trim.toLowerCase() !== 'either' && l.trim != null) {
