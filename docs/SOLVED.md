@@ -971,3 +971,55 @@ underlying thing in different words (a live distinct-values query, not a guess) 
 Electric/Petrol distinction is exactly the kind of pair that must **never** collapse together,
 and the module's own test coverage (a throwaway script, not committed) exists to catch that
 class of mistake before it ships.
+
+---
+
+## 13. The confirmation email that silently sent nothing
+
+**Symptom:** A real client-facing submission completed on 6 Sep 2026 and no confirmation email
+arrived. `intake-brief` had been verified end to end in Prompt 15 — something specific broke,
+or more precisely, something specific was never guaranteed in the first place.
+
+**Diagnosis, not a code defect:** the client's own record simply had no email on file.
+```
+SELECT cb.id, cb.status, cb.submitted_at, cb.confirmation_sent_at, c.full_name, c.email
+FROM client_briefs cb LEFT JOIN clients c ON c.id = cb.client_id
+ORDER BY cb.submitted_at DESC NULLS LAST LIMIT 5;
+```
+showed the real row: `submitted_at` set, `confirmation_sent_at` `NULL`, `full_name` "Mohammed
+Jamilu Danmusa", `email` `NULL`. The submission itself worked exactly as designed — it is the
+recipient that never existed. `intake-brief/index.ts:119-123` reads the recipient from the
+**client record** (`brief.client_id`), not from anything the form itself submitted (at the
+time, the intake form had no email field at all - Prompt 17 Phase 4 added one). The guard at
+line 128, `if (resendApiKey && clientRow?.email)`, correctly skips sending on a falsy email
+rather than crashing or sending to nowhere - but the only trace of that skip was a
+`console.error` line in the Edge Function's own Deno runtime logs, which this project's CLI
+has no `functions logs` subcommand to read (`PLAN_TRACKER.md` debt #23). Staff had no way to
+know, from the product itself, that a specific submission's confirmation copy never went out.
+
+**Why this isn't "the code was wrong":** every property Prompt 15 established was already
+correctly in place - the submission always persists regardless of the email outcome, and the
+client-facing success screen already said "if one is on record" (the exact false-claim bug
+Prompt 15 caught and fixed), so no client was ever told something untrue. The gap was pure
+staff-side invisibility: a fact that mattered (no confirmation went out, and why) existed only
+in a log neither this CLI nor the staff UI could surface.
+
+**Fix — no migration needed, inferred entirely from data already on hand:** a status banner on
+the brief detail view (`ClientsList.tsx`), shown whenever `submitted_at` is set: green
+"Confirmation email sent" with the timestamp if `confirmation_sent_at` is set; amber
+"Confirmation email not sent" otherwise, naming the reason when it's inferable ("This client
+has no email on file") or stating plainly that delivery didn't complete when the client does
+have an email (a Resend-side failure, whose specific cause is still only in that unreadable
+log — the banner reports the fact, not a diagnosis it cannot make).
+
+**Why this way:** the three pieces of information needed (`submitted_at`, `confirmation_sent_at`,
+`clients.email`) were already being fetched into the same view for other reasons - deriving the
+banner from them client-side avoided adding a new column purely to record something the existing
+columns already implied together.
+
+**How to extend it:** Prompt 17 Phase 4 lets the client supply their own email on the form,
+which narrows how often this specific cause (no email on file) occurs going forward - but it
+does not remove the need for this banner, since Resend can still fail for other reasons and
+email remains an optional field. Anything that changes how `confirmation_sent_at` is set (a
+retry mechanism, say) must keep this banner's two-state logic in sync, or it will start lying
+about which state a brief is actually in.

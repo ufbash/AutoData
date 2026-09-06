@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief } from '../services/researchService';
+import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief, createBriefWithIntakeLink } from '../services/researchService';
 import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon } from 'lucide-react';
 
 // --- Brief Form Component ---
@@ -207,7 +207,7 @@ const ClientEditForm = ({
 
 interface ClientsListProps {
   onOpenRun?: (runId: string) => void;
-  onNewRunForClient?: (clientId: string) => void;
+  onNewRunForClient?: (clientId: string, briefId?: string) => void;
   initialClientId?: string | null;
   initialBriefId?: string | null;
   onConsumedInitialSelection?: () => void;
@@ -244,6 +244,9 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const [selectedBriefId, setSelectedBriefId] = useState<string | null>(null);
   const [briefLinkBusy, setBriefLinkBusy] = useState(false);
   const [briefLinkCopied, setBriefLinkCopied] = useState(false);
+  const [generatingIntakeLink, setGeneratingIntakeLink] = useState(false);
+  const [freshIntakeLink, setFreshIntakeLink] = useState<ClientBrief | null>(null);
+  const [freshLinkCopied, setFreshLinkCopied] = useState(false);
 
   // Deletion logic
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -574,7 +577,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 {clients.map(c => (
                   <div 
                     key={c.id} 
-                    onClick={() => setSelectedClient(c)}
+                    onClick={() => { setSelectedClient(c); setFreshIntakeLink(null); }}
                     className={`p-4 cursor-pointer hover:bg-gray-50 flex items-center justify-between ${selectedClient?.id === c.id ? 'bg-[#a58039]/5 border-l-4 border-[#a58039]' : 'border-l-4 border-transparent'}`}
                 >
                   <div className="font-medium text-gray-900">{c.full_name}</div>
@@ -636,6 +639,12 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                         <Check className="w-4 h-4" /> Approve
                       </button>
                     )}
+                    <button
+                      onClick={() => onNewRunForClient?.(selectedClient.id, selectedBrief.id)}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-[#403f4c] text-white text-sm rounded-lg font-bold hover:bg-[#2d2c35] transition-colors"
+                    >
+                      <Plus className="w-4 h-4" /> New research run
+                    </button>
                     <button onClick={() => setEditingBriefId(selectedBrief.id)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
                       <Edit2 className="w-4 h-4" /> Edit
                     </button>
@@ -893,14 +902,63 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 Buying Briefs
               </h3>
               {!showNewBriefForm && !isSelectedBriefEditing && (
-                <button 
-                  onClick={() => setShowNewBriefForm(true)}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-[#403f4c] text-white text-sm rounded-lg font-bold hover:bg-[#2d2c35]"
-                >
-                  <Plus className="w-4 h-4" /> New Brief
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      if (!orgId || !selectedClient) return;
+                      setGeneratingIntakeLink(true);
+                      try {
+                        const b = await createBriefWithIntakeLink(orgId, selectedClient.id);
+                        setBriefs([b, ...briefs]);
+                        setFreshIntakeLink(b);
+                        setFreshLinkCopied(false);
+                      } catch (err: any) {
+                        alert(err.message);
+                      } finally {
+                        setGeneratingIntakeLink(false);
+                      }
+                    }}
+                    disabled={generatingIntakeLink}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {generatingIntakeLink ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4 text-[#a58039]" />} Generate intake link
+                  </button>
+                  <button
+                    onClick={() => setShowNewBriefForm(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-[#403f4c] text-white text-sm rounded-lg font-bold hover:bg-[#2d2c35]"
+                  >
+                    <Plus className="w-4 h-4" /> New Brief
+                  </button>
+                </div>
               )}
             </div>
+
+            {freshIntakeLink && (
+              <div className="mx-6 mt-4 p-4 bg-[#a58039]/5 border border-[#a58039]/30 rounded-lg">
+                <div className="flex justify-between items-start mb-2">
+                  <p className="text-sm font-bold text-[#403f4c]">Blank intake link ready to send</p>
+                  <button onClick={() => setFreshIntakeLink(null)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${window.location.origin}/intake/${freshIntakeLink.share_token}`}
+                    className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/intake/${freshIntakeLink.share_token}`);
+                      setFreshLinkCopied(true);
+                      setTimeout(() => setFreshLinkCopied(false), 2000);
+                    }}
+                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors flex items-center gap-2"
+                  >
+                    <Copy className="w-4 h-4" /> {freshLinkCopied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="flex-1 overflow-y-auto p-6">
               {showNewBriefForm && (

@@ -120,6 +120,7 @@ const MainDashboard: React.FC = () => {
   const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail' | 'clients'>(role === 'superadmin' ? 'dashboard' : 'research');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [prefillClientId, setPrefillClientId] = useState<string | null>(null);
+  const [prefillBriefId, setPrefillBriefId] = useState<string | null>(null);
   const [hubClientId, setHubClientId] = useState<string | null>(null);
   const [hubBriefId, setHubBriefId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -707,7 +708,8 @@ const MainDashboard: React.FC = () => {
           <ResearchRuns
             onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); }}
             initialClientId={prefillClientId}
-            onConsumedInitialClient={() => setPrefillClientId(null)}
+            initialBriefId={prefillBriefId}
+            onConsumedInitialClient={() => { setPrefillClientId(null); setPrefillBriefId(null); }}
             onOpenClient={(clientId, briefId) => { setHubClientId(clientId); setHubBriefId(briefId || null); setView('clients'); }}
           />
         )}
@@ -721,7 +723,7 @@ const MainDashboard: React.FC = () => {
         {!salesLoading && view === 'clients' && (
           <ClientsList
             onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); }}
-            onNewRunForClient={(clientId) => { setPrefillClientId(clientId); setView('research'); }}
+            onNewRunForClient={(clientId, briefId) => { setPrefillClientId(clientId); setPrefillBriefId(briefId || null); setView('research'); }}
             initialClientId={hubClientId}
             initialBriefId={hubBriefId}
             onConsumedInitialSelection={() => { setHubClientId(null); setHubBriefId(null); }}

@@ -461,6 +461,46 @@ correctly yet), and the account-linking trigger's live `INSERT` path was verifie
 simulation against real data, not by a genuine end-to-end browser signup — no spare Google
 identity was available in this environment to drive one.
 
+### 4.5 Confirmation-email visibility; direct link generation; run-from-brief; form parity (widened allow-list) — **DONE, Phase 4.3/4.5 deferred** (6 Sep 2026)
+Prompt 17.
+
+**Email visibility fix — `docs/SOLVED.md` topic 13.** A real submission sent no confirmation
+email because the client had no email on file — correct behaviour, invisible to staff. A
+status banner on the brief detail view now shows green "sent" (with timestamp) or amber "not
+sent" (naming the reason when inferable), derived entirely from existing data, no migration.
+
+**"Generate intake link" on the client page.** `createBriefWithIntakeLink()`
+(`researchService.ts`) creates an empty `pending_review` brief and a ready token in one action,
+shown inline without navigating away — reuses the exact token generation already used
+everywhere else. The manual "New Brief" path (staff-typed, inserted as `approved`) is
+unchanged and still available.
+
+**"New research run" from a brief.** Extends the existing client→run pre-fill mechanism
+(`prefillClientId`/`onConsumedInitialClient`) by one field, `prefillBriefId`. Found and fixed a
+real race condition in the process: clearing the consumed pre-fill inside the same effect whose
+own dependency array included the value being cleared caused that effect to re-fire and hit its
+own unconditional reset, silently discarding the brief selection. Fixed by reading the pending
+brief id through a ref, decoupled from the effect's dependency array, so clearing it afterward
+cannot retrigger the effect that just consumed it. Verified: client + brief both correctly
+pre-filled and saved with matching `client_id`/`client_brief_id` (no Prompt 11-style mismatch);
+the deposit gate still refuses correctly from this path; a pending brief can start a run and
+correctly shows the pending banner with zero spec-match flags, the same decision and mechanism
+Prompt 16 verified — deliberately not blocked at creation time.
+
+**Form parity, Phase 4.1/4.2/4.4 — done; 4.3/4.5 deferred to Prompt 18 Phase 6.** The intake
+form now collects full name, mobile/WhatsApp, phone, email, and preferred contact method,
+pre-filled from the client record and editable by the client (`assigned_agent` deliberately
+excluded — staff-only, a client does not pick their own sales rep). `intake-brief`'s
+write allow-list is deliberately widened onto a second table: exactly `full_name`, `phone`,
+`email`, `preferred_contact` on `clients`, via a wholly separate `CLIENT_FIELDS` list kept
+independent from `BRIEF_FIELDS` so the two can never merge. Verified live: a real client's
+`full_name` updated from the form, while an injected `assigned_agent`, `org_id`, and —
+critically — `deposit_received_at` in the same request were all silently ignored, before/after
+shown identical for all three. Autocomplete/input-type attributes (`name`/`tel`/`email`) added
+for the three new fields. Dropdowns for year/transmission/fuel/condition/interior/payment/
+titles/damage/auction-source (4.3) and the field-by-field parity table (4.5) could not proceed
+without the Google Form's exact option sets — deferred, now supplied, see Prompt 18 Phase 6.
+
 ---
 
 ## 5. Phase B — coverage

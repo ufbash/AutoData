@@ -41,6 +41,13 @@ interface BriefData {
   consent_share_with_auction_houses: boolean | null;
 }
 
+interface ClientData {
+  full_name: string | null;
+  phone: string | null;
+  email: string | null;
+  preferred_contact: string | null;
+}
+
 type TriState = '' | 'yes' | 'no';
 const boolToTri = (v: boolean | null | undefined): TriState => v === true ? 'yes' : v === false ? 'no' : '';
 const triToBool = (v: TriState): boolean | null => v === 'yes' ? true : v === 'no' ? false : null;
@@ -117,6 +124,11 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
   const [accountOfferError, setAccountOfferError] = useState<string | null>(null);
   const [accountOfferDismissed, setAccountOfferDismissed] = useState(false);
 
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [preferredContact, setPreferredContact] = useState('');
+
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
   const [trim, setTrim] = useState('');
@@ -174,6 +186,11 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
         const json = await res.json();
         const b: BriefData = json.brief;
         setClientName(json.client_name || null);
+        const client: ClientData | null = json.client;
+        setFullName(client?.full_name || '');
+        setPhone(client?.phone || '');
+        setEmail(client?.email || '');
+        setPreferredContact(client?.preferred_contact || '');
         setMake(b.make || '');
         setModel(b.model || '');
         setTrim(b.trim || '');
@@ -210,6 +227,10 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
 
   const buildPayload = () => ({
     token,
+    full_name: fullName.trim() || null,
+    phone: phone.trim() || null,
+    email: email.trim() || null,
+    preferred_contact: preferredContact || null,
     make: make.trim() || null,
     model: model.trim() || null,
     trim: trim.trim() || null,
@@ -360,6 +381,8 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
   if (step === 'review') {
     const p = buildPayload();
     const rows: [string, string][] = [
+      ['Full name', p.full_name || '—'], ['Mobile / WhatsApp', p.phone || '—'], ['Email', p.email || '—'],
+      ['Preferred contact', p.preferred_contact || 'No preference'],
       ['Make', p.make || '—'], ['Model', p.model || '—'], ['Trim', p.trim || '—'],
       ['Year range', `${p.year_min ?? 'Any'} - ${p.year_max ?? 'Any'}`],
       ['Max mileage', p.max_mileage != null ? `${p.max_mileage.toLocaleString()} mi` : 'No preference'],
@@ -423,6 +446,26 @@ const IntakeFormView: React.FC<IntakeFormViewProps> = ({ token }) => {
         <NdprNotice />
 
         <form onSubmit={(e) => { e.preventDefault(); setStep('review'); }}>
+          <Section title="Your details">
+            <Field label="Full name">
+              <input className={inputClass} value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Your full name" autoComplete="name" />
+            </Field>
+            <Field label="Mobile / WhatsApp number">
+              <input className={inputClass} type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="e.g. +234 803 000 0000" autoComplete="tel" />
+            </Field>
+            <Field label="Email">
+              <input className={inputClass} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
+            </Field>
+            <Field label="Preferred contact method">
+              <select className={inputClass} value={preferredContact} onChange={e => setPreferredContact(e.target.value)} autoComplete="off">
+                <option value="">No preference</option>
+                <option value="phone">Phone</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="email">Email</option>
+              </select>
+            </Field>
+          </Section>
+
           <Section title="Vehicle">
             <Field label="Make"><input className={inputClass} value={make} onChange={e => setMake(e.target.value)} placeholder="e.g. Toyota" /></Field>
             <Field label="Model"><input className={inputClass} value={model} onChange={e => setModel(e.target.value)} placeholder="e.g. Camry" /></Field>

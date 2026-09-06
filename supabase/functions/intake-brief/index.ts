@@ -25,9 +25,17 @@ const BRIEF_FIELDS = [
   "consent_to_bid", "consent_share_with_auction_houses",
 ] as const;
 
-function pickAllowed(body: Record<string, unknown>): Record<string, unknown> {
+// Prompt 17 Phase 4 - widens the write boundary deliberately, onto a second table. Exactly
+// these four columns on `clients`, nothing else - in particular never user_id, deposit_received_at,
+// deleted_at, or assigned_agent (staff-only; a client must never choose their own sales rep,
+// and a client who could set deposit_received_at would mark their own commitment fee received
+// and walk straight through the Prompt 14 gate). Kept as a wholly separate list from
+// BRIEF_FIELDS/pickAllowed so the two tables' allow-lists can never be accidentally merged.
+const CLIENT_FIELDS = ["full_name", "phone", "email", "preferred_contact"] as const;
+
+function pickAllowedFrom<T extends readonly string[]>(body: Record<string, unknown>, fields: T): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const key of BRIEF_FIELDS) {
+  for (const key of fields) {
     if (key in body) out[key] = body[key];
   }
   return out;
@@ -68,7 +76,7 @@ serve(async (req: Request) => {
     // and "token exists but disabled/deleted" - same generic 404 either way.
     const { data: brief, error: briefError } = await supabase
       .from("client_briefs")
-      .select(`id, org_id, client_id, ${BRIEF_FIELDS.join(", ")}, client:clients(full_name)`)
+      .select(`id, org_id, client_id, ${BRIEF_FIELDS.join(", ")}, client:clients(${CLIENT_FIELDS.join(", ")})`)
       .eq("share_token", token)
       .eq("share_enabled", true)
       .is("deleted_at", null)
@@ -86,6 +94,7 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({
         brief: allowed,
         client_name: client?.full_name ?? null,
+        client: client ?? null,
       }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -96,7 +105,7 @@ serve(async (req: Request) => {
       // Allow-list by construction: only known intake-form keys are ever read out of the
       // body. status, org_id, client_id, and the token itself cannot reach the update payload
       // no matter what the client sends - they are simply never looked up.
-      const patch = pickAllowed(body);
+      const patch = pickAllowedFrom(body, BRIEF_FIELDS);
       patch.status = "pending_review"; // server-set, always - the client cannot approve their own brief
       patch.submitted_at = new Date().toISOString(); // server-set
 
@@ -108,6 +117,28 @@ serve(async (req: Request) => {
         .single();
 
       if (updateError) throw updateError;
+
+      // Widened write boundary (Phase 4): exactly the four CLIENT_FIELDS, on the client row
+      // identified by brief.client_id read server-side from the token-verified brief above -
+      // never a client-supplied id. Same allow-list-by-construction guarantee as the brief
+      // patch: id, org_id, user_id, deposit_received_at, deleted_at and assigned_agent are
+      // never in CLIENT_FIELDS, so they can never reach this update no matter what the client
+      // sends. Best-effort like the email below - a failure here must not lose the brief
+      // submission that already succeeded above.
+      try {
+        const clientPatch = pickAllowedFrom(body, CLIENT_FIELDS);
+        if (Object.keys(clientPatch).length > 0) {
+          const { error: clientUpdateError } = await supabase
+            .from("clients")
+            .update(clientPatch)
+            .eq("id", brief.client_id);
+          if (clientUpdateError) {
+            console.error("intake-brief: client contact-info update failed:", clientUpdateError);
+          }
+        }
+      } catch (clientErr) {
+        console.error("intake-brief: client contact-info update threw:", clientErr);
+      }
 
       // The submission itself is already complete and persisted above. Everything from here
       // down is best-effort: DECISIONS.md §6 wants a confirmation copy emailed to the client,

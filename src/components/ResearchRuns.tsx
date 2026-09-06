@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { listRuns, createRun, listDeletedRuns, restoreRun, listClients, listClientBriefs, ResearchRun, Client, ClientBrief } from '../services/researchService';
 import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car } from 'lucide-react';
@@ -6,11 +6,12 @@ import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car } from 'lucid
 interface ResearchRunsProps {
   onOpenRun: (runId: string) => void;
   initialClientId?: string | null;
+  initialBriefId?: string | null;
   onConsumedInitialClient?: () => void;
   onOpenClient?: (clientId: string, briefId?: string) => void;
 }
 
-const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId, onConsumedInitialClient, onOpenClient }) => {
+const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId, initialBriefId, onConsumedInitialClient, onOpenClient }) => {
   const { orgId, orgLoading, role, user } = useAuth();
   const [runs, setRuns] = useState<ResearchRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +37,13 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
   const INTERNAL_CLIENT_NAME = 'Internal / Market Research';
   const selectedClientObj = clients.find(c => c.id === selectedClientId) || null;
   const depositMissing = !!selectedClientObj && selectedClientObj.full_name !== INTERNAL_CLIENT_NAME && !selectedClientObj.deposit_received_at;
+
+  // Read via ref, not as a reactive effect dependency, below: clearing initialBriefId after
+  // it's consumed would otherwise change the brief-fetch effect's own dependency array,
+  // re-firing it and hitting its unconditional setSelectedBriefId('') reset at the top -
+  // wiping out the very selection just applied (Prompt 17 Phase 3).
+  const initialBriefIdRef = useRef(initialBriefId);
+  useEffect(() => { initialBriefIdRef.current = initialBriefId; }, [initialBriefId]);
 
   useEffect(() => {
     if (orgLoading) return;
@@ -76,8 +84,26 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
       try {
         const b = await listClientBriefs(orgId, selectedClientId);
         setBriefs(b);
+        // Pre-fill from a brief's "New research run" action (Prompt 17 Phase 3) - only once
+        // the fetched list confirms this brief actually belongs to the selected client, so a
+        // stale or mismatched id can never be applied (the same client_id/client_brief_id
+        // mismatch guard Prompt 11 established elsewhere).
+        const pendingBriefId = initialBriefIdRef.current;
+        if (pendingBriefId && b.some(br => br.id === pendingBriefId)) {
+          setSelectedBriefId(pendingBriefId);
+        }
       } catch (err) {
         console.error(err);
+      } finally {
+        // Only clear the parent's pending pre-fill once this fetch (the one triggered by that
+        // very pre-fill) has resolved and had its chance to apply the brief selection above.
+        // initialBriefId is deliberately not a dependency of this effect: clearing it after
+        // use would otherwise change this effect's own dependency array, re-firing it and
+        // hitting the unconditional setSelectedBriefId('') reset above - wiping out the very
+        // selection just applied (Prompt 17 Phase 3).
+        if (initialClientId && selectedClientId === initialClientId) {
+          onConsumedInitialClient?.();
+        }
       }
     };
     fetchBriefs();
@@ -91,7 +117,6 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
       setNewClientName(c.full_name);
       setShowNewForm(true);
     }
-    onConsumedInitialClient?.();
   }, [initialClientId, clients]);
 
   const handleCreateRun = async (e: React.FormEvent) => {

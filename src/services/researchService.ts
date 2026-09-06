@@ -275,6 +275,34 @@ export const createClientBrief = async (orgId: string, clientId: string, brief: 
   return data;
 };
 
+// Generates an empty, pending_review brief and a ready-to-send intake link in one action -
+// for the common case of "just send them a blank form", without staff hand-creating an empty
+// brief first (Prompt 17 Phase 2). Deliberately status: 'pending_review', unlike
+// createClientBrief's 'approved' - nobody has reviewed a blank brief nobody has typed into yet.
+// Reuses the exact token generation already used everywhere else (createRun,
+// rotateShareToken, generateBriefLink) - not a second scheme.
+export const createBriefWithIntakeLink = async (orgId: string, clientId: string): Promise<ClientBrief> => {
+  const share_token = Array.from(crypto.getRandomValues(new Uint8Array(24)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  const { data, error } = await supabase
+    .from('client_briefs')
+    .insert({
+      org_id: orgId,
+      client_id: clientId,
+      quantity: 1,
+      status: 'pending_review',
+      share_token,
+      share_enabled: true,
+    })
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to generate intake link: ${error.message}`);
+  return data;
+};
+
 export const updateClient = async (clientId: string, patch: Partial<Client>): Promise<Client> => {
   const { data, error } = await supabase
     .from('clients')
