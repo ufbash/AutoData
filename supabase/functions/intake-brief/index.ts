@@ -220,19 +220,30 @@ serve(async (req: Request) => {
             return { text: String(v), answered: true };
           };
 
-          const groupsHtml = FIELD_GROUPS.map((group) => {
-            const rows = group.fields.map((f) => {
-              const { text, answered } = formatValue((updated as any)[f]);
-              const valueColor = answered ? "#1a1a1a" : "#999";
-              return `<tr>
-                <td style="padding:4px 16px 4px 0;color:#666;font-size:13px;white-space:nowrap;vertical-align:top">${FIELD_LABELS[f] || f}</td>
-                <td style="padding:4px 0;color:${valueColor};font-size:13px">${text}</td>
+          // Step 1 (confirmed Primary): typography and spacing, inline per element.
+          // Step 2 of the incremental restore: colour and borders - a shaded header row per
+          // group (inside the table, not a separate <h3>), light bordered cells, and one
+          // accent colour (#2c3e50) used only on the header row text. Nothing else changes
+          // from Step 1's confirmed-good typography/spacing.
+          const FONT = "font-family:Arial,Helvetica,sans-serif;";
+          const ACCENT = "#2c3e50";
+          // One continuous table for all groups, not a separate <table> per group - that was
+          // the earlier bug: each group's table sized its own columns independently, so
+          // widths didn't line up between groups and the whole thing read as broken rather
+          // than polished. A shared <colgroup> fixes the label column at a consistent width
+          // and light zebra striping replaces the per-cell borders for a cleaner look.
+          const groupsHtml = FIELD_GROUPS.map((group, gi) => {
+            const rows = group.fields.map((f, fi) => {
+              const { text } = formatValue((updated as any)[f]);
+              const rowBg = fi % 2 === 0 ? "#ffffff" : "#f7f7f7";
+              return `<tr style="background:${rowBg}">
+                <td style="${FONT}font-size:13px;line-height:1.5;padding:8px 12px;vertical-align:top"><b>${FIELD_LABELS[f] || f}</b></td>
+                <td style="${FONT}font-size:13px;line-height:1.5;padding:8px 12px;vertical-align:top">${text}</td>
               </tr>`;
             }).join("");
-            return `
-              <tr><td colspan="2" style="padding:16px 0 4px;font-size:12px;font-weight:bold;color:#444">${group.title}</td></tr>
-              ${rows}
-            `;
+            const topRule = gi > 0 ? "border-top:1px solid #e0e0e0;" : "";
+            return `<tr><td colspan="2" style="${FONT}${topRule}font-size:13px;font-weight:bold;color:${ACCENT};background:#f0f2f4;padding:10px 12px">${group.title}</td></tr>
+              ${rows}`;
           }).join("");
 
           const submittedDate = new Date(patch.submitted_at as string).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
@@ -259,23 +270,24 @@ serve(async (req: Request) => {
           textLines.push(`This email was sent by Caplimo because you submitted a vehicle request through our intake form. If this wasn't you, you can disregard this message.`);
           const text = textLines.join("\n");
 
-          // Deliberately no logo, no colour banner, no rounded cards, no links - a marketing-
-          // style template is a Promotions-tab signal in Gmail even when authentication and
-          // spam checks pass clean. This should read as a plain receipt, not a campaign email.
+          // Step 4 (confirmed Primary), further polished per feedback that the per-group
+          // tables looked broken: outer container with rounded corners, one shared field
+          // table (colgroup fixes the label column so every group lines up), zebra striping
+          // instead of per-cell borders. Still table-based throughout, still no images/links.
           const html = `
-          <div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
-            <p style="font-size:14px;margin:0 0 12px">Hi ${clientRow.full_name || "there"},</p>
-            <p style="font-size:14px;margin:0 0 12px">
-              This is a copy of the vehicle request you submitted to Caplimo, for your records.
-              A member of our team will review it shortly.
-            </p>
-            <p style="font-size:12px;color:#666;margin:0 0 16px">Submitted ${submittedDate}</p>
-            <table style="width:100%;border-collapse:collapse">${groupsHtml}</table>
-            <p style="font-size:12px;color:#666;margin:20px 0 0">
-              This email was sent because you submitted a vehicle request through the Caplimo intake form.
-              If this wasn't you, you can disregard this message.
-            </p>
-          </div>`;
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#fafafa;border:1px solid #e0e0e0;border-radius:8px">
+              <tr><td style="padding:24px">
+                <p style="${FONT}font-size:18px;font-weight:bold;color:${ACCENT};margin:0 0 16px">Caplimo</p>
+                <p style="${FONT}font-size:14px;line-height:1.5;margin:0 0 12px">Hi ${clientRow.full_name || "there"},</p>
+                <p style="${FONT}font-size:14px;line-height:1.5;margin:0 0 12px">This is a copy of the vehicle request you submitted to Caplimo, for your records. A member of our team will review it shortly.</p>
+                <p style="${FONT}font-size:13px;line-height:1.5;margin:0 0 16px">Submitted ${submittedDate}</p>
+                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#ffffff;border:1px solid #e0e0e0">
+                  <colgroup><col style="width:42%" /><col /></colgroup>
+                  ${groupsHtml}
+                </table>
+                <p style="${FONT}font-size:12px;line-height:1.5;margin:20px 0 0">This email was sent because you submitted a vehicle request through the Caplimo intake form. If this wasn't you, you can disregard this message.</p>
+              </td></tr>
+            </table>`;
 
           const vehicleDesc = [(updated as any).make, (updated as any).model].filter(Boolean).join(" ");
           const subject = vehicleDesc
