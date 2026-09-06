@@ -729,6 +729,21 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                 </div>
               )}
 
+              {selectedBrief.submitted_at && (
+                <div className={`p-3 rounded-lg border text-sm ${selectedBrief.confirmation_sent_at ? 'bg-green-50 border-green-200 text-green-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                  <div className="font-bold mb-0.5">
+                    {selectedBrief.confirmation_sent_at ? 'Confirmation email sent' : 'Confirmation email not sent'}
+                  </div>
+                  <div className="text-xs">
+                    {selectedBrief.confirmation_sent_at
+                      ? `Sent ${new Date(selectedBrief.confirmation_sent_at).toLocaleString()}`
+                      : selectedClient.email
+                        ? `Delivery did not complete to ${selectedClient.email} — no further detail is available from here.`
+                        : 'This client has no email on file, so there was nothing to send to.'}
+                  </div>
+                </div>
+              )}
+
               {!selectedBrief.deleted_at && (
                 <div>
                   <h3 className="text-lg font-bold text-gray-900 mb-4 border-b pb-2 flex items-center gap-2">
