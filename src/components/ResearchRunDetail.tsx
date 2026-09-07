@@ -12,6 +12,7 @@ import {
   getSignedImageUrls,
   softDeleteRun,
   listAuctionHistoryForAssets,
+  recordStaffApproval,
   ResearchRun,
   RunListing,
   AuctionHistoryRecord,
@@ -22,7 +23,7 @@ import { parsePreference, colourMatches, transmissionMatches, fuelMatches } from
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
-import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X, Info } from 'lucide-react';
+import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X, Info, CheckCircle2, PhoneCall } from 'lucide-react';
 
 interface ResearchRunDetailProps {
   runId: string;
@@ -164,6 +165,22 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     }
   };
 
+  // PROMPT 19 Phase 4 - staff cannot approve on the client's behalf; this only records
+  // that the client already approved by phone/WhatsApp, and relays it. approved_via
+  // marks it 'staff_relayed' server-side (recordStaffApproval), never collapsed with a
+  // real client-made approval.
+  const handleRecordApproval = async (listing: RunListing) => {
+    if (!user?.id) return;
+    const vehicleLabel = `${listing.year || ''} ${listing.make} ${listing.model} ${listing.trim || ''}`.trim();
+    if (!confirm(`Record that the client already approved this vehicle (${vehicleLabel}) through another channel - e.g. a phone call or WhatsApp? This will be marked as staff-recorded, not client-made, and cannot be undone from here.`)) return;
+    try {
+      await recordStaffApproval(runId, listing, user.id);
+      await loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to record approval');
+    }
+  };
+
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
@@ -274,6 +291,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
 
   const includedListings = listings.filter(l => l.included);
   const includedCount = includedListings.length;
+  const approvedListing = listings.find(l => l.approved_at);
 
   const getStats = (list: RunListing[], isSoldGroup: boolean) => {
     let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
@@ -888,6 +906,28 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
           </div>
         </div>
 
+        {approvedListing && (
+          <div className={`mb-6 p-4 rounded-lg border ${approvedListing.approved_via === 'client' ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
+            <h3 className={`text-sm font-bold mb-2 flex items-center gap-2 ${approvedListing.approved_via === 'client' ? 'text-green-800' : 'text-blue-800'}`}>
+              {approvedListing.approved_via === 'client' ? <CheckCircle2 className="w-4 h-4" /> : <PhoneCall className="w-4 h-4" />}
+              {approvedListing.approved_via === 'client' ? 'Client-approved vehicle' : 'Approval recorded by staff (relayed)'}
+            </h3>
+            <div className="text-sm text-gray-700">
+              <span className="font-medium">{approvedListing.year} {approvedListing.make} {approvedListing.model} {approvedListing.trim || ''}</span>
+              {' — '}approved {new Date(approvedListing.approved_at!).toLocaleString()}
+              {approvedListing.approved_via === 'staff_relayed' && ' · relayed from the client, not made by the client directly'}
+            </div>
+            {approvedListing.approved_snapshot && (
+              <div className="mt-2 text-xs text-gray-500 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1">
+                <div><span className="text-gray-400">Shown VIN:</span> {(approvedListing.approved_snapshot as any).vin || '—'}</div>
+                <div><span className="text-gray-400">Shown price:</span> {(approvedListing.approved_snapshot as any).display_price != null ? `$${Number((approvedListing.approved_snapshot as any).display_price).toLocaleString()}${(approvedListing.approved_snapshot as any).is_bid ? ' (bid)' : ''}` : '—'}</div>
+                <div><span className="text-gray-400">Shown auction date:</span> {(approvedListing.approved_snapshot as any).sale_date ? new Date((approvedListing.approved_snapshot as any).sale_date).toLocaleDateString() : '—'}</div>
+                <div><span className="text-gray-400">Source:</span> {(approvedListing.approved_snapshot as any).source_platform || '—'}</div>
+              </div>
+            )}
+          </div>
+        )}
+
         {run.client_brief && (
           <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
             <h3 className="text-sm font-bold text-gray-700 mb-2">Linked Buying Brief Requirements</h3>
@@ -1221,6 +1261,23 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                           <div className="font-bold text-[#403f4c]">
                             {listing.year} {listing.make} {listing.model} {listing.trim || ''}
                           </div>
+                          {listing.approved_at && (
+                            <div
+                              className={`inline-flex items-center gap-1 mt-1.5 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold whitespace-nowrap border ${
+                                listing.approved_via === 'client'
+                                  ? 'bg-green-100 text-green-700 border-green-200'
+                                  : 'bg-blue-100 text-blue-700 border-blue-200'
+                              }`}
+                              title={
+                                listing.approved_via === 'client'
+                                  ? `Client approved via the share page on ${new Date(listing.approved_at).toLocaleString()}`
+                                  : `Staff recorded a client approval relayed through another channel, on ${new Date(listing.approved_at).toLocaleString()}`
+                              }
+                            >
+                              {listing.approved_via === 'client' ? <CheckCircle2 className="w-3 h-3" /> : <PhoneCall className="w-3 h-3" />}
+                              {listing.approved_via === 'client' ? 'Client approved' : 'Approved (relayed)'} · {new Date(listing.approved_at).toLocaleDateString()}
+                            </div>
+                          )}
                           {(listingBadges.get(listing.id) || []).length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1.5">
                               {listingBadges.get(listing.id)!.map((b, bi) => (
@@ -1281,6 +1338,18 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
+                        {!approvedListing && listing.included && listing.lot_state !== 'finished' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRecordApproval(listing);
+                            }}
+                            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                            title="Record that the client approved this vehicle by phone/WhatsApp"
+                          >
+                            <PhoneCall className="w-4 h-4" />
+                          </button>
+                        )}
                         {role === 'superadmin' && (
                           <button 
                             onClick={(e) => {

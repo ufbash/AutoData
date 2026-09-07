@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { listRuns, createRun, listDeletedRuns, restoreRun, listClients, listClientBriefs, ResearchRun, Client, ClientBrief } from '../services/researchService';
-import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car } from 'lucide-react';
+import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car, CheckCircle2 } from 'lucide-react';
 
 interface ResearchRunsProps {
   onOpenRun: (runId: string) => void;
@@ -478,6 +478,11 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
                   <span className="flex items-center gap-1" title="Created Date">
                     <Calendar className="w-4 h-4" /> {new Date(run.created_at).toLocaleDateString()}
                   </span>
+                  {run.has_client_approval && (
+                    <span className="flex items-center gap-1 text-green-600 font-medium" title="A vehicle has been approved on this run">
+                      <CheckCircle2 className="w-4 h-4" /> Approved
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${run.share_enabled ? 'bg-green-500' : 'bg-gray-300'}`} title={`Sharing ${run.share_enabled ? 'On' : 'Off'}`} />

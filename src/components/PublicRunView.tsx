@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, Calendar, MapPin, AlertTriangle, FileText, Info } from 'lucide-react';
+import { Loader2, Calendar, MapPin, AlertTriangle, FileText, Info, CheckCircle2 } from 'lucide-react';
 import VehicleDetailModal, { DisplayListing } from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
 
@@ -31,27 +31,63 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
   const [error, setError] = useState<string | null>(null);
   const [activeListing, setActiveListing] = useState<any | null>(null);
 
+  // PROMPT 19 Phase 3 - client approval. confirmingId gates the actual POST behind an
+  // explicit second tap (a mis-tap here authorises bidding on the client's behalf).
+  // approveError is per-attempt, shown inline on whichever card triggered it.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
 
-  const fetchRun = async () => {
-    setLoading(true);
+  const fetchRun = async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const baseUrl = import.meta.env.VITE_SUPABASE_URL;
       const res = await fetch(`${baseUrl}/functions/v1/public-run?token=${token}`);
-      
+
       if (!res.ok) {
         if (res.status === 404) {
           throw new Error("This link is no longer available. Please contact Caplimo for an updated link.");
         }
         throw new Error("Failed to load vehicle research.");
       }
-      
+
       const json = await res.json();
       setData(json);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+    }
+  };
+
+  // PROMPT 19 Phase 3 - server enforces the real rules (already approved, run no longer
+  // shareable); this is only the confirmation gate plus a refetch afterwards so the page
+  // reflects whatever the server actually did, not an optimistic local guess.
+  const approveListing = async (listingId: string) => {
+    setApproving(true);
+    setApproveError(null);
+    try {
+      const baseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const res = await fetch(`${baseUrl}/functions/v1/public-run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, listing_id: listingId })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Re-sync regardless of outcome - a 409 here usually means the true state
+        // moved (a stale tab, or another party already approved a different vehicle)
+        // and the page should reflect that, not just show an error over stale data.
+        await fetchRun(true);
+        throw new Error(json.error || 'Could not record your approval. Please try again.');
+      }
+      setConfirmingId(null);
+      await fetchRun(true);
+    } catch (err: any) {
+      setApproveError(err.message || 'Could not record your approval. Please try again.');
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -79,8 +115,8 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
           </div>
           <h2 className="text-xl font-bold text-[#403f4c] mb-2">Unavailable</h2>
           <p className="text-gray-600 mb-6">{error}</p>
-          <button 
-            onClick={fetchRun}
+          <button
+            onClick={() => fetchRun()}
             className="px-6 py-2 bg-[#a58039] text-white font-bold rounded-lg hover:bg-[#8e6e31] transition-colors"
           >
             Try Again
@@ -91,6 +127,7 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
   }
 
   const { run, listings, stats } = data;
+  const approvedListing = listings.find((l: any) => l.approved_at);
 
   const renderListing = (listing: any, index: number, isSold: boolean) => {
     const title = `${listing.year || ''} ${listing.make || ''} ${listing.model || ''} ${listing.trim || ''}`.trim();
@@ -210,6 +247,51 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
           {listing.notes && (
             <div className="mt-3 text-sm text-gray-600 line-clamp-2 italic border-l-2 border-[#a58039]/30 pl-2">
               "{listing.notes}"
+            </div>
+          )}
+
+          {/* PROMPT 19 Phase 3 - client approval. Sold comps are historical reference
+              data, not a vehicle to bid on, so the action only appears on live options. */}
+          {!isSold && (
+            <div className="mt-4" onClick={(e) => e.stopPropagation()}>
+              {listing.approved_at ? (
+                <div className="flex items-center gap-2 text-sm font-bold text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                  Approved {new Date(listing.approved_at).toLocaleDateString()}
+                </div>
+              ) : approvedListing ? (
+                <p className="text-xs text-gray-400 italic">A different vehicle has already been approved for this request.</p>
+              ) : confirmingId === listing.id ? (
+                <div className="border border-[#a58039]/30 rounded-lg p-3 bg-[#F0EDDE]/50">
+                  <p className="text-xs text-gray-600 mb-2">
+                    This authorizes Caplimo to bid on this vehicle on your behalf. Confirm?
+                  </p>
+                  {approveError && <p className="text-xs text-red-600 mb-2">{approveError}</p>}
+                  <div className="flex gap-2">
+                    <button
+                      disabled={approving}
+                      onClick={() => approveListing(listing.id)}
+                      className="flex-1 px-3 py-1.5 bg-[#a58039] text-white text-xs font-bold rounded-md hover:bg-[#8e6e31] disabled:opacity-50"
+                    >
+                      {approving ? 'Approving...' : 'Confirm Approval'}
+                    </button>
+                    <button
+                      disabled={approving}
+                      onClick={() => { setConfirmingId(null); setApproveError(null); }}
+                      className="px-3 py-1.5 bg-gray-100 text-gray-600 text-xs font-bold rounded-md hover:bg-gray-200 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setConfirmingId(listing.id); setApproveError(null); }}
+                  className="w-full px-3 py-2 border-2 border-[#a58039] text-[#a58039] text-sm font-bold rounded-lg hover:bg-[#a58039] hover:text-white transition-colors"
+                >
+                  Approve this vehicle
+                </button>
+              )}
             </div>
           )}
         </div>

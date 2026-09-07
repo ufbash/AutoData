@@ -580,6 +580,50 @@ the new dropdown answers in the same submission.
 
 ---
 
+### 4.7 Client approval trail — **DONE** (7 Sep 2026)
+Prompt 19 Stage 1.
+
+**Approval lives on `research_run_listings` (migration 028), not `research_runs`.** The
+client is choosing between vehicles within a shared run, and `public-run`'s field mapping
+already treats listings individually — never the run as a single priced/dated object.
+`approved_at` / `approved_via` / `approved_by` / `approved_snapshot` are all nullable, no
+defaults implying an answer, and a CHECK constraint makes the client-made shape
+(`approved_via='client'`, `approved_by NULL`) and the staff-relayed shape
+(`approved_via='staff_relayed'`, `approved_by NOT NULL`) the only two valid non-null states —
+the distinction cannot collapse into one field even by accident.
+
+**Enforced server-side in `public-run`, not only the UI.** The client approves from the
+existing tokenized share page — an "Approve this vehicle" action per live listing (never on
+sold comps), gated behind an explicit confirmation step. A second POST — same listing or a
+different one on the same run — is rejected `409` by the endpoint itself, verified via curl,
+with the row confirmed byte-identical after. The update's own `WHERE approved_at IS NULL`
+clause is the actual race guard (not just a pre-check), so two concurrent requests cannot both
+win.
+
+**What the client was shown is captured at approval time, server-side, from a fresh query —
+never from the POST body.** `approved_snapshot` holds identifying details (year/make/model/
+trim/VIN), the price actually shown (`display_price` + `is_bid`), and the auction date shown —
+because live lots get overwritten on re-capture (`SCHEMA.md` §1), so a bare foreign key to the
+listing/sighting would not reliably reproduce what was seen weeks later in a dispute.
+
+**A blocked run cannot be approved — but only in the sense that's actually enforceable.** The
+critical-block checklist has no server-side or stored representation (see debt #31) — the
+approval endpoint reuses the same `share_enabled`/`deleted_at` gate `public-run`'s read path
+already enforces, and nothing else exists to check. Verified: a `share_enabled = false` test
+run 404s on both GET and the approval POST.
+
+**Staff cannot approve on the client's behalf — they can only record a relayed one.** A
+"record client approval" action on the run detail page requires the same confirmation
+discipline, sets `approved_via = 'staff_relayed'` and `approved_by` to the recording staff
+member's real user id, and is visually distinct in the UI (blue "Approved (relayed)" vs. green
+"Client approved") from a client-made approval — verified live, both paths, including the
+run-list at-a-glance marker and the run-detail summary card showing what was shown.
+
+Verified end-to-end against two throwaway runs (soft-deleted after), never against a real
+client's live research.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **NOT STARTED**
@@ -735,3 +779,4 @@ as evidence (public link renders the fix live).
 | 28 | `clients.deposit_received_at`/`deposit_recorded_by` retained as fallback, not dropped (Prompt 18) | Migration 027 moved the deposit gate to `client_briefs`; the old client-level columns are kept only as a rollback path, since there is no staging environment to test a drop against. Dropping them is a separate, later step once the move is proven in production |
 | 29 | Make/model stay free text on the intake form (Prompt 18 Phase 6) | The Google Form's nine-make dropdown is a Forms limitation that forces "Other, please specify" onto everything else — not worth reproducing. Real dropdowns wait for the vehicle database (E-series estimator work) |
 | 30 | Intake form has no literal "I confirm these details are correct" confirmation (Prompt 18 Phase 6) | The review-then-submit flow serves the same practical purpose, but the source form's exact confirmation copy/checkbox was not reproduced — a parity gap, not a functional one |
+| 31 | The critical-block checklist has no server-side or stored representation (Prompt 19 Phase 1/3) | It is computed client-side in `ResearchRunDetail.tsx` on every render and is only ever consumed to gate the share toggle before `share_enabled` is written. `public-run` and the new client-approval path can therefore only enforce `share_enabled`/`deleted_at` — neither recomputes the checklist. **The gate is enforced at the moment of sharing, not continuously:** a run that was legitimately shared and later develops a block — a re-captured lot changing `lot_state`, new `auction_history` arriving, a brief edited after sharing — stays shareable and approvable until a staff member reopens the run and the client-side checklist re-evaluates. Fixing this means persisting the checklist result or recomputing it in the Edge Function — its own piece of work, and it spans the rule layer this prompt is deliberately fenced off from |

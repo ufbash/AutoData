@@ -75,6 +75,10 @@ export interface ResearchRun {
   client_brief_id?: string | null;
   client?: Client | null;
   client_brief?: ClientBrief | null;
+  // PROMPT 19 Phase 4 - at-a-glance marker only; the actual record (which listing, when,
+  // client-made vs staff-relayed) lives on research_run_listings and is fetched per-run
+  // via listRunListings, not duplicated here.
+  has_client_approval?: boolean;
 }
 
 export interface RunListing {
@@ -127,6 +131,13 @@ export interface RunListing {
   stored_image_urls?: string[];
   image_store_status?: string | null;
   images_stored_at?: string | null;
+  // PROMPT 19 Phase 2/4 - the approval record. approved_via distinguishes a client-made
+  // approval (self-service, via the share token) from staff recording a relayed one
+  // (client approved by phone/WhatsApp) - the two must never collapse into one field.
+  approved_at: string | null;
+  approved_via: 'client' | 'staff_relayed' | null;
+  approved_by: string | null;
+  approved_snapshot: Record<string, unknown> | null;
 }
 
 export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
@@ -141,9 +152,27 @@ export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
     throw new Error(`Failed to list research runs: ${error.message}`);
   }
 
+  // A single extra query for the at-a-glance marker, rather than embedding a filtered
+  // count per row - PostgREST embedding doesn't cleanly express "count where approved_at
+  // is not null" alongside the unfiltered listing_count above.
+  const runIds = (data || []).map((row: any) => row.id);
+  const approvedRunIds = new Set<string>();
+  if (runIds.length > 0) {
+    const { data: approvals, error: approvalsError } = await supabase
+      .from('research_run_listings')
+      .select('run_id')
+      .in('run_id', runIds)
+      .not('approved_at', 'is', null);
+    if (approvalsError) {
+      throw new Error(`Failed to list research runs: ${approvalsError.message}`);
+    }
+    (approvals || []).forEach((row: any) => approvedRunIds.add(row.run_id));
+  }
+
   return (data || []).map((row: any) => ({
     ...row,
     listing_count: row.research_run_listings?.[0]?.count || 0,
+    has_client_approval: approvedRunIds.has(row.id),
   }));
 };
 
@@ -567,6 +596,10 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       position,
       included,
       notes,
+      approved_at,
+      approved_via,
+      approved_by,
+      approved_snapshot,
       sightings (
         asset_id,
         source_platform,
@@ -631,6 +664,10 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       position: row.position,
       included: row.included,
       notes: row.notes,
+      approved_at: row.approved_at ?? null,
+      approved_via: row.approved_via ?? null,
+      approved_by: row.approved_by ?? null,
+      approved_snapshot: row.approved_snapshot ?? null,
       source_platform: sighting.source_platform || 'unknown',
       source_url: sighting.source_url || null,
       lot_number: sighting.lot_number || null,
@@ -696,6 +733,72 @@ export const setListingIncluded = async (listingId: string, included: boolean): 
 
   if (error) {
     throw new Error(`Failed to set listing inclusion: ${error.message}`);
+  }
+};
+
+// PROMPT 19 Phase 4 - staff cannot approve on the client's behalf. This records that a
+// client approved by phone/WhatsApp and relays it, distinct from a client-made approval
+// (approved_via + approved_by is the structural distinction - see migration 028's CHECK
+// constraint, which makes "staff_relayed with no approved_by" or "client with an
+// approved_by" impossible states, not just an application-level convention).
+export const recordStaffApproval = async (
+  runId: string,
+  listing: RunListing,
+  staffUserId: string
+): Promise<void> => {
+  const { data: existing, error: existingError } = await supabase
+    .from('research_run_listings')
+    .select('id')
+    .eq('run_id', runId)
+    .not('approved_at', 'is', null)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingError) {
+    throw new Error(`Failed to check existing approvals: ${existingError.message}`);
+  }
+  if (existing) {
+    throw new Error('A vehicle has already been approved for this run. Approving a different vehicle needs to be resolved with the client first.');
+  }
+
+  const currentBid = typeof listing.current_bid_usd === 'number' ? listing.current_bid_usd : null;
+  const listedPrice = typeof listing.listed_price === 'number' ? listing.listed_price : null;
+  const displayPrice = listing.price_usd !== null && listing.price_usd !== undefined
+    ? listing.price_usd
+    : (currentBid ?? listedPrice);
+
+  const approvedSnapshot = {
+    year: listing.year ?? null,
+    make: listing.make ?? null,
+    model: listing.model ?? null,
+    trim: listing.trim ?? null,
+    vin: listing.vin ?? null,
+    display_price: displayPrice,
+    is_bid: currentBid !== null,
+    listed_currency: listing.listed_currency ?? null,
+    sale_date: listing.sale_date ?? null,
+    source_platform: listing.source_platform ?? null,
+    captured_at: listing.captured_at ?? null,
+  };
+
+  const { data: updated, error } = await supabase
+    .from('research_run_listings')
+    .update({
+      approved_at: new Date().toISOString(),
+      approved_via: 'staff_relayed',
+      approved_by: staffUserId,
+      approved_snapshot: approvedSnapshot,
+    })
+    .eq('id', listing.id)
+    .is('approved_at', null)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to record approval: ${error.message}`);
+  }
+  if (!updated) {
+    throw new Error('This vehicle was already approved by the time this request went through.');
   }
 };
 
