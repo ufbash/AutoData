@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Download, Plus, LayoutDashboard, List, Car, Upload, X, Globe, Loader2, LogOut, Users, DollarSign } from 'lucide-react';
+import { Download, Plus, LayoutDashboard, List, Car, Upload, X, Globe, Loader2, LogOut, Users, DollarSign, Truck } from 'lucide-react';
 import { CarSale, Currency, CarStats, RecordType } from './types';
 import { getStoredSales, deleteSale, deleteSales, mergeSales, importSales, standardizeTrims, executeTrimCleanup, supabase, ingestSales, AppIngestPayload } from './services/storageService';
 import { fetchExchangeRates, convertToUSD, convertFromUSD } from './services/currencyService';
@@ -17,6 +17,7 @@ import PublicRunView from './components/PublicRunView';
 import IntakeFormView from './components/IntakeFormView';
 import { ClientsList } from './components/ClientsList';
 import CostRatesAdmin from './components/CostRatesAdmin';
+import TruckingRatesLookup from './components/TruckingRatesLookup';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -118,7 +119,7 @@ const MainDashboard: React.FC = () => {
   const { user, role, signOut } = useAuth();
   const [sales, setSales] = useState<CarSale[]>([]);
   const [salesLoading, setSalesLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail' | 'clients' | 'cost-rates'>(role === 'superadmin' ? 'dashboard' : 'research');
+  const [view, setView] = useState<'dashboard' | 'list' | 'bulk-import' | 'research' | 'research-detail' | 'clients' | 'cost-rates' | 'trucking-rates'>(role === 'superadmin' ? 'dashboard' : 'research');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [prefillClientId, setPrefillClientId] = useState<string | null>(null);
   const [prefillBriefId, setPrefillBriefId] = useState<string | null>(null);
@@ -656,6 +657,9 @@ const MainDashboard: React.FC = () => {
                 <button onClick={() => setView('cost-rates')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'cost-rates' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
                   <DollarSign className="w-4 h-4" /> Cost Rates
                 </button>
+                <button onClick={() => setView('trucking-rates')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'trucking-rates' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
+                  <Truck className="w-4 h-4" /> Trucking Rates
+                </button>
               </>
             )}
             <button onClick={() => setView('research')} className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === 'research' || view === 'research-detail' ? 'bg-[#a58039] text-[#F0EDDE] shadow-sm' : 'text-[#403f4c] hover:text-[#a58039] hover:bg-[#F0EDDE]'}`}>
@@ -678,7 +682,7 @@ const MainDashboard: React.FC = () => {
           </div>
         )}
 
-        {!salesLoading && role !== 'superadmin' && (view === 'dashboard' || view === 'list' || view === 'bulk-import' || view === 'cost-rates') && (
+        {!salesLoading && role !== 'superadmin' && (view === 'dashboard' || view === 'list' || view === 'bulk-import' || view === 'cost-rates' || view === 'trucking-rates') && (
           <div className="bg-white p-8 rounded-xl shadow-sm border border-[#ba3b46]/20 flex flex-col items-center justify-center text-center">
             <div className="w-16 h-16 bg-[#ba3b46]/10 text-[#ba3b46] rounded-full flex items-center justify-center mb-4">
               <X className="w-8 h-8" />
@@ -710,6 +714,9 @@ const MainDashboard: React.FC = () => {
         )}
         {!salesLoading && role === 'superadmin' && view === 'cost-rates' && (
           <CostRatesAdmin />
+        )}
+        {!salesLoading && role === 'superadmin' && view === 'trucking-rates' && (
+          <TruckingRatesLookup />
         )}
         {!salesLoading && view === 'research' && (
           <ResearchRuns

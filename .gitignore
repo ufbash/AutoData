@@ -26,3 +26,7 @@ dist-ssr
 
 # Supabase CLI local cache
 supabase/.temp/
+
+# Generated import SQL and vendor source files - may carry proprietary rate data
+scripts/out/
+scripts/input/
