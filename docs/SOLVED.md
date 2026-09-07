@@ -1069,3 +1069,43 @@ a deposit, matching the one place it's actually checked.
 landed" must read `client_briefs.deposit_received_at`, never `clients.deposit_received_at` —
 the latter now exists only as historical fallback data, not a live signal, and reintroducing a
 client-level check anywhere would silently resurrect this exact bug.
+
+---
+
+## 15. The client approval record: why what-was-shown is captured, not just what-was-approved
+
+**The naive design:** an approval is "client X approved listing Y at time Z" — a foreign key
+plus a timestamp. This is what a first pass at the schema would produce, and it is wrong for
+this project specifically, not in general.
+
+**Why it's wrong here:** `SCHEMA.md` §1 already establishes that a live lot's `sightings` row
+gets **overwritten** on re-capture — that's the whole point of a live listing, its price and
+sale date change as the auction progresses. A bare foreign key to `research_run_listings` (or
+further, to `sightings`) does not point at a fixed fact; it points at a **mutable** row. Weeks
+later, if a client disputes what they approved ("I never agreed to that price"), following the
+foreign key would show whatever the listing looks like *today*, not what it looked like at
+approval time. The approval record would technically exist, and would be useless as evidence
+of the one thing it exists to prove.
+
+**Solution:** `research_run_listings.approved_snapshot` (migration 028) is a JSONB copy of the
+identifying details, the price actually displayed, and the auction date actually displayed —
+computed **server-side**, in the same request that records the approval, from a fresh query
+joined the same way the public page itself renders the listing. It is never built from the
+POST body (a client could send anything) and never deferred to a later read (the underlying
+row could have changed by then). The snapshot is redundant with the live data at the instant
+it's written and is expected to diverge from it over time — that divergence is the entire
+point; it is what makes the record still mean something after the listing has moved on.
+
+**Why this way:** this mirrors a decision already made once on this project, for a different
+reason. `DECISIONS.md` §6 explicitly rejects relying on a signature for the intake form,
+preferring "the exact form content stored unaltered, a timestamp, the client's own email
+confirming" — evidentiary weight comes from an unalterable record of the actual moment, not
+from a gesture that looks official. The approval snapshot is the same principle applied to a
+different mutable-data problem: the record's value is in what it freezes, not in how it's
+authorized.
+
+**How to extend it:** any future approval-adjacent feature (e.g. re-approval after a staff
+edit, or a client-facing "what did I approve" view) must read from `approved_snapshot`, never
+by re-joining to the live `sightings`/`assets` row through `sighting_id` — that join answers
+"what does this listing look like now," a different question that happens to share a
+foreign key with the one that matters here.

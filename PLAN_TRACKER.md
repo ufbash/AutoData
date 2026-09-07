@@ -624,6 +624,43 @@ client's live research.
 
 ---
 
+### 4.8 C1: `cost_rates` table and admin screen — **DONE** (7 Sep 2026)
+Prompt 19 Stage 2.
+
+**Four dimensions, read from `DECISIONS.md` §3 / `MASTER_PLAN.md` Part VII, not guessed.**
+`cost_category` (`inland_trucking` | `ocean_freight` | `duty_component` | `service_fee`) plus a
+free-text `label` for the specific thing within that category — a state-tier name, a shipping
+method, a duty-component name, or the fee itself. `basis` (`cif` | `cif_plus_prior` |
+`import_duty`) is the fourth dimension, needed only for `duty_component` rows, since the six
+locked components split three ways on what their percentage is computed against. No
+`vehicle_class` column: nothing in the locked rate data varies by vehicle class today — the
+value-dependent declared-CIF ratio (§3.2) is C2's own future calibration problem once real
+assessment-notice data exists, not something to guess a schema shape for now.
+
+**Range-capable, per the project's own honesty doctrine.** `rate_value` / `rate_value_max`
+(max nullable) hold either a single point value or an observed range (e.g. "$200–500") rather
+than forcing a fake average — matching C3's own stated principle ("widen the band rather than
+faking precision").
+
+**Never edited in place — verified live, not just by reading the code.** Added a real test
+rate, superseded it with a new value and a later `effective_from`, and confirmed two distinct
+database rows: the original unchanged except for `effective_to`, the replacement a fresh row.
+Same-day supersede was tried and correctly rejected (`effective_to` would have landed before
+`effective_from` on the original row) — the CHECK constraint working as intended, not a bug.
+Both test rows removed by hard `DELETE` (confirmed first) — `cost_rates` has no soft-delete
+column, since a superseded row already **is** the history mechanism.
+
+**RLS matches `SCHEMA.md` §12 exactly** — pasted and confirmed identical in shape to
+`client_briefs`'s policies. The admin screen itself additionally gates on `role === 'superadmin'`
+at the application layer (`PROJECT_CHARTER.md` §3), same pattern as the ledger dashboard's
+existing superadmin-only tabs.
+
+**No rates seeded, and no deploy required to change one** — both explicit requirements,
+confirmed by the empty-table state at hand-off and by the admin screen being a pure
+database-backed UI with no code path involved in adding or superseding a rate.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **NOT STARTED**
@@ -653,9 +690,15 @@ item with new evidence — not assumed from this single page.
 
 ## 6. Phase C — landed cost
 
-- **C1.** `cost_rates` table + admin screen — **NOT STARTED, not blocked.** Buildable now.
+- **C1.** `cost_rates` table + admin screen — **DONE** (7 Sep 2026, Prompt 19 Stage 2). See §4.8
+  below. No rates seeded — the table is empty until Bashir enters real figures.
 - **C2.** Duty calculator (51.47% formula + observed calibration) — **BLOCKED** on
-  collecting 10+ assessment notices.
+  collecting 10+ assessment notices. **The 51.47% figure and the six-component stack's
+  individual percentages are documented in `DECISIONS.md` §3 but deliberately not encoded
+  anywhere in code or seeded into `cost_rates`** — they are uncalibrated for declared-CIF
+  purposes until real assessment notices exist; entering them as rate rows (via the C1 admin
+  screen, once real) is the correct way to make them live, not a code change. Standing action
+  continues: photograph every assessment notice before handover.
 - **C3.** Client-facing grouped cost display (Vehicle · Shipping & logistics · Duties &
   clearing · Service fee · Total), expected and ceiling — **NOT STARTED**, depends on C1/C2.
 
