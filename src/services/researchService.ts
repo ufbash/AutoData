@@ -96,6 +96,9 @@ export interface RunListing {
   secondary_damage: string | null;
   title_type: string | null;
   location: string | null;
+  // bid.cars is a resale aggregator, never a yard network - a bidcars sighting's real
+  // auction platform for yard matching (PROMPT 20) is this field, never source_platform.
+  source_auction_platform: string | null;
   current_bid_usd: number | null;
   listed_price: number | null;
   listed_currency: string | null;
@@ -603,6 +606,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       sightings (
         asset_id,
         source_platform,
+        source_auction_platform,
         source_url,
         lot_number,
         mileage_miles,
@@ -669,6 +673,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       approved_by: row.approved_by ?? null,
       approved_snapshot: row.approved_snapshot ?? null,
       source_platform: sighting.source_platform || 'unknown',
+      source_auction_platform: sighting.source_auction_platform ?? null,
       source_url: sighting.source_url || null,
       lot_number: sighting.lot_number || null,
       mileage_miles: sighting.mileage_miles || null,

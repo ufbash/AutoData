@@ -23,7 +23,8 @@ import { parsePreference, colourMatches, transmissionMatches, fuelMatches } from
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
-import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X, Info, CheckCircle2, PhoneCall } from 'lucide-react';
+import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X, Info, CheckCircle2, PhoneCall, DollarSign } from 'lucide-react';
+import ListingCostBreakdown from './ListingCostBreakdown';
 
 interface ResearchRunDetailProps {
   runId: string;
@@ -180,6 +181,10 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       alert(err.message || 'Failed to record approval');
     }
   };
+
+  // PROMPT 21 Phase 4 - collapsed by default, per listing, active listings only. Purely
+  // local UI state - never persisted, this is a display toggle, not a data change.
+  const [expandedCostListingIds, setExpandedCostListingIds] = useState<Set<string>>(new Set());
 
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -1199,9 +1204,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
                 {listings.map((listing, index) => (
-                  <tr 
+                  <React.Fragment key={listing.id}>
+                  <tr
                     id={`listing-${listing.id}`}
-                    key={listing.id} 
                     draggable={true}
                     onDragStart={(e) => handleDragStart(e, index)}
                     onDragOver={(e) => handleDragOver(e, index)}
@@ -1362,7 +1367,23 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                             <Trash2 className="w-4 h-4" />
                           </button>
                         )}
-                        <button 
+                        {listing.lot_state !== 'finished' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedCostListingIds(prev => {
+                                const next = new Set(prev);
+                                if (next.has(listing.id)) next.delete(listing.id); else next.add(listing.id);
+                                return next;
+                              });
+                            }}
+                            className={`p-2 rounded transition-colors ${expandedCostListingIds.has(listing.id) ? 'text-[#a58039] bg-[#a58039]/10' : 'text-gray-400 hover:text-[#a58039] hover:bg-[#a58039]/10'}`}
+                            title="Landed cost & bid headroom (internal only)"
+                          >
+                            <DollarSign className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleRemove(listing.id);
@@ -1375,6 +1396,14 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                       </div>
                     </td>
                   </tr>
+                  {expandedCostListingIds.has(listing.id) && orgId && (
+                    <tr>
+                      <td colSpan={6} className="px-4 pb-3 bg-white" onClick={e => e.stopPropagation()}>
+                        <ListingCostBreakdown orgId={orgId} listing={listing} maxBudgetUsd={run.client_brief?.max_budget_usd} />
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

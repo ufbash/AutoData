@@ -720,6 +720,67 @@ duplicate. See `docs/SOLVED.md` topic 16 — the method generalises past this on
 
 ---
 
+### 4.10 C1c: auction fee research, `auction_fee_brackets`, shared bid-headroom module — **DONE** (8 Sep 2026)
+Prompt 21, both stages.
+
+**Researched from primary sources, then cross-checked against three real Copart invoices
+rather than trusted on authority alone — and the cross-check found something the pages never
+would have.** Both Copart and IAAI's buyer fee is a bracket table on final sale price up to
+$15,000, then a flat percentage above it (Copart: 7.25–12.5% depending on title/payment tier;
+IAAI: 6.0–7.5%). Checking the researched Non-Licensed table against three real Camry invoices
+found two of three matched exactly to the penny — the third did not, on the same title status
+and every ancillary fee. Chasing that mismatch (not accepting "close enough") led to Copart's
+own **High-Volume Licensed** fee schedule, a structurally different bracket table for a
+different member account (White Nexus Ltd) buying on Caplimo's behalf — confirmed by locating
+its own $7,500–7,999.99 bracket and finding an exact match. See `docs/SOLVED.md` topic 18 for
+the further finding this produced: Copart's "Secured" vs "Unsecured" tier tracks the member
+**account's** standing classification (almost certainly a security deposit on file), not a
+choice made per transaction — all three invoices priced as Unsecured regardless of payment
+method, including one paid mostly by wire. Descriptively (not a recommendation): Secured
+pricing on the same three purchases would have totalled $1,125 less ($2,775 vs $3,900 paid).
+
+**`auction_fee_brackets` (migration 031) holds the two genuinely bracket-shaped fees** (buyer
+fee, remote-bid fee) at their real grain — a bracket table doesn't fit `cost_rates`' one-row-
+one-figure shape, so this is a second, purpose-built table, not a forced fit. Flat per-unit
+fees (environmental, gate, title pickup) got a new `auction_fee` `cost_rates` category, kept
+separate from `service_fee` (Caplimo's own brokerage fee to the client - a different thing).
+328 rows stored, dated and sourced; only 9 genuinely confirmed against an invoice
+(`actual_paid`), the rest the unconfirmed-but-published table (`official_tariff`). **A first
+pass wrongly marked every bracket in four whole tables `actual_paid`** because one bracket in
+each matched an invoice — caught and fixed (both the data and the generator script) before
+calling the phase done, since that overstated confidence in ~39 untested neighbours per table.
+
+**Deliberately not stored:** IAAI's entire fee structure (zero IAAI invoices exist to
+cross-check against — after the Copart lesson, not willing to store IAAI's published tables on
+faith); High-Volume Licensed **Clean**-title brackets (not fully captured this session, real
+purchases are salvage); Storage fees (genuinely variable per day, no fixed figure to store
+honestly). See debt below.
+
+**`bidHeadroomService.ts` is the single shared calculation module** (`isUnconfirmed` is
+already duplicated as debt because that happened once - #3 below) computing auction fees,
+inland trucking (via the Prompt 20 matcher), ocean freight, and duty as independently
+available/unavailable components, plus the derived headroom. **Duty is permanently "not yet
+calculable" until C2 exists, which means headroom cannot be produced for any listing right
+now** — verified across four cases (full data, unquotable trucking, no client budget, an exact
+fee-bracket boundary) that this is never smoothed into a partial or zero-filled number; Case 3
+(no budget) and Cases 1/4 (missing component) correctly report two different reasons, not one
+generic "unavailable." The bracket circularity (fee depends on final price, headroom solves
+for that same price) is resolved as a deterministic ordered scan over the brackets, not
+iteration — implemented and ready for when duty unblocks, not reachable in practice until then.
+See `docs/SOLVED.md` topic 19.
+
+**Displayed on `ResearchRunDetail`, collapsed by default, active listings only** (`lot_state
+!== 'finished'`) — verified live against a real run with no client budget stated (Mohammed
+Jamilu Danmusa's Yaris/Matrix brief) that the panel correctly renders every component and
+withholds headroom for the right, specific reason. **Sold-comps average confirmed
+byte-identical before and after** by literally stashing the Phase 4 diff, reloading, capturing
+`$17,550` (11 sales), restoring, reloading, capturing `$17,550` again on a real run (Hail
+Camry) — not just a code-inspection argument. **`public-run`'s allow-list confirmed unchanged**
+(zero diff this entire two-prompt body of work) — bid headroom stays internal-only, never
+reaches the client share page.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **NOT STARTED**
@@ -754,13 +815,21 @@ item with new evidence — not assumed from this single page.
 - **C1b.** `trucking_rates` ledger, importer, two views, yard matcher — **DONE** (8 Sep 2026,
   Prompt 20). See §4.9 below. A second table, not a reshaping of `cost_rates` — real vendor
   data prices each yard-to-port lane individually, which a state tier would discard.
+- **C1c.** Auction buyer fee research, `auction_fee_brackets`, shared bid-headroom module —
+  **DONE** (8 Sep 2026, Prompt 21 Stage 1/2). See §4.10 below. Researched from primary sources
+  and cross-checked against three real Copart invoices, which revealed two Copart member
+  accounts on structurally different fee schedules.
 - **C2.** Duty calculator (51.47% formula + observed calibration) — **BLOCKED** on
   collecting 10+ assessment notices. **The 51.47% figure and the six-component stack's
   individual percentages are documented in `DECISIONS.md` §3 but deliberately not encoded
   anywhere in code or seeded into `cost_rates`** — they are uncalibrated for declared-CIF
   purposes until real assessment notices exist; entering them as rate rows (via the C1 admin
   screen, once real) is the correct way to make them live, not a code change. Standing action
-  continues: photograph every assessment notice before handover.
+  continues: photograph every assessment notice before handover. **Bid headroom
+  (`bidHeadroomService.ts`) is permanently unavailable for every listing until C2 exists** —
+  duty is always reported "not yet calculable," and the module's own rule (any missing
+  component makes headroom unavailable, never partial) means headroom cannot be produced at
+  all right now. This is by design, not a bug to chase.
 - **C3.** Client-facing grouped cost display (Vehicle · Shipping & logistics · Duties &
   clearing · Service fee · Total), expected and ceiling — **NOT STARTED**, depends on C1/C2.
 
@@ -895,3 +964,8 @@ as evidence (public link renders the fix live).
 | 33 | 27 sightings resolve platform + location cleanly but sit at yards this vendor's file doesn't cover (Prompt 20 Phase 5) | This is a rate-sheet coverage gap, not a matcher weakness — e.g. `ME - WINDHAM` is a real Copart yard per the sighting, simply absent from the "Inland Towing" vendor's price list. Closes by importing more vendors' rate sheets through the same importer, never by loosening the matcher's exactness |
 | 34 | Port-name normalisation (`PORT_ALIASES`) and state-name normalisation (`STATE_NAME_ALIASES`) are small explicit alias tables, not general fuzzy correction (Prompt 20 Phase 3/5) | Only two port variants (`JACKSONVILLE YARD`, `LOS ANGELOS` sic) and one state variant (`New Hamphire` sic, present unfixed in `trucking_rates.yard_state` since the raw+normalised treatment was only built for ports) are handled today. A future vendor file will have its own spelling quirks — extend the tables in `scripts/lib/truckingRatesParser.mjs` and `src/services/yardMatchingService.ts` as they're found; never guess at a correction that isn't explicitly listed |
 | 35 | `DECISIONS.md` §3's RoRo figure ($1,500–1,800) may be stale against the current market (Prompt 20 Phase 6, research only) | External marketing-page quotes gathered 8 Sep 2026 (AuctionExport, ShipIt, All Transport Depot — none a real quote request) suggest the floor may now run closer to $1,295, with container costs trending toward $2,800 rather than "$2,000+". These are not quotes and were deliberately not used to correct the documented figure or seed any rate row — flagged only as needing a real `agent_quote` before `DECISIONS.md` §3 is updated |
+| 36 | No IAAI fee data stored at all (Prompt 21 Phase 1/2) | Every rate in `auction_fee_brackets`/`cost_rates` `auction_fee` is Copart-only. IAAI's own published tables were captured (Standard/High Volume buyer fee, Internet Bid Fee, Service/Environmental/Title-Handling/Premium Imagery fees) but deliberately not stored — zero IAAI invoices exist to cross-check them against, and the Copart cross-check proved a published table can diverge from what a real account actually pays. Store once a real IAAI invoice exists to check against, not before |
+| 37 | High-Volume Licensed **Clean**-title Copart brackets not captured (Prompt 21 Phase 2) | Only Non-Clean was fully captured for the White Nexus Ltd (High-Volume Licensed) schedule — Caplimo's real purchases are salvage/Non-Clean, so this wasn't chased further this session. A real Clean-title purchase on that account would need this table pulled the same way (Copart's own site, volume → title-status selector) before it could be priced |
+| 38 | Copart Secured-tier brackets stored but unconfirmed against any invoice (Prompt 21 Phase 2) | Both real Copart accounts price as Unsecured on every invoice seen; the Secured tables (both accounts, all title statuses) are stored as `official_tariff` from the published page only. If Caplimo ever posts a security deposit with Copart (see debt #18 in `docs/SOLVED.md` — the $1,125 saved across 3 vehicles is the descriptive number, not a recommendation), the Secured rows are already there to switch to, but unverified against reality until then |
+| 39 | Storage fees not stored anywhere (Prompt 21 Phase 2) | Copart's own page defers to "check with your local branch" / genuinely escalates per day ($5/$10/$15/$20/$25/$30 observed across the three real invoices, not a flat figure) — no honest single rate exists to store. `bidHeadroomService.ts` has no storage component at all; a listing sitting unpaid past the free period will under-report true landed cost until this is addressed, deliberately, as a known gap rather than a guessed figure |
+| 40 | Late Payment Fee ($50) stored as an always-on flat fee, not a conditional one (Prompt 21 Phase 2) | `bidHeadroomService.ts`'s auction-fee component always adds the environmental/gate/title-pickup flat fees but does not currently add Late Payment even though it's stored in `cost_rates` — it is a penalty for late payment, not a baseline cost, and was stored for completeness (confirmed on 2 of 3 real invoices) without yet deciding how a headroom calculation should treat contingent fees. Worth a deliberate decision before this table grows more conditional fees |

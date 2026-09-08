@@ -1274,3 +1274,46 @@ a research run or headroom calculation would ever ask the user to toggle. If a f
 is ever made through an account that does carry a deposit, that is a new, distinct rate row (a
 different account-level fact), not a different answer to the same question for an existing
 account's rows.
+
+---
+
+## 19. The auction buyer-fee bracket circularity
+
+**The problem, stated plainly:** the buyer fee that determines how much a bid actually costs
+depends on which price bracket the final sale price falls into. Bid headroom is trying to
+answer "what is the most I can bid?" - but the fee that has to be subtracted to answer that
+question depends on the very number being solved for. Naively, that looks circular: fee
+depends on bid, bid depends on fee.
+
+**Why it mostly isn't, in practice:** for every bracket except the last, the fee is a fixed
+dollar amount tied to a price *range*, not to the exact price. That means the circularity
+collapses to a small, finite, ordered search rather than a numerical fixed-point problem:
+
+1. For each bracket, in ascending order, compute what the bid *would* be if that bracket's fee
+   applied: `candidate_bid = target_after_other_costs - bracket.fee`.
+2. Check whether `candidate_bid` actually falls inside that same bracket's own
+   `[min, max]` range.
+3. The first bracket where that check passes is the answer. Because brackets are contiguous
+   and non-overlapping on the same variable being solved for, at most one bracket can ever
+   pass this check for a given input - there is no need to iterate to convergence, and no
+   risk of oscillating between two brackets.
+
+**The one genuine edge case: the terminal open-ended bracket.** Above $15,000 (both Copart and
+IAAI), the fee stops being a fixed dollar figure and becomes a flat percentage of the sale
+price itself - now genuinely a function of the unknown. But because the rate is constant
+across that entire unbounded bracket, it is still a one-step linear solve, not iteration:
+`bid = target_after_other_costs / (1 + rate)`, then check `bid >= 15,000` to confirm it
+actually belongs in that bracket rather than the last fixed-dollar one below it.
+
+**Implementation:** `solveMaxBidAgainstBracket()` in `bidHeadroomService.ts` does exactly this
+- a single pass over the brackets sorted by `bracket_min`, fixed-dollar brackets checked by
+substitution, the percent bracket solved algebraically. It is written and correct, but not
+reachable in normal operation yet: bid headroom requires every cost component to be available,
+and duty is permanently unavailable until C2 exists (`PLAN_TRACKER.md` Phase C). The function
+exists now so headroom is genuinely ready the moment C2 unblocks, not something to build then.
+
+**How to extend it:** if a future rate schedule ever has two brackets that could both pass the
+self-consistency check for the same input (which would mean the brackets overlap - a data
+error, not a normal case), `findBracket`-style helpers here would need to detect and reject
+that explicitly rather than silently returning whichever bracket happens to be checked first.
+That has not happened with any real Copart or IAAI table seen so far.
