@@ -661,6 +661,65 @@ database-backed UI with no code path involved in adding or superseding a rate.
 
 ---
 
+### 4.9 C1b: `trucking_rates` ledger, deterministic importer, two views, yard matcher — **DONE** (8 Sep 2026)
+Prompt 20, both stages.
+
+**The real vendor file's column layout matched the prompt's description for one sheet out of
+four.** The prompt described COPART's layout exactly (container pairs at columns 3/4, 6/7,
+9/10, 12/13; RoRo at 16/17, 19/20, 22/23) as if it were the whole file's shape. The real
+November 2025 file's other three sheets have fewer port options and different column
+positions — IAAI, MANHEIM, and ADESSA each lay out their (port, price) pairs at different
+column indices entirely. The importer derives each sheet's pairs from that sheet's own header
+row (any cell containing "CONTAINER" or "RORO" starts a pair) rather than trusting one
+hardcoded layout — caught by inspecting the real file before running the import, not by
+assuming the prompt's description held. See `docs/SOLVED.md` topic 17 for the full mechanism.
+
+**Imported 1,740 rate rows from the real file; 143 failures reported, none silently dropped.**
+137 are the vendor's own unquoted port options (a port name listed with no price attached —
+e.g. a whole cluster of Atlanta-area yards lists "BALTIMORE" as a fourth container option, but
+only 2 of 11 actually have a price), 4 are orphan prices with no attributable port, 2 are
+stray non-data rows. Yard counts cross-checked by an independent method match exactly for
+three of four sheets (208/208, 77/77, 59/59); IAAI's is 188 found vs. 187 represented in
+`trucking_rates`, explained and not a bug — **Honolulu, HI is a real yard where the vendor
+wrote the literal text "NO" instead of any price**, correctly producing zero rate rows. See
+`docs/SOLVED.md` topic 17.
+
+**The vendor's own file has a state-name typo.** The COPART sheet spells New Hampshire "New
+Hamphire"; the IAAI sheet spells it correctly. Both exist, unfixed, in
+`trucking_rates.yard_state` (raw at capture) — bridged at the matcher layer
+(`STATE_NAME_ALIASES` in `src/services/yardMatchingService.ts`), not corrected in storage.
+
+**Two read views over the one table** (`src/services/truckingRatesService.ts` +
+`src/components/TruckingRatesLookup.tsx`, superadmin-only, not wired into research runs or the
+public share page): an internal view (every vendor's price, current and superseded, visible as
+history) and an estimator view (a band and sample size across currently-effective rates only —
+verified live that a superseded rate drops out of the aggregate but stays visible as history).
+
+**Yard matcher measured a 35% miss rate against all 171 live sightings — a baseline to
+measure against, not a defect.** 112 matched (65.5%), 0 ambiguous, 59 unmatched (34.5%),
+broken down by real cause:
+- 18 — bid.cars listing with no resolved underlying auction platform yet
+  (`sightings.source_auction_platform` is null)
+- 11 — `manual` source, no auction platform at all
+- 27 — resolved platform and location fine, but this vendor's rate sheet doesn't cover that
+  yard (a coverage gap, not a matcher weakness — closes by adding vendors, not by changing
+  code)
+- 3 — malformed or unrecognised location strings
+
+Cross-platform leakage (a Copart listing resolving to an IAAI yard) proven absent: 0 of 112
+matches. The "Mobile" vs "Mobile South" ambiguity case the prompt anticipated does not occur
+in real data — confirmed directly against Copart's own live facility pages, which always
+display the full disambiguating name ("AL - Mobile South", matching address on file); the
+prompt's warning is a defence against substring/prefix matching, which this matcher's
+exact-normalised-string design never does. **A real bug was found while proving this**: the
+ambiguity check as first written compared city+state between already city+state-filtered
+candidates — structurally unable to ever fire, for any input, which every "0 ambiguous"
+report up to that point could not have distinguished from a working check. Fixed to compare
+street addresses among same-city candidates instead, verified against a synthetic true
+duplicate. See `docs/SOLVED.md` topic 16 — the method generalises past this one matcher.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **NOT STARTED**
@@ -692,6 +751,9 @@ item with new evidence — not assumed from this single page.
 
 - **C1.** `cost_rates` table + admin screen — **DONE** (7 Sep 2026, Prompt 19 Stage 2). See §4.8
   below. No rates seeded — the table is empty until Bashir enters real figures.
+- **C1b.** `trucking_rates` ledger, importer, two views, yard matcher — **DONE** (8 Sep 2026,
+  Prompt 20). See §4.9 below. A second table, not a reshaping of `cost_rates` — real vendor
+  data prices each yard-to-port lane individually, which a state tier would discard.
 - **C2.** Duty calculator (51.47% formula + observed calibration) — **BLOCKED** on
   collecting 10+ assessment notices. **The 51.47% figure and the six-component stack's
   individual percentages are documented in `DECISIONS.md` §3 but deliberately not encoded
@@ -701,6 +763,12 @@ item with new evidence — not assumed from this single page.
   continues: photograph every assessment notice before handover.
 - **C3.** Client-facing grouped cost display (Vehicle · Shipping & logistics · Duties &
   clearing · Service fee · Total), expected and ceiling — **NOT STARTED**, depends on C1/C2.
+
+**Future work, recorded not built (Prompt 20 Phase 6):** AI extraction for unstructured vendor
+documents (PDF invoices, customs-agent quotes, assessment notices) — staged as upload → AI
+extracts to a review table → human confirms → rates. AI never writes directly into live rates
+(`PROJECT_CHARTER.md` §5.4); the deterministic spreadsheet importer built for Prompt 20 remains
+the only live-rates write path until this exists.
 
 ---
 
@@ -823,3 +891,7 @@ as evidence (public link renders the fix live).
 | 29 | Make/model stay free text on the intake form (Prompt 18 Phase 6) | The Google Form's nine-make dropdown is a Forms limitation that forces "Other, please specify" onto everything else — not worth reproducing. Real dropdowns wait for the vehicle database (E-series estimator work) |
 | 30 | Intake form has no literal "I confirm these details are correct" confirmation (Prompt 18 Phase 6) | The review-then-submit flow serves the same practical purpose, but the source form's exact confirmation copy/checkbox was not reproduced — a parity gap, not a functional one |
 | 31 | The critical-block checklist has no server-side or stored representation (Prompt 19 Phase 1/3) | It is computed client-side in `ResearchRunDetail.tsx` on every render and is only ever consumed to gate the share toggle before `share_enabled` is written. `public-run` and the new client-approval path can therefore only enforce `share_enabled`/`deleted_at` — neither recomputes the checklist. **The gate is enforced at the moment of sharing, not continuously:** a run that was legitimately shared and later develops a block — a re-captured lot changing `lot_state`, new `auction_history` arriving, a brief edited after sharing — stays shareable and approvable until a staff member reopens the run and the client-side checklist re-evaluates. Fixing this means persisting the checklist result or recomputing it in the Edge Function — its own piece of work, and it spans the rule layer this prompt is deliberately fenced off from |
+| 32 | Yard matching is name-based and will miss (Prompt 20 Phase 5) | `src/services/yardMatchingService.ts` matches on exact normalised platform + city + state text — no geocoding, no distance tolerance, no fuzzy matching (deliberately, per `PROJECT_CHARTER.md` §5.1 — an approximate match is worse than an honest non-match). A sighting whose location text doesn't exactly match a `trucking_rates` yard name is unmatched, not nearest-matched. Measured baseline: 65.5% matched, 34.5% unmatched, 0% ambiguous, across all 171 live sightings |
+| 33 | 27 sightings resolve platform + location cleanly but sit at yards this vendor's file doesn't cover (Prompt 20 Phase 5) | This is a rate-sheet coverage gap, not a matcher weakness — e.g. `ME - WINDHAM` is a real Copart yard per the sighting, simply absent from the "Inland Towing" vendor's price list. Closes by importing more vendors' rate sheets through the same importer, never by loosening the matcher's exactness |
+| 34 | Port-name normalisation (`PORT_ALIASES`) and state-name normalisation (`STATE_NAME_ALIASES`) are small explicit alias tables, not general fuzzy correction (Prompt 20 Phase 3/5) | Only two port variants (`JACKSONVILLE YARD`, `LOS ANGELOS` sic) and one state variant (`New Hamphire` sic, present unfixed in `trucking_rates.yard_state` since the raw+normalised treatment was only built for ports) are handled today. A future vendor file will have its own spelling quirks — extend the tables in `scripts/lib/truckingRatesParser.mjs` and `src/services/yardMatchingService.ts` as they're found; never guess at a correction that isn't explicitly listed |
+| 35 | `DECISIONS.md` §3's RoRo figure ($1,500–1,800) may be stale against the current market (Prompt 20 Phase 6, research only) | External marketing-page quotes gathered 8 Sep 2026 (AuctionExport, ShipIt, All Transport Depot — none a real quote request) suggest the floor may now run closer to $1,295, with container costs trending toward $2,800 rather than "$2,000+". These are not quotes and were deliberately not used to correct the documented figure or seed any rate row — flagged only as needing a real `agent_quote` before `DECISIONS.md` §3 is updated |

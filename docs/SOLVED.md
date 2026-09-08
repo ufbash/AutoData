@@ -1109,3 +1109,129 @@ edit, or a client-facing "what did I approve" view) must read from `approved_sna
 by re-joining to the live `sightings`/`assets` row through `sighting_id` — that join answers
 "what does this listing look like now," a different question that happens to share a
 foreign key with the one that matters here.
+
+---
+
+## 16. A guard that can never fire looks identical to a guard that works
+
+**Symptom:** the yard-matching ambiguity check (`matchSightingToYard`, PROMPT 20 Phase 5)
+reported 0 ambiguous matches across all 171 live sightings. That result was reported and
+nearly accepted as evidence the data has no ambiguous yards - until the check itself was
+tested against a case constructed to actually trigger it, which revealed it could not fire
+at all, for any input.
+
+**Root cause:** the check computed `distinctYards = new Set(candidates.map(c =>
+\`${c.yard_state}|${c.yard_city}\`))` and flagged ambiguity when its size exceeded 1. But
+`candidates` was already filtered to rows matching the same normalised city and state - every
+member of that set was therefore guaranteed identical on exactly the two fields being
+compared. The set could never contain more than one distinct value. The check was not buggy
+in the sense of giving a wrong answer; it was buggy in the sense of being unable to give any
+answer other than "no" - a tautology dressed as a data check.
+
+**Why "0 ambiguous" didn't catch it on its own:** a guard that never fires and a guard that
+correctly never finds a positive case produce **the exact same output**. Nothing about the
+report - not the number, not the code review, not the fact that it matched the expectation of
+"probably rare" - distinguished the two. The bug was invisible to every form of inspection
+that only looks at real data, because real data (correctly) contained zero positives either
+way.
+
+**Solution:** fed the check a synthetic input constructed specifically to be a true positive -
+two yards, same platform, same city, deliberately different street addresses - and confirmed
+it returned `ambiguous`. It didn't; that failure is what surfaced the tautology. Fixed by
+comparing `yard_street` among the already-city-matched candidates instead of re-comparing the
+city/state fields that were guaranteed equal by construction, then re-verified against the
+same synthetic case (now correctly `ambiguous`) and re-confirmed the real data still returned
+0 (now a trustworthy 0, not a coincidental one).
+
+**Why this way:** verifying a detector by pointing it at real data only tests the negative
+path when the real data happens to contain no positives - which is precisely the situation
+where a broken detector is most likely to go unnoticed, because "0" is also what a working
+detector would report. There is no way to distinguish "correctly found nothing" from
+"incapable of finding anything" without a case manufactured to be found.
+
+**How to extend it:** this generalises past this matcher. Any detection path - a validation
+rule, a fraud flag, a duplicate check, an anomaly detector - whose reported rate of positives
+on real data is zero (or has always been the same number) should be treated as unverified
+until it has been run against a synthetic input built to be a true positive. A live "0" is
+not evidence the check works; it is only evidence the check ran. Trust the zero after proving
+the guard can say something other than zero, not before.
+
+---
+
+## 17. Importing the vendor trucking-rate spreadsheet
+
+**Symptom-shaped summary for the next person doing this:** the source prompt for this
+importer (PROMPT_20) described one column layout, taken from the COPART sheet, and stated it
+as if it applied to the whole file. It did not. The real November 2025 vendor file has four
+sheets with four different layouts. Trusting the prompt's description instead of the actual
+file would have silently misread three of the four sheets.
+
+**The state column is vertically merged and must be filled down.** Only the first row of each
+state's block carries a value in column 0; every row below it is blank until the next state
+starts. `parseSheet()` tracks `currentState`, updates it whenever column 0 is non-blank, and
+carries it forward onto every blank-state row until the next update. Getting this wrong
+doesn't error - it silently produces yard rows with no state, or worse, misattributes yards to
+the last state that happened to be filled.
+
+**Blank rows separate states and must be skipped, not treated as yards.** A row is a genuine
+separator (not a yard, not a failure) when the city is blank, the street is blank, and every
+port/price cell is blank. A row with a blank city but *some* other data present is a different
+thing - a malformed row, reported as a failure with sheet+row, never silently dropped and
+never silently promoted to a phantom yard.
+
+**The column layout is NOT fixed across sheets - it must be derived from each sheet's own
+header row.** The prompt described COPART's layout exactly (container pairs at columns 3/4,
+6/7, 9/10, 12/13; RoRo at 16/17, 19/20, 22/23) and that description is correct **for COPART
+only**. The real file's other three sheets have fewer port options and different column
+positions entirely:
+```
+IAAI:    container (3,4) (6,7) (9,10) (11,12);  roro (13,14) (15,16) (18,19)
+MANHEIM: container (3,4) (6,7) (9,10);          roro (11,12)
+ADESSA:  container (3,4) (6,7) (9,10);          roro (11,12) (14,15)
+```
+`derivePairs()` finds these from the header row itself: any header cell whose text contains
+"CONTAINER" or "RORO" starts a (port, price) pair at that column and the next one. This rule
+held across all four sheets in the real file and should hold for a future vendor's file too,
+since it doesn't assume a fixed width - but verify it against the new file's actual header
+row before trusting it, the same way this file's assumption turned out to need checking.
+
+**The header row itself is not row 0.** This file has a fully blank row 0 before the real
+header (STATE/CITY/STREET/CONTAINER.../RORO...) on row 1. `findHeaderRowIndex()` locates it by
+scanning for the row whose first cell is literally "STATE", rather than assuming a fixed
+offset.
+
+**Port names are inconsistent by construction, and this is expected, not a data-quality bug
+to silently fix.** Observed in the real file: `JACKSONVILLE YARD` vs `JACKSONVILLE`, `LOS
+ANGELOS` (sic) vs `LOS ANGELES`, trailing whitespace (`TEXAS `). `destination_port_raw` keeps
+exactly what the vendor sent - `LOS ANGELOS` is evidence of what they actually wrote, not a
+typo to correct away in storage. `destination_port_normalized` (trim, collapse whitespace,
+uppercase, then a small explicit alias table) is the form used for matching. Extend
+`PORT_ALIASES` in `scripts/lib/truckingRatesParser.mjs` as new vendors reveal new variants -
+never guess at a correction that isn't in the table.
+
+**State names have the same problem and it wasn't anticipated.** The vendor's own COPART sheet
+spells New Hampshire `"New Hamphire"`; the IAAI sheet spells it correctly. Both exist,
+unfixed, in `trucking_rates.yard_state` - `destination_port_raw`/`_normalized` gave port names
+a raw+normalised pair, but `yard_state` did not get the same treatment in the migration, since
+the prompt's shape only called it out for ports. The gap is closed one level up, in the
+matcher (`STATE_NAME_ALIASES` in `src/services/yardMatchingService.ts`), which normalises both
+spellings to the same key before comparing. Extend that table, not the stored data, if a
+future vendor file has its own state-name typo.
+
+**A yard can be real and correctly produce zero rate rows.** IAAI's Honolulu, HI yard has
+every container cell blank and its one RoRo cell containing the literal text `"NO"` - the
+vendor's own way of saying no service is offered there, not a missing price to estimate. This
+is why the imported yard count for IAAI (187) is one less than the yard count found while
+scanning the sheet (188): Honolulu is counted as a yard (it has a city), correctly produces no
+`trucking_rates` rows (there is nothing to price), and the discrepancy is explained, not a
+loss to chase down. If a future re-import ever "fixes" this gap by inventing a Honolulu price,
+that is the bug, not the 187.
+
+**Reject non-numeric prices, and a port name without a price is a data gap, not a parser
+defect.** 137 of the 143 parse failures in the real import were exactly this shape: the vendor
+listed a port name for a yard (often copy-pasted across a whole regional cluster) but never
+filled in a price for most of them - e.g. COPART's Atlanta-area yards all list "BALTIMORE" as
+a fourth container option, but only 2 of 11 actually have a price attached. No row is created
+for these (there is no price to store), and each is reported with sheet+row rather than
+silently dropped, per this project's standing rule that a silent partial import is the failure
+mode to design against.

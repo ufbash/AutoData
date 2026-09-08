@@ -278,7 +278,7 @@ not yet — see `PLAN_TRACKER.md` 1.2.
 
 - **`organizations`** / **`memberships`** — tenancy and roles. Caplimo `org_id`:
   `a93378ea-33ef-4c75-97c4-44c37f2e9002`
-- **`cost_rates`** — *not yet created*. Planned for landed cost (Phase C1).
+- **`cost_rates`** / **`trucking_rates`** — landed cost (Phase C1). See §14.
 - **`sales`** — **DEPRECATED** legacy flat table. RLS enabled with **zero policies**
   (locked). Retained as historical backup only. **Do not read or write it.**
 
@@ -329,3 +329,50 @@ failure mode.
 **`public-run` carries a strict field allow-list.** `sale_date` was added 28 Aug 2026 to
 enable the public countdown. Any new public field requires an allow-list edit **and** a
 redeploy.
+
+---
+
+## 14. Landed cost — `cost_rates` and `trucking_rates` (Phase C1)
+
+Two separate ledgers, deliberately, not one reshaped. Both follow `PROJECT_CHARTER.md` §5.10:
+`effective_from`/`effective_to`/`source` (`official_tariff` | `agent_quote` | `actual_paid`),
+never edited in place — a changed rate is a new row, the superseded row gets an
+`effective_to`. Both follow §12's exact RLS pattern.
+
+**`cost_rates`** (migration 029) — rates that apply broadly and vary by tier: duty components
+(each with a `basis` — `cif` | `cif_plus_prior` | `import_duty`, since the six locked
+components in `DECISIONS.md` §3 don't all compute against the same base), ocean freight by
+shipping method, and the service fee. `cost_category` + `label` + `basis` describe what a rate
+applies to; `rate_value`/`rate_value_max` (max nullable) hold a point value or a range rather
+than forcing an observed range into one averaged figure.
+
+**`trucking_rates`** (migration 030) — **not a finer-grained `cost_rates`**. Real vendor
+inland-trucking data prices each auction yard to each destination port individually — Tucson
+IAAI to Texas is $825 while Phoenix IAAI to Texas is $925, same state, same vendor, same port.
+A `cost_rates` state-tier row would discard exactly the information that makes this data worth
+having. Grain: one row per vendor / auction platform / yard (state, city, street) / destination
+port / shipping method (`container` | `roro`). `destination_port_raw` keeps the vendor's
+spelling exactly as sent (`LOS ANGELOS`, `JACKSONVILLE YARD`, trailing-space `TEXAS `) per §5.8
+(raw at capture, classify at read); `destination_port_normalized` is the trimmed/cased/aliased
+form used for matching. `yard_state` is the full state name as the vendor wrote it, including
+at least one known typo (`New Hamphire` on one sheet, `New Hampshire` on another) — normalised
+at the matcher layer (`STATE_NAME_ALIASES` in `src/services/yardMatchingService.ts`), not
+retroactively corrected in storage.
+
+Populated only via the deterministic importer (`scripts/importTruckingRates.mjs` +
+`scripts/lib/truckingRatesParser.mjs`) — no manual entry, no AI extraction. See
+`docs/SOLVED.md` topic 17 for the importer's specifics (merged-state fill-down, per-sheet
+column layout, port-name inconsistencies) and topic 16 for a real bug found while building the
+yard matcher (an ambiguity check that could structurally never fire).
+
+Two read-only views over `trucking_rates`, not two tables:
+`src/services/truckingRatesService.ts` provides an **internal view** (every vendor's price,
+current and superseded, so staff can see who's cheapest and the full history) and an
+**estimator view** (a band and sample size across currently-effective rates only, per the
+honesty doctrine §5.1 — never a bare figure). Matching a `sightings` row to a yard
+(`src/services/yardMatchingService.ts`) is platform-first (a bid.cars sighting's real platform
+is `sightings.source_auction_platform`, since bid.cars is a resale aggregator, not a yard
+network — `source_platform` is always literally `'bidcars'` for those rows), then normalised
+city/state, with an unmatched or ambiguous result surfaced as "not quotable" rather than any
+approximation. Neither the ledger nor the matcher is wired into research runs or the public
+share page yet — that remains a separate decision.
