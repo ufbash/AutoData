@@ -142,6 +142,12 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
         )}
       </div>
 
+      {!loading && result?.pricedUnder && (
+        <div className="mb-3 text-[11px] font-bold text-[#403f4c] bg-[#a58039]/10 border border-[#a58039]/30 rounded px-2 py-1.5">
+          Priced under: {result.pricedUnder.memberAccount} — {result.pricedUnder.titleStatus}, {result.pricedUnder.paymentTier}
+        </div>
+      )}
+
       {loading && <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 text-[#a58039] animate-spin" /></div>}
       {error && <div className="text-xs text-red-600">{error}</div>}
 

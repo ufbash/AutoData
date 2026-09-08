@@ -31,6 +31,11 @@ export interface BidHeadroomResult {
   duty: CostComponent;
   targetLandedCostUsd: number | null;
   headroom: CostComponent;
+  // Which member account/tier the auction-fee figure was actually computed under - shown
+  // prominently, not buried in a source line, so it is never ambiguous which basis a
+  // headroom number rests on (a real correction: an earlier default silently priced against
+  // a one-off middleman's cheaper schedule instead of Caplimo's own account).
+  pricedUnder: { memberAccount: string; titleStatus: string; paymentTier: string } | null;
 }
 
 const unavailable = (reason: string, detail = ''): CostComponent => ({
@@ -93,11 +98,20 @@ export interface AuctionFeeInput {
   memberAccount?: string; // defaults to the confirmed default account below
 }
 
-// White Nexus's High-Volume Licensed account is the entity actually buying going forward
-// (PROMPT_21 Phase 1 cross-check) - the confirmed default. Both real accounts are Unsecured;
-// there is no evidence either account is ever Secured, so that is not offered as a silent
-// default - Secured rows exist in the table only as the published (unconfirmed) alternative.
-export const DEFAULT_MEMBER_ACCOUNT = 'White Nexus Ltd (Copart High-Volume Licensed)';
+// CORRECTED (see PLAN_TRACKER.md debt) - the default is Caplimo's OWN Copart account, not
+// White Nexus. White Nexus is a one-off middleman that bought on Caplimo's behalf for a
+// single invoice; it is not the entity Caplimo's own research-run client options should be
+// priced against. Defaulting to White Nexus's cheaper High-Volume schedule would assume a
+// discount Caplimo does not itself receive - understating cost on every listing,
+// systematically, in the direction that loses money. Jamilu Danmusa Danmusa is Caplimo's own
+// account (Non-Licensed), confirmed against invoices 1 & 3. White Nexus's High-Volume rows
+// stay stored - they priced a real purchase and S5.10 requires that invoice to stay
+// explicable - but they are historical, not the default.
+export const DEFAULT_MEMBER_ACCOUNT = 'Jamilu Danmusa Danmusa (Copart Non-Licensed)';
+// Both real Copart accounts price as Unsecured on every invoice seen - including one funded
+// mostly by wire and one where a $400 security deposit is on file with Copart (PLAN_TRACKER.md
+// debt - open question, not yet resolved). Secured is not offered as a silent default; it
+// stays official_tariff, unconfirmed, until Copart confirms what actually secures an account.
 const PAYMENT_TIER = 'unsecured' as const;
 
 export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<CostComponent> {
@@ -355,5 +369,13 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
   const duty = getDutyComponent();
   const headroom = computeHeadroom(input.targetLandedCostUsd, auctionFees, inlandTrucking, oceanFreight, duty);
 
-  return { auctionFees, inlandTrucking, oceanFreight, duty, targetLandedCostUsd: input.targetLandedCostUsd, headroom };
+  // Shown regardless of whether the auction-fee component actually succeeded, so the panel
+  // always states what basis was ATTEMPTED, not just what basis produced a number.
+  const pricedUnder = {
+    memberAccount: input.memberAccount || DEFAULT_MEMBER_ACCOUNT,
+    titleStatus: classifyTitleStatus(input.titleType),
+    paymentTier: PAYMENT_TIER,
+  };
+
+  return { auctionFees, inlandTrucking, oceanFreight, duty, targetLandedCostUsd: input.targetLandedCostUsd, headroom, pricedUnder };
 }
