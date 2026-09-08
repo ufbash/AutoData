@@ -1235,3 +1235,42 @@ a fourth container option, but only 2 of 11 actually have a price attached. No r
 for these (there is no price to store), and each is reported with sheet+row rather than
 silently dropped, per this project's standing rule that a silent partial import is the failure
 mode to design against.
+
+---
+
+## 18. Copart's "Secured" vs. "Unsecured" fee tier is a property of the buying account, not the transaction
+
+**Symptom:** researching Copart's published buyer-fee schedule (`PROMPT_21` Phase 1) turned up
+four bracket-table variants per title status - Secured and Unsecured payment, each roughly 30%
+cheaper for Secured at every bracket. The natural assumption, going in, was that this is
+selected per purchase based on which payment method the buyer uses at checkout (wire vs. card,
+say).
+
+**Why that assumption was wrong:** cross-checked against three real Copart invoices for
+vehicles bought on two different member accounts. One invoice paid entirely by Google Pay,
+one paid by a mix of two Wire Payments (the large majority of the total) plus two small Google
+Pay top-ups, one paid entirely by Google Pay again. All three landed exactly on their
+schedule's **Unsecured** bracket value, including the one dominated by Wire Payments - a
+payment method that would intuitively read as "secured" (guaranteed, non-reversible funds). If
+the tier were chosen per transaction by payment method, that invoice should have priced as
+Secured. It did not, on either of the two different fee schedules the two accounts sit on
+(confirmed by locating the actual Non-Clean/Unsecured bracket for each account's own schedule
+and finding an exact match to the penny).
+
+**Conclusion:** Secured vs. Unsecured is best understood as a **standing classification of the
+member account itself** - almost certainly whether that account carries a security deposit on
+file with Copart - not a choice made at the point of payment for a given lot. A buyer without
+a deposit on file pays the Unsecured rate regardless of how any individual purchase happens to
+be funded.
+
+**The concrete number this surfaced:** across the three invoices checked, Secured pricing on
+the same brackets would have totalled $1,125.00 less than what was actually paid ($2,775 vs.
+$3,900), roughly $375/vehicle. Purely descriptive - whether posting a deposit is worth it is a
+business decision outside this research, not something this finding recommends either way.
+
+**How to extend it:** when `cost_rates` models the Copart fee structure, Secured/Unsecured
+must be a property of *which member account* a purchase runs through, not a per-listing input
+a research run or headroom calculation would ever ask the user to toggle. If a future purchase
+is ever made through an account that does carry a deposit, that is a new, distinct rate row (a
+different account-level fact), not a different answer to the same question for an existing
+account's rows.

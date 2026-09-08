@@ -30,3 +30,6 @@ supabase/.temp/
 # Generated import SQL and vendor source files - may carry proprietary rate data
 scripts/out/
 scripts/input/
+
+# Real auction invoices - financial documents, never committed
+Invoices/
