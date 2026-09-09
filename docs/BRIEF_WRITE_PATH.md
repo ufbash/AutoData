@@ -1,5 +1,21 @@
 # BRIEF_WRITE_PATH.md
 
+**Status note (added 9 Sep 2026, reconciliation pass):** this is a point-in-time diagnostic
+dated 4 Sep 2026, kept as historical evidence per this project's convention of preserving
+investigation records rather than deleting superseded ones. Its open question — do
+`max_budget_usd`/`titles_accepted` reach the database, or does something drop them — is
+**resolved**: `PLAN_TRACKER.md` §1.1 (Q1) confirms, via a real browser round-trip on
+4 Sep 2026, that both fields (and all sixteen) save and reload correctly; nothing was
+dropping them. `ClientsList.tsx` has also changed substantially since this was written —
+Prompt 18 Phase 6 (6 Sep 2026) replaced several of the free-text inputs quoted below
+(transmission, fuel, condition, titles, interior, payment) with closed dropdowns/multi-selects
+and added the intake-form-parity fields — so the file:line references and the "16 columns"
+framing below describe the form as it was on 4 Sep, not as it is now. For the current shape,
+see `SCHEMA.md` §10 and `PLAN_TRACKER.md` §4.6's parity table. Left unedited below as the
+original diagnostic record.
+
+---
+
 Diagnostic only. No source files, migrations, or git state were changed to produce this
 document. All code below is quoted verbatim from the working tree at the time of writing.
 

@@ -4,7 +4,9 @@
 **Audience:** Claude Code (primary, from 28 Aug 2026). Antigravity built the system through
 5 Aug 2026 — its incidents are kept below because the mistakes are what matters, not which
 tool made them. Applies to any AI agent working this repo.
-**Last revised:** 28 August 2026 — tooling switched from Antigravity to Claude Code. See §0.
+**Last revised:** 9 September 2026 — added §4.13/§4.14 (capture-path traps found 6 Sep 2026,
+not previously recorded here). §0-§7 otherwise unchanged since the 28 Aug tooling-switch
+rewrite; the 4 Sep browser-capability correction in §3 already stood.
 
 > This file exists because the same mistakes have been made repeatedly. Every rule below
 > is written from a real incident on this project, not from general good practice.
@@ -237,6 +239,27 @@ bid.cars variants. Anything time-based must go through the shared
 `parseAuctionDate()` helper in `src/utils/auctionDate.ts`, which returns a real `Date` or
 `null`. **It must never return a guessed or fallback date** — a wrong date would fire an
 alert at the wrong time. Unparseable renders as "Auction date TBC" with no countdown.
+
+### 4.13 Re-attaching an already-captured lot to the same run must not error
+`research_run_listings` has a `unique(run_id, sighting_id)` constraint. A plain `.insert()`
+on re-capture threw the raw Postgres `23505` error straight to the client once the extension
+session model (§4.14) made re-capturing the same lot into the same run a routine action
+rather than a rare edge case. **Any new write path that can attach the same
+`(run_id, sighting_id)` pair more than once must check for an existing row first (or catch
+`23505` on this specific constraint) and treat it as success** — a re-capture of a lot
+already in a run is a no-op or a data refresh, never an error condition. See
+`docs/SOLVED.md` topic 10.
+
+### 4.14 The extension's active-run session can silently outlive the user's intent
+The Chrome extension popup has no background timer — session state (`activeRunId`,
+`sessionActive`, `activeRunLastActivity`) lives in `chrome.storage.local` and is only
+re-evaluated when the popup is opened, against a 10-minute idle window. **If a user finishes
+work on a run without clicking "End run" and reopens the popup within 10 minutes — even on an
+unrelated tab, even much later the same sitting — the session is still live and the next
+capture silently attaches to the old run.** When a capture turns up in a run nobody meant to
+select, check `activeRunLastActivity` against the capture's own timestamp before assuming the
+extension mis-selected anything; it more likely never re-evaluated because the popup was
+reopened inside the window. See `docs/SOLVED.md` topic 11.
 
 ---
 

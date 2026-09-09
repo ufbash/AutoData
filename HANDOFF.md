@@ -21,6 +21,7 @@ You are continuing work on **AutoData**. Read this fully before responding.
 | `DECISIONS.md` | Why things are the way they are, with LOCKED/PROVISIONAL/OPEN status | When a decision is questioned or a new one is needed |
 | `docs/SOLVED.md` | *How* non-obvious mechanisms actually work, reconstructed from real code | When extending or debugging something that already works |
 | `docs/REPO_MAP.md` | Read-only file-tree/code-location snapshot | To find where a feature lives before grepping blind |
+| `docs/BUILD_LOG.md` | Chronological build record — what shipped, when, in which commit | To find *when* something was built or trace a regression to a date/commit |
 | `ARCHITECTURE.md` | How the system is built, at a higher level than SCHEMA.md | For system-level questions |
 
 **Status lives only in `PLAN_TRACKER.md`.** An earlier plan document carried a "nothing is
