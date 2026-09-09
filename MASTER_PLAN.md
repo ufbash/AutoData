@@ -1,7 +1,8 @@
 # MASTER_PLAN.md — The full build plan
 
 **Status:** The detailed roadmap. Every phase, what it entails, why it sits where it does.
-**Last revised:** 28 August 2026
+**Last revised:** 9 September 2026 (Part XII sequence status corrected; Part I migration
+count corrected. Content otherwise unchanged — status detail lives in `PLAN_TRACKER.md`.)
 **Companions:** `PLAN_TRACKER.md` (one-line status) · `ARCHITECTURE.md` (as built) ·
 `DECISIONS.md` (why) · `SCHEMA.md` (data truth) · `AGENTS.md` (agent rules)
 
@@ -48,9 +49,11 @@ any future source that blocks servers** — assume it will be needed again.
 Supabase as single source of truth. `assets` (physical vehicles) / `sightings`
 (observations) / `auction_history` (past appearances) / `research_runs` +
 `research_run_listings` (deliverables) / `clients` + `client_briefs` /
-`organizations` + `memberships`. Migrations 001→023 (023_soft_delete_clients_briefs was
-applied to production 5 Aug 2026 under Antigravity but not committed to git until this
-session, retroactively, as commit b27f9ae). Full detail in `SCHEMA.md`.
+`organizations` + `memberships` / `cost_rates` + `trucking_rates` +
+`auction_fee_brackets` (landed cost, Phase C1/C1b/C1c). Migrations 001→031 as of
+9 Sep 2026 (023_soft_delete_clients_briefs was applied to production 5 Aug 2026 under
+Antigravity but not committed to git until 4 Sep 2026, retroactively, as commit b27f9ae).
+Full detail in `SCHEMA.md`.
 
 Multi-tenancy, RLS, org scoping and role structure built from day one — so a second
 licensee is a new organization row, not a refactor.
@@ -543,34 +546,36 @@ account creation.** Anyone may submit a brief; work starts when the fee lands.
 
 ## PART XII — SEQUENCE SUMMARY
 
+**Status as of 9 Sep 2026 — see `PLAN_TRACKER.md` for full evidence per item.**
+
 ```
-NOW ──▶ Q1 brief form fields
-        Q2 view/edit/soft-delete
-        Q3 audit runs list          ──┐
-        Q4 sold-comps brief warning   │
-                                      │
-NEXT ─▶ A2 derived flags ★ fraud gap  │
-        B2 Copart Sales History — RETIRED, NOT BUILDABLE (4 Sep 2026 recon; Copart exposes no such panel)
-        A1b population coherence      │
-        A3 extension run-picker       │
-                                      │
-NOW  ─▶ P1 client-hub restructure ◀───┘ (depends on Q3; B2 retired, so P1 is next — no longer waiting behind it)
-        N1 auction alerts
-        N2 client intake form ◀──────── (depends on Q1, Q2)
-        N3 approval trail
+DONE ── Q1 brief form fields (4 Sep) · Q3 audit runs list (4 Sep)
+        A2 derived flags ★ fraud gap (4 Sep) · A1b population coherence (6 Sep)
+        A3 extension run-picker (6 Sep) · P1 client-hub restructure (5 Sep)
+        N2 client intake form (6 Sep, direct-approach route only)
+        N3 approval trail (7 Sep)
+        C1 cost_rates + admin screen (7 Sep)
+        C1b trucking_rates ledger, importer, yard matcher (8 Sep)
+        C1c auction fee brackets + bid-headroom module (8 Sep)
 
-        C1 cost_rates (unblocked now)
-        B1 IAAI
-        C2 duty calculator ◀─────────── (blocked: 10+ notices)
-        C3 cost display
+RETIRED ── B2 Copart Sales History — NOT BUILDABLE (4 Sep 2026 recon; Copart exposes no such panel)
 
-        Phase D client operations ◀──── (blocked: licence)
-        Phase E estimator E1→E5
-        Phase F intelligence
+PARTIAL ── Q2 view/edit/soft-delete — delete-confirmation UI built, its own confirmation
+           step unverified
+
+NOT STARTED, unblocked ──▶ Q4 sold-comps brief warning
+                            N1 auction alerts (fully designed, ready to build)
+                            B1 IAAI content script
+
+BLOCKED ──▶ C2 duty calculator (10+ assessment notices)
+            C3 cost display (behind C1 done, but behind C2)
+            Phase D client operations (signed AutoData↔Caplimo licence)
+            Phase E estimator, Phase F intelligence (behind accumulated data)
 ```
 
-★ **A2 is the item to do first among the non-blocking work.** A fraud pattern reaching a
-client deliverable outranks every feature in the queue.
+★ A2 was correctly prioritised first among the non-blocking work when this was open — a
+fraud pattern reaching a client deliverable outranks every feature in the queue. It is now
+built and verified; see `PLAN_TRACKER.md` §2.A2.
 
 ---
 

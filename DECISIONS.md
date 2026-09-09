@@ -1,7 +1,7 @@
 # DECISIONS.md — Decision log
 
 **Status:** Append-only. Supersedes `AutoData_Business_Decisions.md`.
-**Last revised:** 28 August 2026
+**Last revised:** 9 September 2026
 
 > Records *why* things are the way they are. `ARCHITECTURE.md` records *how* the system is
 > built; `PLAN_TRACKER.md` records *what state work is in*. Status is never recorded here.
@@ -59,12 +59,21 @@ the most expensive labour in the business, given away to people who may never bu
 **Adopted as recommended: a refundable commitment fee gates the research run, not account
 creation and not the brief.** Anyone may submit a brief; work starts when the fee lands.
 
-**The gate's location:** a staff-controlled `deposit_received_at` / `deposit_recorded_by` pair
-on `clients` (migration 024) — the deposit is a relationship-level fact, not a brief or run
-fact, since a client pays once and may have several briefs and runs over time. `createRun()`
-(`src/services/researchService.ts`) refuses with a named reason when the selected client has
-no deposit marked; the placeholder "Internal / Market Research" client is exempt. A
-superadmin may override with a typed reason (min 10 characters), recorded on the new run via
+**The gate's location — corrected (migration 027, 6 Sep 2026).** Originally placed on
+`clients` (migration 024) as a relationship-level fact. That was a modelling error: a
+commitment fee buys the right to research **one vehicle**, not every future vehicle for that
+client, so a client-level flag let a second, unrelated car's research run start free once the
+first was marked paid. **The gate now lives on `client_briefs`** —
+`deposit_received_at`/`deposit_recorded_by` there is what `createRun()`
+(`src/services/researchService.ts`) actually checks (`brief?.deposit_received_at`); a run with
+no brief linked always requires the superadmin override rather than defaulting to "no deposit
+needed." The placeholder "Internal / Market Research" client remains exempt regardless. The
+old `clients.deposit_received_at`/`deposit_recorded_by` columns are retained only as a
+rollback fallback (no staging environment to test a drop against) and are no longer read by
+any live gate. See `docs/SOLVED.md` topic 14 for the full mechanism and the data-migration
+rule (an existing deposit was allocated only to briefs with a non-deleted run already
+attached — concrete evidence it was actually drawn on — never blanket-copied to every brief).
+A superadmin may override with a typed reason (min 10 characters), recorded on the new run via
 `deposit_override_reason`/`_by`/`_at` on `research_runs`, mirroring the existing
 `critical_override_*` pattern — real deposits sometimes arrive by WhatsApp before they land in
 the system, and a hard block with no override gets worked around by editing the database
@@ -138,6 +147,20 @@ Phase C.
 | 4.8 | Risk rules apply to **active listings only**, never sold comps | LOCKED (5 Aug) |
 | 4.9 | Critical warnings are overridable with a **typed, recorded reason** | LOCKED (5 Aug) |
 | 4.10 | Duplicate vehicle in a run is a hard block, never overridable | LOCKED |
+| 4.11 | A2 hard block triggers on **any** prior auction appearance, not cross-platform reappearance specifically | LOCKED (4 Sep 2026) |
+| 4.12 | A2's damage-severity-decrease escalation is dropped; decreasing odometer between appearances is the proxy critical signal | LOCKED (4 Sep 2026) |
+
+**On 4.11/4.12 — supersedes `PROJECT_CHARTER.md` §6's original wording.** A car auctioned
+twice is itself the disqualifying signal for a client vehicle regardless of whether the two
+appearances share a platform — not contingent on cross-platform movement. The original
+clause also called for blocking harder when damage severity *decreases* between appearances,
+which turned out to be unbuildable: `auction_history` (migration 019) carries no damage
+field at all. Odometer movement is the available proxy — a genuine **decrease** between
+appearances is treated as odometer rollback, a critical signal in its own right, applicable
+to sold comps as well since it means the recorded sale price describes a vehicle that was not
+what it claimed. `PROJECT_CHARTER.md` §6 is LOCKED doctrine and was updated to note this
+supersession rather than rewritten; the charter's prose now points back here. See
+`PLAN_TRACKER.md` §2.A2 for the build and its verified evidence.
 
 **On 4.2 — the refinement that replaced the original blunt rule.** Phase A1 originally read
 "filter sold_comps to `sale_confirmed = true`." That was too blunt: it would have wrongly
@@ -240,6 +263,28 @@ take it seriously — but do not rely on it.
 clients. State plainly on the form what the data is used for; keep it behind auth once
 submitted; no pre-ticked boxes, no bundled consent. Dark patterns are both NDPR-risky and
 brand-poisonous for a company selling transparency.
+
+**Intake link lifecycle — decided and built (Prompt 18, 6 Sep 2026).** `share_enabled` on
+`client_briefs` means "open for editing," not "does this token resolve at all." A brief stays
+live and editable while `pending_review` (re-submitting updates it in place, `submitted_at`
+advances, status stays `pending_review`); staff approval auto-sets `share_enabled = false`
+but the token keeps resolving, read-only, showing exactly what the client submitted; a
+*manual* revoke on a still-`pending_review` brief is the one case that produces a true dead
+link (404, same generic message as an unknown token). The `intake-brief` Edge Function
+rejects a write against an approved brief server-side (`409`) — not just hidden behind the
+client-side read-only view, since a stale client tab can still fire a POST after approval.
+"Generate intake link" on the client page opens a confirmation first; the brief row is only
+created on that confirmation's own click, never on opening the dialog, so cancelling leaves
+no orphan brief.
+
+**Account linking — decided and built (Prompt 16, 6 Sep 2026), Google-only.** Per §7's "the
+record always comes first": a new Google signup is matched to an existing client by email
+(case/whitespace-insensitive) or phone (Nigerian-format-normalised), and linked only when
+exactly one match exists — never on an ambiguous or zero match, and a signup never creates a
+new client row on its own. Offered only on the intake success screen, after submission,
+always skippable — never presented as a requirement to submit. See `SCHEMA.md` §11 and
+`docs/SOLVED.md`/`PLAN_TRACKER.md` §4.4 for the trigger mechanism and its verification
+status (SQL-simulated, not yet a live end-to-end signup — debt #27).
 
 ---
 
@@ -351,7 +396,7 @@ users who matter most.
 | 3 | Confirm tiered brokerage fee (2.5) | Recommended, not yet adopted |
 | 4 | Confirm retail discount band 8–12% (2.4) | May differ by segment |
 | 5 | ~~Adopt a commitment fee before research runs (2.7)~~ | **ADOPTED 6 Sep 2026** — see §2.7 |
-| 6 | May a run exist without a client? (8.5) | Decides the restructure shape |
+| 6 | ~~May a run exist without a client? (8.5)~~ | **RESOLVED 4 Sep 2026 — LOCKED, no**, see §8.5 |
 | 7 | Post-2023 vehicles in the valuation table | Table ends 2023; extrapolation method undecided |
 | 8 | Publish the fee schedule publicly? | Transparency argues yes; negotiating room argues no |
 | 9 | Is licensing AutoData to a second licensee a goal? | Affects roadmap priority |

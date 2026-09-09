@@ -1,7 +1,7 @@
 # PLAN_TRACKER.md — Status of all work
 
 **Status:** The moving document. Status lives here and **nowhere else**.
-**Last revised:** 28 August 2026
+**Last revised:** 9 September 2026
 **Companions:** `PROJECT_CHARTER.md` · `ARCHITECTURE.md` · `DECISIONS.md` · `SCHEMA.md` · `AGENTS.md`
 
 > This file exists because the previous plan document said "nothing is currently blocked or
@@ -16,40 +16,37 @@
 
 ## 0. WHERE WE STOPPED — read this first
 
-**Last working session: 5 August 2026.** This document was written 28 August; anything
-below reflects the state as of 5 August unless re-verified.
+**Last working session: 8 September 2026** (Prompt 21, auction fee research and bid
+headroom). This document is current as of **9 September 2026** (Prompt 23, pre-handover
+document reconciliation — docs only, no code/schema changes).
 
 ### The last completed thing
-The **client brief spec-match rules** (migration 022) were built and tested. Test cases
-(a)–(g) all behaved correctly once the test was run against an **active-listings** run.
-
-### The false alarm that cost time — resolved
-Spec rules appeared not to fire at all. Cause: the test run had `run_type = 'sold_comps'`,
-and spec rules are deliberately active-listings-only (`DECISIONS.md` 4.8). The code was
-correct. **The UI silently accepted a brief on a sold-comps run and then ignored it** — a
-usability gap now queued as item 1.4 below.
+**C1c: auction buyer-fee research, `auction_fee_brackets`, the shared bid-headroom module**
+(migration 031, `bidHeadroomService.ts`). Cross-checked researched fee tables against three
+real Copart invoices, found a genuine mismatch, traced it to Copart's High-Volume Licensed
+schedule on a different member account (White Nexus Ltd), and — after an initial default
+choice was corrected by Bashir — set the default headroom schedule to Caplimo's **own**
+Copart account (`Jamilu Danmusa Danmusa`, Non-Licensed), never the middleman's cheaper one.
+See §4.10 below and `docs/SOLVED.md` topics 18-19. Pushed to `origin/main` 8 Sep 2026.
 
 ### Immediately next, in order
-1. **1.1** — finish the missing client-brief form fields (blocks further testing)
-2. **1.2** — view / edit / soft-delete for briefs and clients
-3. **1.3** — audit the runs list + creation form before any restructure
-4. ~~**2.1** — A2 derived flags~~ — DONE 4 Sep 2026, see §2 below
+Everything in the old list here (1.1–1.3, A2) is now **DONE** — see §1/§2 below for evidence.
+The genuinely open items, in rough priority order:
+1. **1.2 (remaining piece)** — the delete-confirmation UI for briefs/clients is built but its
+   confirmation step itself is unverified; nobody has clicked through it.
+2. **1.4** — warn when a brief is attached to a sold-comps run — **NOT STARTED**.
+3. **4.1** — auction alerts (24h/1h) — **NOT STARTED**, unblocked, designed in full.
+4. **B1** — IAAI content script — **NOT STARTED**.
+5. **C2** — duty calculator — **BLOCKED** on collecting 10+ assessment notices (standing
+   habit, not a task).
+6. **C3** — client-facing cost display — blocked behind C2.
+7. **Phase D** (client operations / portal) — blocked on the signed AutoData↔Caplimo licence
+   (debt #1).
 
-### The most valuable open finding
-A vehicle sold on **Copart and then IAAI** was observed in a client run flagged only as a
-mild "unconfirmed sale" warning. `PROJECT_CHARTER.md` §6 frames this as a cross-platform
-wreck-and-flip fraud signal that must be blocked from client deliverables; Bashir's rule
-(4 Sep 2026, see `MASTER_PLAN.md` A2) broadens it to any prior auction appearance. The rule
-was never built — it is Phase **A2**.
-
-Corrected urgency framing (4 Sep 2026): the one real instance found (a 2021 Tesla Model 3,
-asset `1ea4d7f1-51e1-4889-888b-101578f8a7bf`) is a car auctioned twice three years apart with
-consistent mileage accrual (51218 → 63017, i.e. increasing, not rolled back) and an insurance
-seller (GEICO) on the second appearance — it blocks under Bashir's new rule, but it is **not**
-evidence of a fraud pattern currently in flow. The accurate statement is that
-prior-auction-history is currently **UNDETECTABLE** in the live checklist — the check does
-not exist, not that a known-bad car is slipping through unflagged. Still worth fixing; not
-an active incident.
+### A2 — resolved, no longer an open finding
+The prior-auction-history hard block (Phase A2) shipped 4 Sep 2026. See §2.A2 below for the
+full build, evidence, and its permanent bid.cars-only coverage limit (B2/Copart Sales History
+is retired, not buildable — Copart exposes no such panel).
 
 ---
 

@@ -2,8 +2,8 @@
 
 **Status:** Living. Update when a migration lands.
 **Supabase project ref:** `xrotvpuainpfdulhfhtt`
-**Migrations applied:** 001 → 023
-**Last revised:** 28 August 2026
+**Migrations applied:** 001 → 031 (007 and 017 were never allocated — not a gap)
+**Last revised:** 9 September 2026
 
 > Written because real time has been lost to not knowing which table holds which field.
 > A rule written against a field the query does not return **fails silently** — it never
@@ -225,6 +225,7 @@ status · notes · created_at · updated_at
 share_token · share_enabled · run_type · deleted_at · deleted_by
 critical_override_reason · critical_override_by · critical_override_at   (migration 021)
 client_id · client_brief_id                                              (migration 022)
+deposit_override_reason · deposit_override_by · deposit_override_at      (migration 027)
 ```
 
 `run_type` = `sold_comps` | `active_listings` | `mixed`
@@ -232,20 +233,44 @@ client_id · client_brief_id                                              (migra
 `sheet_url` and `drive_folder_url` are legacy — Google Drive/Sheets were permanently
 dropped in favour of Supabase Storage.
 
-**`research_run_listings`** — the join to sightings, plus `position`, `included`, `notes`.
-Carries curation and ordering.
+**`research_run_listings`** — the join to sightings. Real columns (confirmed live,
+9 Sep 2026):
+```
+id · run_id · sighting_id · position · image_order (jsonb) · notes · created_at · org_id
+included
+approved_at · approved_via · approved_by · approved_snapshot (jsonb)      (migration 028)
+```
+`approved_via` = `client` | `staff_relayed`, with a CHECK constraint pairing
+`approved_via='client'` with `approved_by NULL` and `approved_via='staff_relayed'` with
+`approved_by NOT NULL` — the two shapes cannot collapse into one field even by accident.
+`approved_snapshot` is a server-side-computed copy of what the client actually saw
+(identifying details, displayed price, displayed auction date) at approval time — never
+built from the request body, never re-derived later from the live (mutable) listing row.
+See `docs/SOLVED.md` topic 15.
 
 ---
 
 ## 10. Clients (migration 022)
 
-**`clients`**
+**`clients`** — real columns (confirmed live, 9 Sep 2026):
 ```
 id · org_id · full_name · email · phone · preferred_contact · assigned_agent
 notes · created_at · created_by · deleted_at · deleted_by                    (migration 023)
+user_id                                                                      (migration 026)
+deposit_received_at · deposit_recorded_by                                   (migration 024)
 ```
+**`deposit_received_at`/`deposit_recorded_by` on `clients` are historical fallback only,
+not a live signal.** Migration 027 moved the actual deposit gate to `client_briefs` (below)
+because a commitment fee is per-vehicle, not per-client-relationship — see
+`docs/SOLVED.md` topic 14. `createRun()` reads `client_briefs.deposit_received_at`. These
+two columns on `clients` are kept only because there is no staging environment to test a
+drop against (`PLAN_TRACKER.md` debt #28) — do not read them for any new gate.
 
-**`client_briefs`** — one client may have many briefs over time
+`user_id` (nullable, unique) links a client record to a Google-auth account by email/phone
+match — see the account-linking note below §11.
+
+**`client_briefs`** — one client may have many briefs over time. Real columns (confirmed
+live, 9 Sep 2026, 39 total):
 ```
 id · client_id · org_id
 make · model · trim · year_min · year_max · max_mileage
@@ -254,23 +279,43 @@ colour_preference · interior_preference · quantity
 max_budget_usd · max_bid_usd · additional_notes
 created_at · created_by
 deleted_at · deleted_by                                                      (migration 023)
+preferred_auction_sources (text[]) · pickup_delivery_location
+inspection_required (boolean) · inspection_scope (text)
+payment_method · damage_tolerance_accepted (text[])
+shipping_insurance_optin (boolean)
+consent_to_bid (boolean) · consent_share_with_auction_houses (boolean)
+status (pending_review|approved) · submitted_at · confirmation_sent_at       (migration 024)
+share_token · share_enabled                                                  (migration 025)
+deposit_received_at · deposit_recorded_by                                    (migration 027)
 ```
+All boolean/consent fields are nullable tri-state (`true`/`false`/`NULL` = unanswered) —
+`NULL` must never be coerced to `false`.
 
-**Known gap:** several of these columns have no form input yet — `colour_preference`,
-`titles_accepted`, `fuel_type`, `trim`, `interior_preference`, `max_budget_usd`,
-`max_bid_usd`. The data has a home; the form does not ask for it. See `PLAN_TRACKER.md`.
+**Deposit gate lives here, not on `clients`** (migration 027, corrected from the original
+model — see `docs/SOLVED.md` topic 14): a commitment fee buys the right to research *one*
+vehicle, not every future vehicle for that client. `createRun()` checks
+`brief?.deposit_received_at`; a run with no brief linked always requires the superadmin
+override rather than defaulting to "no deposit needed."
 
-**Captured, never enforced:** `max_budget_usd` and `max_bid_usd` exist so the client's stated
-limit isn't lost, not because any code gates on it — `DECISIONS.md` 3.6 is explicit that no
-budget/max-bid enforcement exists until landed cost is calibrated. `damage_tolerance_accepted`
-(migration 024) has the same status: no spec rule reads it. All nine spec-rule `if` blocks in
-`ResearchRunDetail.tsx` are active-listings/client-risk checks unrelated to this field — a
-reader should not assume a captured preference is an enforced one.
+**Form-field parity is now complete** — every one of the columns above has a rendered form
+input (`BriefForm` in `ClientsList.tsx` for staff entry, `IntakeFormView.tsx` for client
+self-submission). Make/model/trim/colour stay free text deliberately (no vehicle-database
+dropdown source exists yet — `PLAN_TRACKER.md` debt #29). The one literal parity gap
+remaining is the source Google Form's exact "I confirm these details are correct" checkbox
+copy — the review-then-submit flow serves the same purpose but doesn't reproduce it verbatim
+(`PLAN_TRACKER.md` debt #30).
+
+**Captured, never enforced:** `max_budget_usd`, `max_bid_usd`, and `damage_tolerance_accepted`
+exist so the client's stated limit/tolerance isn't lost, not because any code gates on it —
+`DECISIONS.md` 3.6 is explicit that no budget/max-bid enforcement exists until landed cost is
+calibrated. All nine spec-rule `if` blocks in `ResearchRunDetail.tsx` are active-listings/
+client-risk checks unrelated to these fields — a reader should not assume a captured
+preference is an enforced one.
 
 **Migration 023 (5 Aug 2026)** added `deleted_at`/`deleted_by` to `client_briefs` and
 `deleted_by` to `clients` (which already had `deleted_at`), plus indexes on both
-`deleted_at` columns. The columns exist; the view/edit/soft-delete UI that uses them does
-not yet — see `PLAN_TRACKER.md` 1.2.
+`deleted_at` columns. The columns exist; the delete-confirmation UI that uses them is
+built but its own confirmation step is unverified — see `PLAN_TRACKER.md` 1.2.
 
 ---
 
@@ -278,9 +323,17 @@ not yet — see `PLAN_TRACKER.md` 1.2.
 
 - **`organizations`** / **`memberships`** — tenancy and roles. Caplimo `org_id`:
   `a93378ea-33ef-4c75-97c4-44c37f2e9002`
-- **`cost_rates`** / **`trucking_rates`** — landed cost (Phase C1). See §14.
+- **`cost_rates`** / **`trucking_rates`** / **`auction_fee_brackets`** — landed cost
+  (Phase C1). See §14.
 - **`sales`** — **DEPRECATED** legacy flat table. RLS enabled with **zero policies**
   (locked). Retained as historical backup only. **Do not read or write it.**
+- **Account linking (migration 026)** — `clients.user_id` (nullable, unique) plus an
+  `AFTER INSERT ON auth.users` trigger (`link_new_auth_user_to_client`) that matches a new
+  signup to an existing client by email (case/whitespace-insensitive) or phone
+  (Nigerian-format-normalised via `normalize_ng_phone()`), and links only when exactly one
+  match exists. Never creates a client row from a signup — `PROJECT_CHARTER.md` §7's "the
+  record always comes first" rule. Google-only currently; offered post-submission on the
+  intake success screen, always skippable.
 
 ---
 
@@ -374,5 +427,36 @@ honesty doctrine §5.1 — never a bare figure). Matching a `sightings` row to a
 is `sightings.source_auction_platform`, since bid.cars is a resale aggregator, not a yard
 network — `source_platform` is always literally `'bidcars'` for those rows), then normalised
 city/state, with an unmatched or ambiguous result surfaced as "not quotable" rather than any
-approximation. Neither the ledger nor the matcher is wired into research runs or the public
-share page yet — that remains a separate decision.
+approximation. Measured baseline: 65.5% matched, 34.5% unmatched, 0% ambiguous across all
+171 live sightings (`PLAN_TRACKER.md` §4.9/debt #32-34).
+
+**`auction_fee_brackets`** (migration 031) — the two genuinely bracket-shaped Copart buyer
+fees (`fee_type`: `buyer_fee` | `bid_fee`), keyed on `member_account` (free text — Copart's
+own two real accounts, `Jamilu Danmusa Danmusa (Copart Non-Licensed)` and `White Nexus Ltd
+(Copart High-Volume Licensed)`) × `title_status` (`clean`|`non_clean`) × `payment_tier`
+(`secured`|`unsecured`) × `bid_method` (`proxy`|`live`, nullable) × a `[bracket_min,
+bracket_max]` range on final sale price (`bracket_max` null = open-ended, priced as a flat
+`fee_unit='percent'` row above $15,000). A bracket table doesn't fit `cost_rates`'
+one-row-one-figure shape, hence a second, purpose-built table. Flat per-unit Copart fees
+(environmental, gate, title pickup, late payment) are `cost_rates` rows under a new
+`auction_fee` category instead, kept distinct from `service_fee` (Caplimo's own brokerage
+fee — a different thing). See `docs/SOLVED.md` topics 18-19 and `PLAN_TRACKER.md` §4.10.
+
+**Secured/Unsecured is a property of the buying account, not a per-transaction choice** —
+confirmed against three real invoices spanning different payment methods, all pricing as
+Unsecured regardless (`docs/SOLVED.md` topic 18). **Default schedule for bid headroom is
+Caplimo's own account** (`Jamilu Danmusa Danmusa`, Non-Licensed, matching invoices 1 & 3) —
+`bidHeadroomService.ts`'s `DEFAULT_MEMBER_ACCOUNT`. White Nexus's High-Volume rows are kept
+(historical, priced a real invoice) but are never the default; the cost-breakdown UI always
+states which account/tier a figure was computed under (`PLAN_TRACKER.md` debt #42).
+
+**`bidHeadroomService.ts`** is the single shared module computing auction fees, inland
+trucking, ocean freight and duty as independently available/unavailable `CostComponent`s,
+plus the derived headroom (`target landed cost − shipping − duty − auction fees − inland
+trucking`). **Duty is permanently unavailable until C2 exists**, which means headroom cannot
+be produced for any listing today — by design, never smoothed into a partial number. Shown
+on `ResearchRunDetail` for active listings only, collapsed by default; confirmed to never
+touch the sold-comps average and never reach `public-run`'s allow-list.
+
+Neither the trucking ledger, the matcher, nor the fee/headroom module is wired into the
+public share page — bid headroom stays internal-only, deliberately.

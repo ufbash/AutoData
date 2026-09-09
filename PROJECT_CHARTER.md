@@ -2,7 +2,7 @@
 
 **Status:** Stable. Rarely edited.
 **Owner:** Bashir (sole owner, platform superadmin)
-**Last revised:** 28 August 2026
+**Last revised:** 9 September 2026 (§6 wording correction only — see below; doctrine unchanged)
 **Companions:** `ARCHITECTURE.md` · `DECISIONS.md` · `PLAN_TRACKER.md` · `SCHEMA.md` · `AGENTS.md` · `HANDOFF.md`
 
 > This document holds what does **not** change: what AutoData is, who owns it, and the
@@ -161,10 +161,20 @@ a deploy, so historical quotes stay explicable.
 - **Non-insurance sellers avoided.** They correlate with undisclosed problems.
 - **Flood is a distinct damage class**, not folded into general damage. Specific and severe
   risk in the Nigerian market.
-- **Cross-platform reappearance is a fraud signal.** A vehicle appearing across multiple
-  auctions — especially where damage severity *decreases* between appearances — indicates a
-  wreck repaired cosmetically and re-sold. Classic importer trap, invisible on the listing.
-  Must be blocked from client-facing deliverables.
+- **Any prior auction appearance is a fraud signal — superseded wording (4 Sep 2026, see
+  `DECISIONS.md` §4).** This clause originally read "cross-platform reappearance... where
+  damage severity *decreases* between appearances." Both narrowings are gone: the trigger is
+  now *any* prior appearance in `auction_history`, regardless of whether it repeats on the
+  same platform, because a car auctioned twice is itself the disqualifying signal — not
+  contingent on which platforms were involved. **The damage-severity-decrease clause is
+  unbuildable and removed**: `auction_history` carries no damage field (real columns: `id`,
+  `org_id`, `asset_id`, `sighting_id`, `auction_platform`, `auction_date`, `lot_number`,
+  `bid_amount_usd`, `odometer_miles`, `status`, `seller_type`, `created_at` — `SCHEMA.md` §8).
+  A **decreasing odometer** between appearances is the available proxy instead — a distinct
+  critical signal in its own right, applicable to sold comps too, since it means a recorded
+  sale price describes a vehicle that was not what it claimed. Must still be blocked from
+  client-facing (active-listings/mixed) deliverables. Built and live as Phase A2 — see
+  `PLAN_TRACKER.md` §2.A2.
 - **VIN tampering** (missing / altered / replaced) is treated as critical: a dodgy VIN is a
   seizure risk at Nigerian customs and a fraud flag.
 

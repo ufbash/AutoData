@@ -2,6 +2,14 @@
 
 **Status:** Snapshot only. Not a living document — regenerate rather than hand-edit.
 **Generated:** 4 September 2026, by AI agent inventory pass (read-only; no code/doc/DB changes).
+**Section A (file tree) refreshed:** 9 September 2026, to add everything built 5-8 Sep 2026
+(P1 client-hub restructure, the intake form/link-lifecycle work, C1/C1b/C1c landed-cost
+build). **Sections B-D below are still the 4 Sep snapshot** — their line numbers have almost
+certainly drifted since (`ResearchRunDetail.tsx` alone gained the cost-breakdown panel and
+its imports) and were not re-walked line-by-line for this pass; treat exact line numbers
+there as approximate and re-grep before relying on one. For anything built 5-8 Sep, prefer
+`PLAN_TRACKER.md` §3/§4.7-§4.10 and `docs/SOLVED.md` topics 13-19, which describe the
+current code directly.
 **Scope:** `src/`, `supabase/` only. Excludes node_modules, build output, lockfiles.
 
 ---
@@ -21,22 +29,29 @@ src/
   components/
     AddCapturesModal.tsx           — modal to search unattached sightings and attach to a run;
                                       contains its own eligibility-rule copy (isUnconfirmed etc.)
-    AuctionCountdown.tsx           — renders live countdown from parseAuctionDate(); 30s tick
+    AuctionCountdown.tsx           — renders live countdown from parseAuctionDate(); 1s tick
     BulkImport.tsx                 — paired-image upload → Gemini vision extraction → review → save
     CarForm.tsx                    — legacy single-sale entry form (sales/ledger, not client briefs)
     CarTable.tsx                   — legacy sales table view (sort/filter/bulk-delete)
-    ClientsList.tsx                — clients + buying-briefs UI; contains BriefForm (brief create/edit)
+    ClientsList.tsx                — clients + buying-briefs UI; BriefForm (create/edit); intake-link
+                                      generation/revocation; deposit toggle; confirmation-email banner
     Dashboard.tsx                  — charts/stats + Gemini market forecast panel
+    IntakeFormView.tsx             — client-facing /intake/:token form (added 6 Sep 2026)
+    ListingCostBreakdown.tsx       — per-listing landed-cost/bid-headroom panel (added 8 Sep 2026)
     LoginScreen.tsx                — Google OAuth sign-in screen
     PublicRunView.tsx              — public /share/:token client-facing view (reads public-run function)
-    ResearchRunDetail.tsx          — single run's detail page: checklist, sharing, listings table
+    ResearchRunDetail.tsx          — single run's detail page: checklist, sharing, listings table,
+                                      cost-breakdown toggle per listing (added 8 Sep 2026)
     ResearchRuns.tsx               — runs list page + "New Research Run" creation form
+    TruckingRatesLookup.tsx        — superadmin trucking-rate internal/estimator views (added 8 Sep 2026)
     VehicleDetailModal.tsx         — shared listing detail modal (staff + public variants)
 
   contexts/
     AuthContext.tsx                — session/org/role context (superadmin/staff/client)
 
   services/
+    bidHeadroomService.ts          — auction fees/trucking/ocean/duty/headroom, single shared
+                                      calculation module (added 8 Sep 2026)
     currencyService.ts             — exchange rate fetch/cache + USD conversion helpers
     geminiService.ts                — client-side Gemini calls (vision extraction proxies to Edge
                                       Function; 3 direct client-side Gemini SDK calls remain)
@@ -44,16 +59,24 @@ src/
                                       client_briefs CRUD + spec-matching helper duplicate
     storageService.ts              — legacy `sales`-table-era CRUD; importSales/standardizeTrims/
                                       executeTrimCleanup are disabled/stubbed here
-    supabaseClient.ts               — supabase-js client singleton
+    supabaseClient.ts               — supabase-js client singleton; Node-compatible env fallback
+    truckingRatesService.ts        — internal + estimator read views over trucking_rates (8 Sep 2026)
+    yardMatchingService.ts         — platform-first sighting→yard matcher (added 8 Sep 2026)
 
   utils/
     auctionDate.ts                 — parseAuctionDate() — the one shared date parser
+    auctionHistoryFlags.ts         — deriveAuctionHistoryFlags() — A2's shared derivation (4 Sep 2026)
+    specVocabulary.ts              — fuel/colour/transmission synonym groups + parsePreference()
+                                      (added 6 Sep 2026)
 
 supabase/
   functions/
     app-ingest/index.ts            — CarForm/BulkImport ledger writes; JWT + superadmin
     daily-sniper/index.ts          — built, unused; static x-sniper-secret auth
     extract-vehicle-vision/index.ts — server-side Gemini vision extraction; JWT + superadmin
+    intake-brief/index.ts          — client-facing intake form read/write, strict allow-list both
+                                      directions, confirmation email (added 6 Sep 2026)
+    list-active-runs/index.ts      — extension run pick-list, org-scoped (added 6 Sep 2026)
     monthly-backup/index.ts        — pg_cron-triggered CSV export via Resend; static x-backup-secret
     public-run/index.ts            — public share-token deliverable; strict field allow-list
     research-capture/index.ts      — Chrome extension capture ingest; static x-research-secret
@@ -82,6 +105,14 @@ supabase/
     021_critical_override.sql               — critical_override_reason/by/at on research_runs
     022_clients_briefs.sql                  — clients + client_briefs tables
     023_soft_delete_clients_briefs.sql      — deleted_at/deleted_by on clients/client_briefs
+    024_intake_schema_and_deposit_gate.sql  — intake fields on client_briefs + deposit on clients
+    025_client_brief_share_token.sql        — share_token/share_enabled on client_briefs
+    026_client_account_linking.sql          — clients.user_id + auth.users link trigger
+    027_deposit_per_brief.sql               — moves deposit gate from clients to client_briefs
+    028_client_approval.sql                 — approved_at/via/by/snapshot on research_run_listings
+    029_cost_rates.sql                      — cost_rates table (Phase C1)
+    030_trucking_rates.sql                  — trucking_rates table (Phase C1b)
+    031_auction_fee_brackets.sql            — auction_fee_brackets table (Phase C1c)
 ```
 (Migration 007 and 017 are absent from the tree — not further investigated, out of scope.)
 
