@@ -97,6 +97,17 @@ function captureCurrentLot() {
   const attrs = vm.inventoryView.attributes;
   const lookup = toLookup(vm);
   const prebid = vm.auctionInformation.prebidInformation;
+  // Real bug, found from a real capture (Phase 6, 9 Sep 2026): a session that isn't logged in
+  // returns "0" for decimalHighBidAmount (indistinguishable from a genuine no-bids-yet lot)
+  // and the LITERAL STRING "******" for Seller/SellerType (not masked-with-a-real-prefix like
+  // VIN, not empty - a full mask that looks like real text unless checked for). A captured
+  // sighting from a logged-out session stored "******" as if it were an actual seller name.
+  // userLoginStatus is the actual signal to gate on, not a per-field guess at what a masked
+  // value happens to look like - it is present in this same JSON and was true for the
+  // logged-in paste this file's design is built from, false for every logged-out page
+  // checked. This does not change how VIN is handled - its own regex check already rejects
+  // the masked form independently and stays as a second, unrelated guard.
+  const isLoggedIn = vm.auctionInformation.userLoginStatus === true;
 
   const year = attrs.Year ? parseInt(attrs.Year, 10) : null;
 
@@ -119,10 +130,13 @@ function captureCurrentLot() {
   }
 
   // Real current bid, not a DOM scrape - confirmed against a real logged-in session showing
-  // a genuine $25 current bid. `0` is a real value (no bids yet), never coerced to null -
-  // same rule AGENTS.md S4.1 already enforces for Copart/bid.cars.
+  // a genuine $25 current bid. `0` IS a real value when logged in (no bids yet) and must
+  // never be coerced to null in that case - same rule AGENTS.md S4.1 already enforces for
+  // Copart/bid.cars. But when NOT logged in, "0" is a placeholder, not an observation - the
+  // isLoggedIn gate above exists specifically so this field is never populated from a session
+  // that cannot actually see it.
   let current_bid_usd = null;
-  if (prebid && prebid.decimalHighBidAmount != null && prebid.decimalHighBidAmount !== '') {
+  if (isLoggedIn && prebid && prebid.decimalHighBidAmount != null && prebid.decimalHighBidAmount !== '') {
     const n = parseFloat(prebid.decimalHighBidAmount);
     if (!isNaN(n)) current_bid_usd = n;
   }
@@ -159,8 +173,11 @@ function captureCurrentLot() {
       fuel: lookup.FuelType || null,
       body_style: lookup.BodyStyle || null,
       has_key: lookup.KeySlashFob || null,
-      seller: lookup.Seller || null,
-      seller_type: lookup.SellerType || null,
+      // Login-gated, same reasoning as current_bid_usd above - a logged-out session returns
+      // the literal string "******" here, not an empty value, so it must be excluded by the
+      // isLoggedIn check rather than a falsy/empty check.
+      seller: isLoggedIn ? (lookup.Seller || null) : null,
+      seller_type: isLoggedIn ? (lookup.SellerType || null) : null,
       sale_date: sale_date,
       location: lookup.SellingBranch || null,
       estimated_retail_value_usd: estimated_retail_value_usd,
@@ -193,6 +210,11 @@ function captureCurrentLot() {
   if (!payload.captured_fields.make) missing.push('make');
   if (!payload.captured_fields.model) missing.push('model');
   if (!payload.captured_fields.lot_number) missing.push('lot_number');
+  // Surfaces WHY vin/current_bid_usd/seller/seller_type are null on this capture, rather than
+  // that looking like an unexplained gap identical to a genuinely masked/absent field -
+  // real capture (9 Sep 2026) landed with all four null because the browser session simply
+  // wasn't logged into IAAI at the moment of capture, not because the lot itself lacks them.
+  if (!isLoggedIn) missing.push('not_logged_in_to_iaai');
   if (missing.length > 0) payload.captured_fields._missing_fields = missing;
 
   if (!payload.captured_fields.make) payload.captured_fields.make = 'Unknown';
