@@ -37,7 +37,14 @@ function getProductDetailsVM() {
 }
 
 function isIaaiLotPage() {
-  if (!/^\/VehicleDetail\/\d+/.test(location.pathname)) return false;
+  // Case-insensitive on purpose: a real lot URL was observed as
+  // "/vehicledetail/46324658~US" (lowercase) from one navigation path and
+  // "/VehicleDetail/46566883~US" from another (search-result click) - the manifest's
+  // content_scripts "matches" glob is case-sensitive with no case-insensitive option, which
+  // is exactly why the match pattern itself was broadened to the whole iaai.com host instead
+  // of trying to enumerate every casing IAAI's routing might produce. This regex is the real
+  // gate now, and it does not make the same assumption.
+  if (!/^\/vehicledetail\/\d+/i.test(location.pathname)) return false;
   return getProductDetailsVM() !== null;
 }
 

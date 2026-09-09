@@ -29,7 +29,7 @@
       "js": ["content-bidcars.js"]
     },
     {
-      "matches": ["*://*.iaai.com/VehicleDetail/*", "*://iaai.com/VehicleDetail/*"],
+      "matches": ["*://*.iaai.com/*"],
       "js": ["content-iaai.js"]
     }
   ]
