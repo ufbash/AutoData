@@ -1,7 +1,96 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { listRuns, createRun, listDeletedRuns, restoreRun, listClients, listClientBriefs, ResearchRun, Client, ClientBrief } from '../services/researchService';
+import { listRuns, createRun, listDeletedRuns, restoreRun, listClients, listClientBriefs, findRunIdsByVin, ResearchRun, Client, ClientBrief } from '../services/researchService';
 import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car, CheckCircle2 } from 'lucide-react';
+
+// PROMPT 23 (run display & search) Phase 2 - the vehicle-first heading. Built only from
+// client_brief.year_min/year_max/make/model (mirrors the exact year-range/make/model shape
+// already used in the brief-reference subtext below - no trim, matching that existing
+// convention). Real data confirmed this must survive: a brief where every one of these is
+// null (9 real briefs, checked live), and a brief where make/model/trim literally contain
+// "I"/"Don't"/"Know" (a real client typo, not a hypothetical edge case). Returns null - never
+// an empty string - when there is nothing to build from, so the caller's fallback to
+// run.client_name is an explicit branch, not something that happens to work because "" is
+// falsy.
+function vehicleHeadingFromBrief(brief: ClientBrief | null | undefined): string | null {
+  if (!brief) return null;
+  const parts: string[] = [];
+  if (brief.year_min != null || brief.year_max != null) {
+    if (brief.year_min != null && brief.year_max != null) {
+      parts.push(brief.year_min === brief.year_max ? `${brief.year_min}` : `${brief.year_min}-${brief.year_max}`);
+    } else {
+      parts.push(`${brief.year_min ?? brief.year_max}`);
+    }
+  }
+  if (brief.make) parts.push(brief.make);
+  if (brief.model) parts.push(brief.model);
+  const text = parts.join(' ').trim();
+  return text || null;
+}
+
+// PROMPT 23 (run display & search) Phase 3 - query classification, checked in this order per
+// spec: VIN-shaped (exact, 17 chars, real VIN charset - excludes I/O/Q, same as every other
+// VIN validator already in this codebase) wins outright; otherwise a plausible model year
+// (1980-2035) is pulled out and the remaining text becomes the make/model/trim/client-name
+// filter; otherwise the whole query is the text filter with no year constraint.
+const VIN_SHAPE = /^[A-HJ-NPR-Z0-9]{17}$/i;
+
+function isVinShaped(query: string): boolean {
+  return VIN_SHAPE.test(query.trim());
+}
+
+interface ParsedQuery {
+  year: number | null;
+  text: string;
+}
+
+function parseYearAndText(query: string): ParsedQuery {
+  const yearMatch = query.match(/\b(\d{4})\b/);
+  if (yearMatch) {
+    const y = parseInt(yearMatch[1], 10);
+    if (y >= 1980 && y <= 2035) {
+      const text = (query.slice(0, yearMatch.index) + query.slice((yearMatch.index || 0) + yearMatch[1].length)).trim();
+      return { year: y, text };
+    }
+  }
+  return { year: null, text: query.trim() };
+}
+
+// Year filter is range-inclusive against the brief's own year_min/year_max (both endpoints
+// match - proven against real data in Checkpoint 3, not just asserted). A run with no brief,
+// or a brief with neither year_min nor year_max set, cannot satisfy a year constraint - it is
+// excluded when a year is present in the query, never included by default.
+function runMatchesYear(run: ResearchRun, year: number): boolean {
+  const brief = run.client_brief;
+  if (!brief) return false;
+  const yMin = brief.year_min ?? null;
+  const yMax = brief.year_max ?? null;
+  if (yMin == null && yMax == null) return false;
+  const lo = yMin ?? yMax!;
+  const hi = yMax ?? yMin!;
+  return year >= lo && year <= hi;
+}
+
+// Make/model/trim/client name, case-insensitive - mirrors AddCapturesModal.tsx's existing
+// search filter shape (a plain per-field substring check) with one real change, found by
+// testing this project's OWN example query against real data: "Mercedes E-Class" spans two
+// fields (make="Mercedes", model="E Class" - no hyphen, in the real stored data), so a
+// per-field whole-term check can never match it - the term is never a substring of any single
+// field. Fixed by tokenizing the query (splitting on any non-alphanumeric character, so
+// "E-Class" and "E Class" tokenize identically) and requiring every token to appear somewhere
+// in the combined make+model+trim+client-name text, rather than requiring the whole phrase to
+// sit inside one field. A run with no brief still has a client name to match against - this is
+// what makes "Danmusa" alone able to surface a brief-less run.
+function runMatchesText(run: ResearchRun, term: string): boolean {
+  if (!term) return true;
+  const combined = [run.client_brief?.make, run.client_brief?.model, run.client_brief?.trim, run.client?.full_name]
+    .filter((v): v is string => !!v)
+    .join(' ')
+    .toLowerCase();
+  const tokens = term.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  return tokens.every(tok => combined.includes(tok));
+}
 
 interface ResearchRunsProps {
   onOpenRun: (runId: string) => void;
@@ -20,6 +109,63 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
   const [showDeleted, setShowDeleted] = useState(false);
   const [deletedRuns, setDeletedRuns] = useState<ResearchRun[]>([]);
   const [deletedLoading, setDeletedLoading] = useState(false);
+
+  // PROMPT 23 (run display & search) Phase 3 - one search input, classified per query (VIN
+  // exact match / year-inclusive range / make-model-trim-client text), mirroring
+  // AddCapturesModal.tsx's existing debounced-search shape rather than a second mechanism.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [vinMatchRunIds, setVinMatchRunIds] = useState<string[] | null>(null);
+  const [vinSearchLoading, setVinSearchLoading] = useState(false);
+  const [vinSearchError, setVinSearchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 250);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // VIN lookup needs a real server round-trip (VIN lives on assets, joined through
+  // sightings/research_run_listings - not already loaded in the runs list). Everything else
+  // (year/make/model/client-name) filters the already-fetched `runs` state client-side, same
+  // as AddCapturesModal's existing pattern.
+  useEffect(() => {
+    if (!debouncedQuery || !isVinShaped(debouncedQuery) || !orgId) {
+      setVinMatchRunIds(null);
+      setVinSearchError(null);
+      return;
+    }
+    let cancelled = false;
+    setVinSearchLoading(true);
+    setVinSearchError(null);
+    findRunIdsByVin(orgId, debouncedQuery.toUpperCase())
+      .then(ids => { if (!cancelled) setVinMatchRunIds(ids); })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setVinSearchError(err.message || 'VIN search failed.');
+          setVinMatchRunIds([]);
+        }
+      })
+      .finally(() => { if (!cancelled) setVinSearchLoading(false); });
+    return () => { cancelled = true; };
+  }, [debouncedQuery, orgId]);
+
+  const filteredRuns = React.useMemo(() => {
+    if (!debouncedQuery) return runs;
+
+    if (isVinShaped(debouncedQuery)) {
+      // Exact match only, resolved server-side above - narrows the already-loaded, correctly
+      // shaped run list rather than rendering separately-fetched/differently-shaped results.
+      const idSet = new Set(vinMatchRunIds || []);
+      return runs.filter(r => idSet.has(r.id));
+    }
+
+    const { year, text } = parseYearAndText(debouncedQuery);
+    const term = text.toLowerCase();
+    return runs.filter(r => {
+      if (year !== null && !runMatchesYear(r, year)) return false;
+      return runMatchesText(r, term);
+    });
+  }, [runs, debouncedQuery, vinMatchRunIds]);
 
   const [showNewForm, setShowNewForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
@@ -230,6 +376,25 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
         </div>
       </div>
 
+      {!showDeleted && (
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search make, model, year, client name, or paste a full VIN..."
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#a58039] text-sm"
+          />
+          {vinSearchLoading && (
+            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#a58039] animate-spin" />
+          )}
+        </div>
+      )}
+      {vinSearchError && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{vinSearchError}</div>
+      )}
+
       {showNewForm && (
         <form onSubmit={handleCreateRun} className="bg-white p-6 rounded-xl shadow-sm border border-[#a58039]/20 animate-in fade-in">
           <h3 className="text-lg font-bold text-[#403f4c] mb-4">Create New Run</h3>
@@ -413,9 +578,18 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
           <h3 className="text-lg font-medium text-gray-900 mb-2">No research runs yet</h3>
           <p className="text-gray-500">Create your first research run to start tracking vehicles for a client.</p>
         </div>
+      ) : debouncedQuery && filteredRuns.length === 0 && !vinSearchLoading ? (
+        // An explicit no-results state, distinct from "no runs at all" above and from the
+        // loading state (VIN search still resolving) - never a blank screen indistinguishable
+        // from "still loading" (Phase 3's own requirement).
+        <div className="bg-white p-12 rounded-xl shadow-sm border border-gray-200 text-center">
+          <Search className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No matching runs</h3>
+          <p className="text-gray-500">Nothing matches "{debouncedQuery}". Try a different make, model, year, client name, or VIN.</p>
+        </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {runs.map(run => (
+          {filteredRuns.map(run => (
             <div
               key={run.id}
               onClick={() => onOpenRun(run.id)}
@@ -423,8 +597,13 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
             >
               <div className="flex justify-between items-start mb-4">
                 <div>
+                  {/* PROMPT 23 (run display & search) Phase 2 - vehicle description is now the
+                      primary heading; client name + brief reference demoted below. Falls back
+                      to run.client_name (the pre-existing heading) only when the brief has
+                      nothing to build a description from (year/make/model all null) - real,
+                      current data, not a hypothetical edge case (9 briefs, checked live). */}
                   <h3 className="font-bold text-lg text-[#403f4c] group-hover:text-[#a58039] transition-colors line-clamp-2 mb-1">
-                    {run.client_name}
+                    {vehicleHeadingFromBrief(run.client_brief) || run.client_name}
                   </h3>
                   {run.client && (
                     <div className="text-xs text-gray-500 mb-2">

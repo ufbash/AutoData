@@ -179,6 +179,43 @@ export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
   }));
 };
 
+// PROMPT 23 (run display & search) Phase 3 - the real join, confirmed live before this was
+// written: assets.vin -> sightings.asset_id -> research_run_listings.sighting_id ->
+// research_runs.id. Returns run ids only, not full run objects - the caller already has every
+// run's full, correctly-shaped data (client/client_brief embeds, listing_count,
+// has_client_approval) from listRuns(), so this just narrows that existing list rather than
+// re-fetching and re-shaping run rows a second time. Exact match only, on the caller's own
+// uppercased/trimmed VIN - no fuzzy or partial matching (a materially riskier feature over a
+// 17-character space, not built here without separate confirmation). A VIN legitimately
+// spans more than one run on real data (confirmed live: 5 real VINs currently appear across
+// 2-3 runs each) - every matching run_id is returned, not just the first.
+export const findRunIdsByVin = async (orgId: string, vin: string): Promise<string[]> => {
+  const { data: assetRows, error: assetError } = await supabase
+    .from('assets')
+    .select('id')
+    .eq('org_id', orgId)
+    .eq('vin', vin);
+  if (assetError) throw new Error(`VIN lookup failed: ${assetError.message}`);
+  const assetIds = (assetRows || []).map((a: any) => a.id);
+  if (assetIds.length === 0) return [];
+
+  const { data: sightingRows, error: sightingError } = await supabase
+    .from('sightings')
+    .select('id')
+    .in('asset_id', assetIds);
+  if (sightingError) throw new Error(`VIN lookup failed: ${sightingError.message}`);
+  const sightingIds = (sightingRows || []).map((s: any) => s.id);
+  if (sightingIds.length === 0) return [];
+
+  const { data: listingRows, error: listingError } = await supabase
+    .from('research_run_listings')
+    .select('run_id')
+    .in('sighting_id', sightingIds);
+  if (listingError) throw new Error(`VIN lookup failed: ${listingError.message}`);
+
+  return [...new Set((listingRows || []).map((l: any) => l.run_id as string))];
+};
+
 const INTERNAL_CLIENT_NAME = 'Internal / Market Research';
 
 export const createRun = async (orgId: string, input: {
