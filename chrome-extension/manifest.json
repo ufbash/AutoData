@@ -27,6 +27,10 @@
     {
       "matches": ["*://*.bid.cars/en/lot/*", "*://bid.cars/en/lot/*"],
       "js": ["content-bidcars.js"]
+    },
+    {
+      "matches": ["*://*.iaai.com/VehicleDetail/*", "*://iaai.com/VehicleDetail/*"],
+      "js": ["content-iaai.js"]
     }
   ]
 }
