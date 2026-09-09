@@ -1317,3 +1317,58 @@ self-consistency check for the same input (which would mean the brackets overlap
 error, not a normal case), `findBracket`-style helpers here would need to detect and reject
 that explicitly rather than silently returning whichever bracket happens to be checked first.
 That has not happened with any real Copart or IAAI table seen so far.
+
+---
+
+## 20. Dual-pass extraction reconciliation — and why agreement is a filter, not proof
+
+**The problem, stated plainly:** a vision model reading a degraded document (a blurry photo,
+a low-quality scan) can misread a digit and be genuinely, internally confident it read it
+correctly. It is not "unsure" in any sense a prompt instruction can address - it does not
+know it is wrong. Telling it "abstain if you cannot read something" does nothing for a
+misperception it believes is a clean read.
+
+**Proven directly, not assumed, during PROMPT_22 Phase 3.** A single extraction pass against
+a deliberately degraded (but genuinely real) invoice image read `"$1,385.00"` as `1285` and
+`"$230.00"` as `430`, both reported with `status: 'read'` - the exact failure mode this whole
+staging pipeline exists to prevent, produced on the first real adversarial test, not a
+hypothetical.
+
+**The fix - structural, not a prompt tweak:** `supabase/functions/extract-cost-document/
+index.ts`'s `runOnePass()` executes the identical extraction call **twice**, independently
+(`Promise.all`, no shared state between the two calls). `reconcileRows()` then compares every
+field pairwise: a field is trusted (kept at `status: 'read'`) only when both passes produced
+the exact same value; any disagreement - different value, or one pass reading where the other
+abstained - downgrades that field to `status: 'unreadable'` rather than picking either pass's
+answer. Re-tested against the same degraded document: this caught 2 of the 3 real digit
+misreads immediately, each downgrading to "not visible - enter manually" instead of silently
+carrying a wrong number into the review screen.
+
+**The residual limit - found on the same test, not theoretical, and not fixed by this
+technique:** the third misread (`"1385"` read as `1285`) was produced **identically by both
+independent passes**. Two honest, separate attempts landed on the same wrong digit. Dual-pass
+agreement could not catch this, because the two passes were not disagreeing - they shared the
+same misperception. **This means an `'agreed'` `cross_check` status raises confidence; it does
+not guarantee correctness.** Anything that reads `extracted_rows` and sees `cross_check:
+'agreed'` must not treat that as "verified" - it is "two independent readings produced the
+same answer," which is evidence, not proof.
+
+**Why this means the review screen is the actual safety net, not a formality layered on an
+already-solved problem.** `CostDocumentExtractions.tsx`'s `ReviewDetail` always renders the
+real source document (a signed URL into the private `cost-documents` bucket) directly beside
+every extracted field, editable, regardless of that field's status or cross-check result. This
+is not decorative - it is the only remaining check against a shared misperception surviving
+dual-pass agreement. A future change that hides or collapses the source-document panel "since
+the data is already verified" would silently remove the one thing standing between a
+consistent AI misread and a live rate table.
+
+**How to extend it:** a third independent pass and a 2-of-3 vote would very likely raise
+confidence further (a systematic misperception surviving three independent attempts is less
+likely than surviving two, though not impossible), but would not close the gap in principle -
+any number of passes sharing the same underlying visual illusion agree with each other while
+still being wrong. There is no purely automated fix for "the model consistently misperceives
+this specific image" short of a fundamentally different extraction method (e.g. a
+deterministic OCR engine cross-checked against the vision model, which this build did not
+attempt). Treat dual-pass agreement as raising the bar for what a human reviewer should
+double-check quickly versus scrutinize carefully - never as a reason to skip the human step
+altogether.

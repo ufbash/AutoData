@@ -778,6 +778,64 @@ reaches the client share page.
 
 ---
 
+### 4.11 C1d: AI document extraction, staged behind human review — **DONE, Stage 1 only** (9 Sep 2026)
+Prompt 22 Stage 1. `cost_document_extractions` (migration 032) is a queue, not a rate table —
+no `effective_from`/`source`, deliberately, since those are human decisions set only at
+confirmation (`PROJECT_CHARTER.md` §5.10/§5.4). A CHECK constraint (`..._review_shape`)
+structurally enforces the confirm/reject shape: a `pending_review` row has no reviewer yet, a
+`confirmed` row must name both a reviewer and a destination table, a `rejected` row must name
+a reviewer but never a destination.
+
+**Two real failure modes found and fixed against real documents, not assumed safe from
+design alone.** (1) The model filled in a duty component's `basis` from its own training
+knowledge of Nigerian customs when the source document itself stated no formula at all —
+fixed with an explicit "never use outside knowledge to fill a field the document doesn't
+state" guard. (2) A real Nigerian assessment notice's Naira amounts would have been recorded
+as USD, since no non-USD unit exists in `cost_rates`/`auction_fee_brackets` — fixed with an
+explicit currency guard that abstains rather than assumes USD. See debt #44/#45 and
+`docs/SOLVED.md` topic 20 for the fuller finding this produced.
+
+**The one NOT fully fixed, by design, and documented rather than papered over:** a single
+extraction pass confidently misread a real degraded invoice's `"$1,385.00"` as `1285`, marked
+`status: 'read'` — the exact "confidently wrong figure with no abstention marker" failure this
+phase's own checkpoint exists to catch. Mitigated with two independent passes per document,
+trusting a field only when both agree (`reconcileRows()` in `extract-cost-document/index.ts`)
+— caught 2 of 3 real digit misreads on re-test. **Not solved**: both passes independently
+misread the same digit identically once, so cross-pass agreement is a filter, not proof of
+correctness. `docs/SOLVED.md` topic 20 has the full account, including why this makes the
+review screen's side-by-side source document the actual safety net, not a formality.
+
+**Verified end-to-end through the real deployed function and the real review UI** — not just
+scripted: extracted a real Nigerian customs assessment notice (correctly abstained on every
+monetary field, currency guard fired) and a real Copart invoice (13 rows, all matching figures
+already verified in Prompt 21); rejected the former, confirmed one genuinely new row (a real
+Storage fee, `actual_paid`) from the latter into `cost_rates`; confirmed the resulting row
+carries human-set `source`/`effective_from` (never anything the model produced — structurally
+impossible, since the staging schema has no such columns) and renders correctly in the
+pre-existing Cost Rates admin screen with zero changes needed there. Deliberately did not
+confirm the invoice's Buyer Fee/Bid Fee/Environmental/Gate/Title Pickup/Late Payment rows —
+those already exist in `cost_rates`/`auction_fee_brackets` from Prompt 21; confirming them
+again would have created duplicate production data purely to demonstrate the mechanism.
+
+**Known scope boundary, not a defect:** confirmation is per-extraction (one document confirms
+into one target table), matching the checkpoint's own phrasing. A real document containing
+genuinely mixed-shape line items (the Copart invoice's Buyer/Bid Fee lines arguably belong in
+`auction_fee_brackets` while its flat fees belong in `cost_rates`) is handled by the reviewer
+excluding the mismatched rows from one confirm and, if needed, re-entering them separately via
+the existing admin screens — not by a more complex multi-table split mechanism, which was
+judged out of scope for this build.
+
+**Not demonstrated with real data, and not faked to look demonstrated:** the checkpoint asked
+to confirm one extraction into `trucking_rates` specifically. None of the three real documents
+available (a Nigerian assessment notice, two Copart-adjacent invoices) contain genuine
+yard-to-port trucking-rate data — the closest only states a port-to-port shipping leg with no
+originating auction yard. Confirming into `trucking_rates` would have required inventing a
+yard location. Confirmed into `cost_rates` instead, which exercises the identical mechanism
+(human-set source/date, never AI-supplied); the destination table doesn't change what the
+checkpoint is actually proving.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **NOT STARTED**
@@ -816,6 +874,15 @@ item with new evidence — not assumed from this single page.
   **DONE** (8 Sep 2026, Prompt 21 Stage 1/2). See §4.10 below. Researched from primary sources
   and cross-checked against three real Copart invoices, which revealed two Copart member
   accounts on structurally different fee schedules.
+- **C1d.** AI document extraction staged behind human review, `cost_document_extractions` —
+  **DONE, Stage 1 only** (9 Sep 2026, Prompt 22 Stage 1). See §4.11 below. Establishes the
+  first real `NOT_VISIBLE`-style abstention convention in this codebase (debt #45) and a
+  dual-pass reconciliation mechanism with a documented, unsolved residual limit
+  (`docs/SOLVED.md` topic 20) — cross-pass agreement is evidence, not proof. **Currently blind
+  to every Nigerian-currency document** (assessment notices, most customs quotes) — `cost_rates`
+  has no non-USD unit, so the extraction correctly abstains on every monetary field in an NGN
+  document rather than guess a conversion. See the currency-column design note recorded
+  9 Sep 2026 below C2 for what closing this would actually require.
 - **C2.** Duty calculator (51.47% formula + observed calibration) — **BLOCKED** on
   collecting 10+ assessment notices. **The 51.47% figure and the six-component stack's
   individual percentages are documented in `DECISIONS.md` §3 but deliberately not encoded
@@ -830,11 +897,67 @@ item with new evidence — not assumed from this single page.
 - **C3.** Client-facing grouped cost display (Vehicle · Shipping & logistics · Duties &
   clearing · Service fee · Total), expected and ceiling — **NOT STARTED**, depends on C1/C2.
 
-**Future work, recorded not built (Prompt 20 Phase 6):** AI extraction for unstructured vendor
-documents (PDF invoices, customs-agent quotes, assessment notices) — staged as upload → AI
-extracts to a review table → human confirms → rates. AI never writes directly into live rates
-(`PROJECT_CHARTER.md` §5.4); the deterministic spreadsheet importer built for Prompt 20 remains
-the only live-rates write path until this exists.
+**AI extraction for unstructured vendor documents — planned in Prompt 20 Phase 6, built in
+Prompt 22 Stage 1 (see C1d above).** Upload → AI extracts to a review table → human confirms
+→ rates, exactly as originally planned. AI never writes directly into live rates
+(`PROJECT_CHARTER.md` §5.4) — enforced by a database CHECK constraint, not just application
+logic. The deterministic spreadsheet importer built for Prompt 20 remains the only path that
+doesn't route through human review at all (it was never AI-touched to begin with).
+
+**Design note, recorded 9 Sep 2026 — `cost_rates` has no currency column, and this now
+visibly blocks something.** Every amount in `cost_rates`/`trucking_rates`/
+`auction_fee_brackets` is implicitly USD; there is no `currency` field and no conversion
+mechanism anywhere in the landed-cost schema. This was invisible as a gap until Prompt 22
+Stage 1 tried to extract real Nigerian documents — a genuine Tincan assessment notice and
+most customs-agent quotes are denominated in Naira, and the extraction correctly abstains on
+every monetary field in an NGN document rather than record a Naira figure as if it were USD
+(the currency guard in `extract-cost-document`'s prompt, `docs/SOLVED.md` topic 20). That is
+the *honest* behaviour given today's schema, but it means **every Nigerian-currency document —
+precisely the documents C2's duty calibration depends on — is currently unconfirmable into any
+rate table.** The correct fix is real work, not a prompt tweak, and is deliberately not built
+here (design question only, per Bashir 9 Sep 2026):
+
+- **A column, not a workaround.** `cost_rates`/`trucking_rates`/`auction_fee_brackets` would
+  each need a `currency` column (`usd` | `ngn`, extensible) alongside the existing
+  `rate_value`/`price`/`fee_value`. A separate `fx_rate`/`fx_rate_date` pair (mirroring
+  `sightings.exchange_rate`/`exchange_rate_date`, see below) would be needed anywhere a
+  non-USD row must ever be compared against a USD one — which, for a duty calculation whose
+  entire output must land in USD-comparable landed cost, is everywhere.
+- **Existing rows need no migration, only a default.** Every row in all three tables today is
+  already USD (confirmed — no non-USD data has ever been entered, by design, until this
+  finding). A new `currency` column with `DEFAULT 'usd' NOT NULL` backfills every existing row
+  correctly with zero data loss and zero ambiguity — this is the easy part.
+- **The real decision is storage-time vs read-time conversion, and `sightings` already
+  answers it for an analogous problem.** `SCHEMA.md` §1 / `exchange_rate`/`exchange_rate_date`
+  on `sightings`: the rate is **frozen at capture** — `price_usd` is computed once, at ingest,
+  from whatever the live rate was that day, and never recomputed. The reasoning there
+  (`PROJECT_CHARTER.md` §5.8, "raw at capture, classify at read") is about *rates changing
+  over time* — a sold comp from six months ago should report the dollar value it actually had
+  then, not get silently repriced every time someone looks at it.
+- **That reasoning fits `cost_rates` less cleanly than it looks at first.** A `sightings` row
+  is a historical fact (a car sold for ₦X on date Y) — freezing the conversion is correct
+  because the fact itself is dated and immutable. A `cost_rates` row is closer to a *standing
+  rate* that stays "current" until superseded (`effective_from`/`effective_to`, never edited in
+  place — `PROJECT_CHARTER.md` §5.10) — the same discipline `sightings` uses for *prices*,
+  applied here to *rates*. The honest parallel is: **freeze the rate at confirmation time,
+  the same way `sightings` freezes it at capture** — store both `rate_value` in its original
+  currency *and* the USD-equivalent computed from that day's rate, never a bare currency code
+  with no stored conversion. A duty component confirmed from a Naira assessment notice would
+  carry its original NGN figure (for audit — reconciling against the original document later
+  requires the original number, not a derived one) plus a frozen USD figure (for every actual
+  calculation, which is what a landed-cost figure ultimately has to produce). Recomputing at
+  *read* time against a live rate would mean the same stored duty component silently reports a
+  different USD cost every time the Naira moves — which is exactly the kind of drift
+  `PROJECT_CHARTER.md` §5.10's dated-rate discipline exists to prevent for USD rates already,
+  and there is no principled reason currency risk should be exempt from that discipline while
+  everything else in this table is dated specifically to avoid silent drift.
+- **What this would NOT require:** a general multi-currency calculation engine, or converting
+  the *existing* USD rows to anything. This is additive — a currency column, a frozen
+  USD-equivalent alongside the original figure, and a currency-aware confirm step in the
+  extraction review screen (Phase 4) that fetches or asks for the day's rate before writing a
+  non-USD row, mirroring how `currencyService.ts` already does this for `sightings`.
+- **Not built.** This is recorded as a design reading only, per instruction — Stage 2 (B1)
+  proceeds independently of it.
 
 ---
 
@@ -969,3 +1092,5 @@ as evidence (public link renders the fix live).
 | 41 | Copart's Licensed low-volume fee table is byte-identical to Non-Licensed — incorporation alone does not lower fees (Prompt 21, confirmed 8 Sep 2026) | Pulled both tables directly from Copart's own site (Licensed path → "fewer than 25 vehicles" → Non-Clean) and compared byte-for-byte against the Non-Licensed schedule already stored: identical at every bracket. **Only the High-Volume tier differs** — gated on 25+ units purchased AND $75k+ in trailing-twelve-month sales AND fewer than 5 bidder accounts (the White Nexus Ltd schedule, stored separately, historical not default per the correction below). Recorded so nobody later assumes registering a corporate/licensed Copart account is itself a lever on fees — it isn't; volume is |
 | 42 | `bidHeadroomService.ts` defaulted headroom to White Nexus's High-Volume schedule — corrected 8 Sep 2026 | White Nexus Ltd is a one-off middleman that bought one vehicle on Caplimo's behalf; it is not Caplimo's own account. Defaulting to its cheaper schedule would have understated auction fees — and therefore overstated bid headroom — on every research-run listing, systematically, in the direction that loses money on a real bid decision. `DEFAULT_MEMBER_ACCOUNT` now points at Jamilu Danmusa Danmusa (Copart Non-Licensed), the account confirmed against Caplimo's own invoices 1 & 3. White Nexus's High-Volume rows remain stored (that invoice must stay explicable per §5.10) but are historical, not the default. The cost breakdown panel now states "Priced under: [account] — [title], [payment tier]" prominently, not buried in a source line, so the basis is never ambiguous |
 | 43 | Copart Secured vs. Unsecured requirement is an open question, not yet resolved — real money at stake | A $400 security deposit is on file with Copart, yet all three real invoices priced at Unsecured. **The deposit does not appear to confer Secured status**, and what actually does is unknown — not something to guess or research further, it needs a direct answer from Copart. Measured stake across the three invoices checked: $1,125 total, averaging $375/vehicle, 3.4–4.4% of sale price. Secured-tier rows stay in `auction_fee_brackets` as `official_tariff`, unconfirmed, and must not be entered or defaulted-to as if Secured status were already obtained |
+| 44 | `extract-vehicle-vision`'s prompt instructs the model to guess rather than abstain (found Prompt 22 Phase 1, not fixed — out of scope) | Its prompt reads: `"For 'originalCurrency', strictly use one of: 'NGN', 'USD', 'EUR', 'GBP'. Default to 'NGN' if ambiguous."` That is an explicit instruction to pick a value when the model cannot tell, not to abstain — directly contradicting `PROJECT_CHARTER.md` §5.4 ("AI never generates a price... A plausible-sounding invented price destroys a pricing product permanently"), since a wrong currency silently produces a wrong USD-converted price with no signal anything was uncertain. Correctly left unfixed here: Bulk Import / `extract-vehicle-vision` was not named in PROMPT_22's scope, and editing it risked exactly the kind of adjacent, unscoped change `AGENTS.md` §5 warns against. `extract-cost-document`'s prompt (this same build) deliberately does the opposite — see debt #45 |
+| 45 | `NOT_VISIBLE` existed only in documents, in no code, until Prompt 22 (found Prompt 22 Phase 1) | `DECISIONS.md` 9.5, `PLAN_TRACKER.md` §9, `MASTER_PLAN.md` Part X, and the deprecated `AutoData_Architecture_Plan_v4.md` all describe a `NOT_VISIBLE` anti-hallucination escape hatch as if it were an established convention already in use by vision prompting on this project. It was not — confirmed by grepping the entire repo before Phase 3 was written. `supabase/functions/extract-cost-document/index.ts`'s `EXTRACTION_PROMPT` is **the first real implementation** of this convention anywhere in the codebase (the literal string `"NOT_VISIBLE"`, normalized server-side into a `status: 'unreadable'` field marker — see `docs/SOLVED.md` topic 20). **When Daily Sniper (Phase F) is eventually built, it should reuse this exact convention and its normalization pattern, not invent a second one** — the same reasoning `isUnconfirmed`'s two-file duplication (debt #3) already exists to warn against |
