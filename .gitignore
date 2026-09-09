@@ -34,3 +34,7 @@ scripts/input/
 # Real auction invoices - financial documents, never committed
 Invoices/
 Duty and Shipping Invoice/
+
+# Real authenticated-session page source (IAAI recon, Prompt 22) - carries a real logged-in
+# bidder session's data, never committed
+IAAI HTML.rtf

@@ -1,52 +1,49 @@
-// PROMPT 22 Phase 5 — IAAI content script (B1). Mirrors content-copart.js's structure and
-// message contract; does NOT copy its text-line-scanning extraction approach, because IAAI's
-// real DOM (confirmed via recon against real live lot pages, not assumed) exposes labels and
-// values as a clean, consistent element pair: <li class="data-list__item"><span
-// class="data-list__label">Label:</span>(<span>|<div>) class="data-list__value">Value</...>
-// </li> — reading that structurally is more reliable than Copart's line-based text scan.
+// PROMPT 22 Phase 5/6 — IAAI content script (B1).
 //
-// lot_state / current_bid_usd are DELIBERATELY UNFINISHED below — see the block marked
-// "PENDING AUTHENTICATED RECON". IAAI's "Bid Information" section is login-gated on every
-// lot recon'd for this build (public pages show "You are not logged in..." instead of a real
-// bid figure or sold/active state), and current_bid_usd-as-liveness-proxy has already caused
-// three separate real bugs on this project (AGENTS.md S4.1). Writing this block from
-// assumption is exactly what AGENTS.md S4.6 ("never guess at DOM structure") exists to
-// prevent — it is being completed once real logged-in-session HTML has been reviewed, not
-// guessed now to make Phase 5 look more finished than it is.
+// Superseded design note: an earlier version of this file scraped the rendered
+// .data-list__label / .data-list__value DOM pairs (mirroring content-copart.js's approach).
+// That version is gone. Real recon against real logged-in-session HTML (pasted by Bashir,
+// a genuine active lot, "IAAI HTML.rtf") found a far better source already on every lot
+// page: a single <script type="application/json" id="ProductDetailsVM"> element carrying
+// the exact same data the page renders from, as clean typed JSON - no DOM traversal, no
+// hidden-input-between-label-and-value trap (a real bug this file's first version hit and
+// fixed against a live page before this rewrite superseded the whole approach), no
+// duplicate-label-picks-the-wrong-one risk (the DOM literally has 3-4 near-identical copies
+// of "Stock #:"/"Live Auction:" for different responsive layouts; more than one had an empty
+// "Seller:" - the JSON's saleInformation.Seller is unambiguous).
+//
+// This JSON blob is present and well-formed whether or not the viewer is logged in -
+// confirmed directly (same lot, both states): logged out, `attributes.VIN` IS the masked
+// string and `decimalHighBidAmount` is "0"; logged in, `attributes.VIN` is the real 17-char
+// VIN and `decimalHighBidAmount` is the real current bid. The existing VIN-format regex
+// validation (same one content-copart.js uses) already rejects the masked form on its own -
+// no login-state branching needed in this file at all.
+//
+// lot_state is 'active' unconditionally on a successful capture. This is not an assumption -
+// Bashir confirmed directly that a sold/closed IAAI lot's URL redirects to the search page
+// rather than rendering a VehicleDetail page at all, so this content script (matched only on
+// /VehicleDetail/*) structurally never runs against a finished lot. There is no 'finished'
+// state for IAAI to detect, the same way Copart has no Sales History panel (B2) - a platform
+// fact, not a gap in this parser. See docs/SOLVED.md and SCHEMA.md for the fuller writeup.
 
-function extractField(labelText) {
-  const labels = Array.from(document.querySelectorAll('.data-list__label'));
-  const labelEl = labels.find(l => l.textContent.trim() === labelText);
-  if (!labelEl) return null;
-  // Some fields (confirmed live: "Primary Damage:") have a hidden <input> (e.g.
-  // #hdnPDVideo_Ind, a damage-video-exists flag) inserted between the label and its actual
-  // value span - a naive nextElementSibling grabs the hidden input instead of the value and
-  // silently returns null forever. Walk forward until an actual .data-list__value element is
-  // found, rather than assuming the immediate sibling is always it.
-  let sib = labelEl.nextElementSibling;
-  while (sib && !sib.classList.contains('data-list__value')) {
-    sib = sib.nextElementSibling;
+function getProductDetailsVM() {
+  const el = document.getElementById('ProductDetailsVM');
+  if (!el || !el.textContent) return null;
+  try {
+    return JSON.parse(el.textContent);
+  } catch (e) {
+    return null;
   }
-  if (!sib) return null;
-  // "Live Auction:"-style values are a <div> with several child <span>s and bare text nodes
-  // (day/month/date/time/zone) rather than one flat string - .textContent already concatenates
-  // all of that, so a single whitespace-collapse handles both the <span> and <div> value shapes.
-  const raw = sib.textContent || '';
-  const collapsed = raw.replace(/\s+/g, ' ').trim();
-  return collapsed === '' ? null : collapsed;
 }
 
 function isIaaiLotPage() {
-  const isLotUrl = /^\/VehicleDetail\/\d+/.test(location.pathname);
-  if (!isLotUrl) return false;
-  // Confirmed structural marker on every real lot page recon'd - a page that hasn't rendered
-  // the vehicle-info list yet (or a 404/"DetailsNotFoundView", seen directly this session on a
-  // bad lot id) won't have this element at all.
-  return document.querySelectorAll('.data-list__label').length > 0;
+  if (!/^\/VehicleDetail\/\d+/.test(location.pathname)) return false;
+  return getProductDetailsVM() !== null;
 }
 
 function checkReady() {
-  return isIaaiLotPage() && extractField('Stock #:') !== null;
+  const vm = getProductDetailsVM();
+  return !!(vm && vm.inventoryView && vm.inventoryView.attributes && vm.inventoryView.attributes.StockNumber);
 }
 
 async function waitForIaaiReady() {
@@ -59,153 +56,130 @@ async function waitForIaaiReady() {
   return false;
 }
 
-// VIN is confirmed MASKED on every public (unauthenticated) lot page recon'd this session
-// (e.g. "4T1BF3EK5BU******"). The existing 17-char VIN regex already rejects a masked value
-// (it contains "*", not a valid VIN character) and correctly falls through to null - this is
-// not a special case to add, it is the existing Copart-pattern validation doing the right
-// thing by construction. Whether a logged-in bidder session unmasks it is unverified and is
-// part of the same pending-recon question as the bid-state block below.
-function extractVin() {
-  let raw = extractField('VIN (Status):') || extractField('VIN:');
+function extractVin(attrs) {
+  const raw = attrs.VIN;
   if (!raw) return null;
-  // "VIN (Status):" value is like "4T1BF3EK5BU****** (OK)" - strip the trailing status paren.
-  const vin = raw.replace(/\s*\([^)]*\)\s*$/, '').trim().toUpperCase();
+  const vin = String(raw).trim().toUpperCase();
+  // Rejects the masked form ("4T1BF3EK5BU******") by construction - "*" is not a valid VIN
+  // character. This is the ONLY VIN-unmasking logic needed; it works identically whether the
+  // viewer is logged in (real VIN, passes) or not (masked VIN, fails, correctly null).
   return /^[A-HJ-NPR-Z0-9]{17}$/.test(vin) ? vin : null;
 }
 
-function extractYearMakeModelSeries() {
-  // "Model:" and "Series:" are separate fields in IAAI's own data (confirmed: "Model: CAMRY",
-  // "Series: LE") - Series maps to this project's "trim" concept. Year isn't a labelled field
-  // on its own; it's the leading token of the page's <h1> title ("2011 TOYOTA CAMRY LE").
-  const heading = document.querySelector('h1');
-  const headingText = heading ? heading.textContent.trim() : '';
-  const yearMatch = headingText.match(/^(19|20)\d{2}/);
-  const year = yearMatch ? parseInt(yearMatch[0], 10) : null;
-  const make = headingText.replace(/^(19|20)\d{2}\s+/, '').split(/\s+/)[0] || null;
-  const model = extractField('Model:');
-  const series = extractField('Series:');
-  return { year, make, model, series };
-}
-
-function normalizeMakeModel(make, model) {
-  const toTitleCase = (str) => {
-    if (!str) return null;
-    return str.split(' ').map(word => {
-      if (word.length <= 4 && /^[A-Z0-9]+$/i.test(word)) return word.toUpperCase();
-      if (word.length === 0) return word;
-      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-    }).join(' ');
-  };
-  return { make: toTitleCase(make), model: toTitleCase(model) };
+function toLookup(vm) {
+  // vehicleInformation / vehicleDescription / saleInformation are each a {key, value, order}
+  // array of the SAME human-readable strings the page itself renders (confirmed identical to
+  // the visible DOM text on the pasted real lot, e.g. "TitleSaleDoc": "SALVAGE (California)").
+  // Merged into one lookup since no key collides in practice; a later section's value would
+  // win over an earlier one only for the handful of keys both carry (VINStatus,
+  // SellingBranch), which are identical in both anyway.
+  const iv = vm.inventoryView;
+  const map = {};
+  for (const section of ['vehicleInformation', 'vehicleDescription', 'saleInformation']) {
+    const values = iv[section] && iv[section].$values;
+    if (!Array.isArray(values)) continue;
+    for (const item of values) {
+      if (item && item.key) map[item.key] = item.value;
+    }
+  }
+  return map;
 }
 
 function captureCurrentLot() {
-  const { year, make, model, series } = extractYearMakeModelSeries();
-  const normalized = normalizeMakeModel(make, model);
+  const vm = getProductDetailsVM();
+  const attrs = vm.inventoryView.attributes;
+  const lookup = toLookup(vm);
+  const prebid = vm.auctionInformation.prebidInformation;
 
-  let mileage_miles = extractField('Odometer:');
-  let odometer_brand = null;
-  if (mileage_miles) {
-    // "336,202 mi (Actual)" - same shape as Copart's odometer field.
-    const brandMatch = mileage_miles.match(/\((Actual|Not Actual|Exempt)\)/i);
-    if (brandMatch) {
-      const v = brandMatch[1].toLowerCase();
-      odometer_brand = v === 'actual' ? 'Actual' : v === 'not actual' ? 'Not Actual' : 'Exempt';
-    }
-    const numMatch = mileage_miles.match(/^([\d,]+)/);
-    mileage_miles = numMatch ? parseInt(numMatch[1].replace(/,/g, ''), 10) : null;
-    if (isNaN(mileage_miles)) mileage_miles = null;
+  const year = attrs.Year ? parseInt(attrs.Year, 10) : null;
+
+  let mileage_miles = attrs.ODOValue ? parseInt(attrs.ODOValue, 10) : null;
+  if (isNaN(mileage_miles)) mileage_miles = null;
+  const odoBrandRaw = (attrs.ODOBrand || '').toLowerCase();
+  const odometer_brand = odoBrandRaw === 'actual' ? 'Actual' : odoBrandRaw === 'not actual' ? 'Not Actual' : odoBrandRaw === 'exempt' ? 'Exempt' : null;
+
+  let cylinders = attrs.Cylinders ? parseInt(attrs.Cylinders, 10) : null;
+  if (isNaN(cylinders)) cylinders = null;
+
+  // "$36,945 USD" - only parsed when the string explicitly says USD (the currency guard
+  // established in PROMPT_22 Stage 1 applies here too: never assume a $ figure is USD without
+  // the source actually saying so - every ACV seen on real IAAI lots has said USD explicitly).
+  let estimated_retail_value_usd = null;
+  const acv = lookup.ActualCashValue;
+  if (acv && /USD/i.test(acv)) {
+    const n = parseFloat(acv.replace(/[^0-9.]/g, ''));
+    if (!isNaN(n)) estimated_retail_value_usd = n;
   }
 
-  // Title/Sale Doc: "CLEAR (North Carolina)" - the state-branded title status. Kept as free
-  // text, same messy-by-source-format treatment as Copart's "Title code" (SCHEMA.md S5) -
-  // no attempt to normalise it here, that is the E2 resolver's job, not capture's.
-  const title_type = extractField('Title/Sale Doc:');
+  // Real current bid, not a DOM scrape - confirmed against a real logged-in session showing
+  // a genuine $25 current bid. `0` is a real value (no bids yet), never coerced to null -
+  // same rule AGENTS.md S4.1 already enforces for Copart/bid.cars.
+  let current_bid_usd = null;
+  if (prebid && prebid.decimalHighBidAmount != null && prebid.decimalHighBidAmount !== '') {
+    const n = parseFloat(prebid.decimalHighBidAmount);
+    if (!isNaN(n)) current_bid_usd = n;
+  }
 
-  // sale_date: route the machine-readable close-date field straight through, per instruction -
-  // do NOT back-compute against the displayed "Live Auction" text or encode the observed ~1
-  // hour gap between them as a formula. #AdjustedCloseDate is a real DOM element present at
-  // load (no lazy-load/timing race, unlike bid.cars' active-lot countdown), already in a
-  // format `new Date(...)` parses directly ("9/9/2026 12:30:00 PM +00:00") - parseAuctionDate()
-  // needs no changes to handle it, and no second parser is being written here.
-  const closeDateEl = document.getElementById('AdjustedCloseDate');
-  const sale_date = closeDateEl && closeDateEl.value ? closeDateEl.value.trim() : null;
+  // sale_date: the same absolute, machine-readable close-date field this file's first version
+  // read from a hidden #AdjustedCloseDate input - now read from the JSON that input's value
+  // is itself rendered from. Passed straight through to parseAuctionDate() with no back-
+  // calculation against the displayed "Live Auction" time (confirmed ~1hr earlier on every
+  // sample checked) - that gap is a display quirk to note, not a formula to encode, per
+  // instruction.
+  const sale_date = prebid && prebid.adjustedCloseDate ? String(prebid.adjustedCloseDate).trim() : null;
 
   const payload = {
     source_platform: 'iaai',
     source_url: window.location.href,
     raw_dom_snapshot: (document.body.innerText || '').substring(0, 50000),
     captured_fields: {
-      vin: extractVin(),
+      vin: extractVin(attrs),
       year: year,
-      make: normalized.make,
-      model: normalized.model,
-      trim: series,
-      lot_number: (extractField('Stock #:') || '').replace(/\D/g, '') || null,
-      title_type: title_type,
+      make: attrs.Make || null,
+      model: attrs.Model || null,
+      trim: attrs.Series || null,
+      lot_number: attrs.StockNumber || null,
+      title_type: lookup.TitleSaleDoc || null,
       mileage_miles: mileage_miles,
       odometer_brand: odometer_brand,
-      damage_type: extractField('Primary Damage:'),
-      secondary_damage: extractField('Secondary Damage:'),
-      cylinders: (() => {
-        const c = extractField('Cylinders:');
-        const n = c ? parseInt(c, 10) : NaN;
-        return isNaN(n) ? null : n;
-      })(),
-      exterior_color: (extractField('Exterior/Interior:') || '').split('/')[0]?.trim() || null,
-      engine_type: extractField('Engine:'),
-      transmission: extractField('Transmission:'),
-      drivetrain: extractField('Drive Line Type:'),
-      fuel: extractField('Fuel Type:'),
-      body_style: extractField('Body Style:'),
-      has_key: extractField('Key:'),
-      seller: extractField('Seller:'),
+      damage_type: lookup.PrimaryDamage || null,
+      secondary_damage: lookup.SecondaryDamage || null,
+      cylinders: cylinders,
+      exterior_color: attrs.ExteriorColor || null,
+      engine_type: lookup.Engine || null,
+      transmission: lookup.Transmission || null,
+      drivetrain: lookup.DriveLineType || null,
+      fuel: lookup.FuelType || null,
+      body_style: lookup.BodyStyle || null,
+      has_key: lookup.KeySlashFob || null,
+      seller: lookup.Seller || null,
+      seller_type: lookup.SellerType || null,
       sale_date: sale_date,
-      location: extractField('Selling Branch:'),
-      // "Actual Cash Value: $3,250 USD" - IAAI's name for the same insurance-valuation concept
-      // Copart calls "Estimated retail value". Confirmed present on real lots recon'd; only
-      // parsed when the currency is explicitly USD (every ACV seen was, but this project's
-      // Prompt 22 currency guard finding applies equally here - never assume a $ figure is
-      // USD without the document/page actually saying so).
-      estimated_retail_value_usd: (() => {
-        const raw = extractField('Actual Cash Value:');
-        if (!raw || !/USD/i.test(raw)) return null;
-        const n = parseFloat(raw.replace(/[^0-9.]/g, ''));
-        return isNaN(n) ? null : n;
-      })(),
+      location: lookup.SellingBranch || null,
+      estimated_retail_value_usd: estimated_retail_value_usd,
       highlights: null,
-      runs_and_drives: null,
+      runs_and_drives: lookup.StartCode === 'Run & Drive' ? true : null,
       engine_starts: null,
       transmission_engages: null,
-
-      // --- PENDING AUTHENTICATED RECON — do not fill from assumption ---
-      // IAAI's "Bid Information" section renders "You are not logged in..." on every public
-      // lot page recon'd for this build; the real current-bid figure and sold/active wording
-      // have not been seen. Left null/unknown until reviewed against real logged-in-session
-      // HTML (an active lot and a finished/sold lot), per the standing rule that
-      // current_bid_usd must never be guessed at as a liveness proxy (AGENTS.md S4.1 - three
-      // prior bugs on this exact field).
-      current_bid_usd: null,
+      current_bid_usd: current_bid_usd,
     },
-    lot_state: 'unknown', // see PENDING AUTHENTICATED RECON above - never defaulted to 'active'
+    // See the file header - this is a confirmed platform fact (sold lots redirect away
+    // before this script ever runs), not a default guessed for convenience.
+    lot_state: 'active',
     image_urls: [],
   };
 
-  // Images: confirmed NOT lazy-loaded - real <img src> present at page load, unlike bid.cars.
-  // Full resolution is obtained by rewriting width/height to the RW/H values already embedded
-  // in the same imageKeys query param (verified live: a rewritten URL loaded at its full
-  // 2576x1932 natural size) - the IAAI equivalent of Copart's _thb -> _ful filename rewrite,
-  // done via query-string rewrite instead of filename rewrite.
-  const uniqueUrls = new Set();
-  document.querySelectorAll('img[src*="vis.iaai.com/resizer"]').forEach(img => {
-    const src = img.getAttribute('src');
-    const dims = src.match(/RW(\d+)~H(\d+)/);
-    if (!dims) return;
-    const [, rw, h] = dims;
-    const fullUrl = src.replace(/width=\d+&height=\d+/, `width=${rw}&height=${h}`);
-    uniqueUrls.add(fullUrl);
-  });
-  payload.image_urls = Array.from(uniqueUrls);
+  // Images: sourced from the same JSON's imageDimensions.keys array rather than scraping
+  // rendered <img> tags - confirmed to return MORE images than are in the visible thumbnail
+  // strip at load (18 keys in the JSON vs 11 rendered <img> tags on one real lot checked),
+  // and each entry already carries its own real width/height (RW/H), so no filename/query
+  // rewrite guesswork is needed - the resizer URL is built directly at full resolution.
+  const imageKeys = vm.inventoryView.imageDimensions && vm.inventoryView.imageDimensions.keys && vm.inventoryView.imageDimensions.keys.$values;
+  if (Array.isArray(imageKeys)) {
+    payload.image_urls = imageKeys
+      .filter(k => k && k.k && k.w && k.h)
+      .map(k => `https://vis.iaai.com/resizer?imageKeys=${k.k}&width=${k.w}&height=${k.h}`);
+  }
 
   const missing = [];
   if (!payload.captured_fields.vin) missing.push('vin');
@@ -222,13 +196,17 @@ function captureCurrentLot() {
 
 async function captureCurrentLotAsync() {
   const isReady = await waitForIaaiReady();
-  const payload = captureCurrentLot();
   if (!isReady) {
-    payload.page_not_fully_loaded = true;
-    if (!payload.captured_fields._missing_fields) payload.captured_fields._missing_fields = [];
-    payload.captured_fields._missing_fields.push('page_readiness');
+    return {
+      source_platform: 'iaai',
+      source_url: window.location.href,
+      captured_fields: { _missing_fields: ['page_readiness'] },
+      lot_state: 'unknown',
+      image_urls: [],
+      page_not_fully_loaded: true,
+    };
   }
-  return payload;
+  return captureCurrentLot();
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
