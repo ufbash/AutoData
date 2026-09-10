@@ -836,6 +836,64 @@ checkpoint is actually proving.
 
 ---
 
+### 4.13 `public-run`'s sold-comps average ignored `sale_confirmed` — **DONE** (10 Sep 2026, Prompt 25)
+
+Found during Prompt 24's own pre-flight, and it outranked the bug that pre-flight was written
+to investigate: the staff dashboard's sold-comps average (`ResearchRunDetail.tsx`'s `getStats`)
+excludes `sale_confirmed === false` and, with a `manual_entry`/`ai_vision` carve-out, `null` —
+but `public-run` (the client-facing share page, the deliverable that replaced the Excel sheets)
+applied **no exclusion at all**. A bid.cars "final bid" that isn't a confirmed sale was being
+averaged into the market figure clients actually see. `sale_confirmed` exists specifically to
+prevent this; the staff view honoured it, the client view didn't — a live `PROJECT_CHARTER.md`
+§5.1 honesty problem in production, not a hypothetical.
+
+**Real blast radius, measured before fixing anything:** of 12 live share-token runs, 9 carry a
+stats block; 6 of those 9 changed. Two — Nafisah Bashir's and Tesla's — went from a fully
+populated average (9 rows/$10,456.33; 6 rows/$9,375.00) to **zero confirmable comps**, because
+every row in each was an unconfirmed bid.cars final bid. The other four shifted by $24–$228 on
+one dropped row each. Three comps-bearing live runs were genuinely clean and unaffected.
+
+**The fix, `supabase/functions/public-run/index.ts`:** added `sale_confirmed`/`logged_via` to
+the internal query (previously not even fetched), and a derived `sale_unconfirmed` boolean
+computed server-side with the identical `getStats` predicate — never the raw fields themselves,
+per `PROJECT_CHARTER.md` §5.9's "deliberate, minimal widening." Applied to the price/count
+aggregation only; mileage stays unfiltered, matching `getStats` exactly rather than "improving"
+it into a silent divergence from the rule being mirrored. `priced_count` (the number actually
+displayed as "Based on N sales") now reflects the post-exclusion count; `total_count` is left
+representing the full sold population regardless of confirmation (a completeness figure,
+currently unused in the UI) — a deliberate choice, not an oversight, recorded here rather than
+left implicit.
+
+**New on the public page:** an "Unconfirmed sale" badge on the sold-listing card
+(`PublicRunView.tsx`), the client-facing counterpart of the staff dashboard's existing badge —
+§5.2 requires an excluded row stay visible and labelled, never silently disappear.
+
+**Verified against real, live data post-deploy** — not compile-only:
+- Nafisah Bashir's and Tesla's live share links: `stats.priced_count` now `0`,
+  `avg_price_usd`/`min`/`max` all `null`; confirmed both via direct Edge Function fetch and a
+  real-browser screenshot of the deployed page — "MARKET AVERAGES (BASED ON 0 SALES)",
+  "Avg Sale Price —", every card badged "Unconfirmed sale."
+- Khalifah's run: `priced_count` 8→7, `avg_price_usd` $8,234.38→$8,096.43 exactly as predicted
+  pre-fix; browser screenshot confirms one badged card, seven unbadged, average/range/mileage
+  matching the Edge Function response exactly.
+- A second, distinct Mohammed Jamilu Danmusa run with zero unconfirmed rows: `priced_count`
+  unchanged at 6/6, average unchanged at $1,512.50 — confirms no drift on a clean run.
+- `manual_entry`/`ai_vision` carve-out: no row matching this combination currently sits on any
+  *live* share-token run (checked directly) — verified instead against 5 real `manual_entry`
+  sold sightings elsewhere in production, confirming the deployed carve-out logic does not
+  exclude them, consistent with `getStats`'s own behaviour on the same field values. Recorded
+  honestly as verified-by-logic-against-real-values rather than verified-by-live-share-link,
+  since no live example of this specific combination exists yet to point to.
+
+**Correction to an earlier entry in this document, found while doing this work:** §4.12 (B1,
+Prompt 22) originally stated IAAI's `sale_confirmed` "stays `false` indefinitely" — verified
+against real production data here and corrected to `null`. `sale_confirmed` is written in
+exactly one place in the whole codebase (bid.cars' own content script); Copart and IAAI never
+write it at all, so it can only ever be `null` for either platform, never `false`. See the
+corrected text at §4.12 above.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **DONE** (10 Sep 2026, Prompt 22 Stage 2)
@@ -868,9 +926,16 @@ quality until this build.
   surfaced by this same pair of captures.
 
 **Known permanent gap, not a defect of this build:** IAAI exposes no sales-history panel
-analogous to bid.cars' — every IAAI sighting's `sale_confirmed` stays `false` indefinitely,
-the same "Unconfirmed sale" state Copart carries permanently per B2 above, for the same
-reason (the platform's own data model, not a missing feature).
+analogous to bid.cars' — every IAAI sighting's `sale_confirmed` stays `null` indefinitely
+(**correction, 10 Sep 2026, Prompt 25** — originally written here as `false`; verified
+against real production data while building Prompt 25's fix and confirmed to be `null`, not
+`false` — `sale_confirmed` is only ever written by bid.cars' own content script, and neither
+Copart's nor IAAI's ever sets it to anything). This is the same "unconfirmable by platform"
+state Copart carries permanently per B2 below, for the same reason (the platform's own data
+model has no confirmation mechanism, not a missing feature) — but it renders identically to a
+bid.cars lot whose sales-history table simply didn't parse, which is a different kind of
+`null` (see debt entry recorded under Prompt 25, §4.13). Worth distinguishing in the UI
+eventually — not done now.
 
 ### B2. Copart Sales History — **RETIRED — NOT BUILDABLE** (4 Sep 2026)
 Would have given parity with bid.cars, if exposed. **Copart does not expose the data.**
@@ -1125,3 +1190,6 @@ as evidence (public link renders the fix live).
 | 44 | `extract-vehicle-vision`'s prompt instructs the model to guess rather than abstain (found Prompt 22 Phase 1, not fixed — out of scope) | Its prompt reads: `"For 'originalCurrency', strictly use one of: 'NGN', 'USD', 'EUR', 'GBP'. Default to 'NGN' if ambiguous."` That is an explicit instruction to pick a value when the model cannot tell, not to abstain — directly contradicting `PROJECT_CHARTER.md` §5.4 ("AI never generates a price... A plausible-sounding invented price destroys a pricing product permanently"), since a wrong currency silently produces a wrong USD-converted price with no signal anything was uncertain. Correctly left unfixed here: Bulk Import / `extract-vehicle-vision` was not named in PROMPT_22's scope, and editing it risked exactly the kind of adjacent, unscoped change `AGENTS.md` §5 warns against. `extract-cost-document`'s prompt (this same build) deliberately does the opposite — see debt #45 |
 | 45 | `NOT_VISIBLE` existed only in documents, in no code, until Prompt 22 (found Prompt 22 Phase 1) | `DECISIONS.md` 9.5, `PLAN_TRACKER.md` §9, `MASTER_PLAN.md` Part X, and the deprecated `AutoData_Architecture_Plan_v4.md` all describe a `NOT_VISIBLE` anti-hallucination escape hatch as if it were an established convention already in use by vision prompting on this project. It was not — confirmed by grepping the entire repo before Phase 3 was written. `supabase/functions/extract-cost-document/index.ts`'s `EXTRACTION_PROMPT` is **the first real implementation** of this convention anywhere in the codebase (the literal string `"NOT_VISIBLE"`, normalized server-side into a `status: 'unreadable'` field marker — see `docs/SOLVED.md` topic 20). **When Daily Sniper (Phase F) is eventually built, it should reuse this exact convention and its normalization pattern, not invent a second one** — the same reasoning `isUnconfirmed`'s two-file duplication (debt #3) already exists to warn against |
 | 46 | Asset fingerprinting diverges when the same physical car is captured with and without a VIN, permanently splitting it into two assets (first found Prompt 22 Stage 2, caught again 10 Sep 2026 during B1 close-out verification) | A sighting with no VIN falls back to a make/model/year/trim/colour fingerprint to resolve or create an asset; a later capture of the *same physical car* that does carry a VIN computes a different, VIN-based fingerprint and creates a second, permanently separate asset — the two never merge on their own. Reproduced a second time, unprompted, during this build's own end-to-end verification: a real Copart lot (62572576, no VIN in that capture) and its bid.cars listing of the identical lot (VIN `3MYDLBYV3JY316392`) landed on two different `assets` rows (`71afaf80...` vs `94e1aaff...`), same make/model/year, same location. The first instance was manually merged (repoint the sighting's `asset_id`, delete the orphan) after explicit confirmation and a references check; this second instance was left as-is and only recorded here — a manual merge does not fix the underlying gap, and doing it repeatedly is itself a sign the fix belongs in the fingerprinting logic, not in one-off cleanup. Needs its own dedicated prompt: likely a re-fingerprint/merge pass triggered whenever a VIN arrives for an asset that was originally created without one, not a change to the fingerprint function itself |
+| 47 | Three separate, un-shared implementations of the sold-comps average — `ResearchRunDetail.tsx`'s `getStats`, `public-run/index.ts`'s stats block, and `researchService.ts`'s single-listing display-price helper (found Prompt 25) | These have already diverged once in production — see the fix at §4.13 above, where `public-run` silently omitted the `sale_confirmed` exclusion `getStats` applies. Deliberately not refactored into one shared module by this same prompt: `public-run` is Deno server-side, `getStats` is client-side React, and forcing a shared module across that boundary was judged a bigger change than the fix warranted. Recorded as the same category of risk as `isUnconfirmed`'s two-file duplication (debt #3) — any future change to one rule (e.g. adding the `api_import` carve-out gap noted below) must be applied to both by hand, or this diverges a second time |
+| 48 | `sale_confirmed = null` means two different things depending on `logged_via`, and nothing in the UI currently distinguishes them (found Prompt 25, deferred per Bashir 10 Sep 2026) | On a `manual_entry`/`ai_vision` row, `null` is structural — no code path could ever set it, since neither entry method parses a sales-history table. On an `extension_dom_capture` row from Copart or IAAI, `null` means "unconfirmable by platform" — neither has any sales-history mechanism at all (`sale_confirmed` is written in exactly one place codebase-wide, bid.cars' own content script). On a bid.cars `extension_dom_capture` row, `null` can also mean "the sales-history table didn't parse to a confirmable status" — genuine inconclusive data. All three render identically today (excluded the same way, badged "Unconfirmed sale" the same way). Worth labelling differently eventually — e.g. "not tracked on this platform" vs. "sale status unclear" — not built now, per Bashir's explicit call when this was raised |
+| 49 | `getStats`'s `manual_entry`/`ai_vision` carve-out doesn't cover `api_import` (found Prompt 25, theoretical — not a live discrepancy) | `logged_via_enum` has a fourth value, `api_import`, that would structurally have the same "no sales-history mechanism, `null` is not ambiguity" property as `manual_entry`/`ai_vision` — but it's excluded from the carve-out in both `getStats` and this prompt's `public-run` mirror of it. Nothing in the codebase currently produces `api_import` rows (confirmed by grep), so this doesn't affect any real data today. Extend the carve-out to include it if `api_import` is ever wired up as a real ingestion path |

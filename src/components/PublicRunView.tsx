@@ -171,6 +171,14 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
                 Sold: {new Date(listing.sale_date).toLocaleDateString()}
               </div>
             )}
+            {/* PROMPT 25 - S5.2: an excluded-from-average row stays visible, labeled, never
+                silently hidden. This is the client-facing counterpart of the staff
+                dashboard's "Unconfirmed sale" badge (ResearchRunDetail.tsx). */}
+            {listing.sale_unconfirmed && (
+              <div className="absolute top-2 right-2 bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm backdrop-blur-sm">
+                Unconfirmed sale
+              </div>
+            )}
           </div>
         ) : (
           <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden">

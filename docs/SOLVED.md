@@ -1428,3 +1428,61 @@ content script matching. `manifest.json`'s `content_scripts.matches` glob
 manifest format itself, and the real URL path was lowercase (`/vehicledetail/...`). Fixed by
 broadening the manifest match to the whole host (`*://*.iaai.com/*`) and moving the actual gate
 into JS as a case-insensitive regex, `isIaaiLotPage()`: `/^\/vehicledetail\/\d+/i`.
+
+---
+
+## 22. The client-facing page was more permissive than the staff dashboard about what counts as a real sale - found by a pre-flight for an unrelated fix
+
+**How this was found - not by looking for it.** Prompt 24 set out to fix a different bug: an
+active-listing fee calculation using `current_bid_usd` as its reference price. Its own Phase 1
+pre-flight required tracing every consumer of the sold-comps average, as due diligence for a
+completely separate question ("is a comps average available to substitute for `current_bid_usd`
+on an active listing?"). That trace surfaced this instead, and it turned out to matter more than
+the bug the pre-flight was written to investigate.
+
+**The divergence, stated plainly.** `ResearchRunDetail.tsx`'s `getStats` (the staff dashboard)
+excludes a sold row from the average when `sale_confirmed === false`, or when `sale_confirmed
+=== null` and `logged_via` isn't `manual_entry`/`ai_vision` - the exact rule that makes a
+bid.cars "final bid" honest, since a final bid on that platform is not automatically a real
+sale. `public-run` (the client-facing share page, the deliverable that replaced the Excel
+sheets Caplimo used to send) applied **no such exclusion at all** - it didn't even fetch
+`sale_confirmed`/`logged_via` from the database in the first place. The staff view honoured the
+distinction the system itself was built to make; the page the client actually reads did not.
+
+**Real, measured blast radius - not an estimate.** Every one of the 12 currently-live share
+links was checked both ways before anything was changed: 9 carry a sold-comps stats block, and
+6 of those 9 produced a different number under the correct rule. Two - Nafisah Bashir's and
+Tesla's real, live client links - were showing a market average computed **entirely** from
+unconfirmed bid.cars final bids: $10,456.33 across 9 rows and $9,375.00 across 6, respectively,
+with zero of either set being a confirmed sale. After the fix, both correctly show "no
+confirmed comps" rather than any number. Four other live runs shifted by $24-$228 on one
+dropped row each; three were already clean.
+
+**Why this outranked the bug the pre-flight was written for.** The fee-bracket bug lives behind
+a UI element whose own tooltip says "internal only." This one was live, in front of real
+clients, on the page that specifically replaced the old process this whole project exists to
+improve on. `PROJECT_CHARTER.md` §5.1 doesn't distinguish severity by which bug was being
+looked for when it was found - a wrong client-facing number is a wrong client-facing number
+regardless of what the prompt that found it was originally about. Fixed first, deployed, and
+verified against real production data before the fee-bracket work (Prompt 26) resumed.
+
+**The fix deliberately does not create a third, shared implementation.** `getAuctionFeeComponent`
+and `getStats` are Deno server-side and client-side React respectively; a shared module across
+that boundary was judged a bigger change than this fix warranted, especially with the actual fix
+being small and mechanical (apply the same predicate, add the same badge). Recorded as debt
+(`PLAN_TRACKER.md` #47) instead, with the explicit note that these two implementations have now
+diverged once in production - a second divergence is a real, foreseeable risk, not a hypothetical
+one, precisely because nothing forces them to stay in sync.
+
+**A precision point worth keeping: `sale_confirmed = null` is not one thing.** Tracing every
+write site (there is exactly one - bid.cars' own content script, reading that lot's own
+sales-history table) surfaced three different real meanings behind the same stored `null`:
+`manual_entry`/`ai_vision` rows can *only ever* be `null` (no code path could set them to
+anything else - it isn't ambiguity, it's structural); Copart/IAAI rows are *always* `null` for
+the same reason at the platform level (neither exposes a sales-history mechanism at all -
+`PLAN_TRACKER.md` B2 and B1/§4.12, the latter corrected here after this same trace found it had
+been mis-recorded as `false`); and a bid.cars `extension_dom_capture` row's `null` can mean the
+sales-history table genuinely didn't parse to a confirmable status - real inconclusiveness. All
+three currently render identically (excluded the same way, badged "Unconfirmed sale" the same
+way). Distinguishing them in the UI was raised and deliberately deferred, not overlooked -
+recorded as `PLAN_TRACKER.md` #48.

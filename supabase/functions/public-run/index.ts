@@ -207,6 +207,8 @@ serve(async (req) => {
           lot_state,
           captured_at,
           sale_date,
+          sale_confirmed,
+          logged_via,
           asset:assets (
             year,
             make,
@@ -328,7 +330,20 @@ serve(async (req) => {
         })(),
         source_platform: sighting.source_platform,
         captured_at: sighting.captured_at,
-        sale_date: sighting.sale_date
+        sale_date: sighting.sale_date,
+
+        // PROMPT 25 - a derived flag, not raw sale_confirmed/logged_via (S5.9: deliberate,
+        // minimal widening). Mirrors ResearchRunDetail.tsx's getStats exclusion rule exactly
+        // (same predicate, same manual_entry/ai_vision carve-out) rather than inventing a
+        // second standard. Only meaningful within the sold population for this run's type -
+        // false for every active listing, which has no "confirmed sale" concept at all.
+        sale_unconfirmed: (() => {
+          const isSoldGroup = run.run_type === 'sold_comps' || (run.run_type === 'mixed' && sighting.current_bid_usd === null);
+          if (!isSoldGroup) return false;
+          if (sighting.sale_confirmed === false) return true;
+          if (sighting.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(sighting.logged_via)) return true;
+          return false;
+        })()
       };
 
       if (sighting.lot_state === 'finished') {
@@ -346,7 +361,12 @@ serve(async (req) => {
         : publicListings;
 
       soldListings.forEach((l: any) => {
-        if (typeof l.price_usd === 'number') {
+        // PROMPT 25 - matches getStats' exact rule (ResearchRunDetail.tsx): an unconfirmed
+        // sale is excluded from the price average and its sample size, but mileage is not
+        // gated by this at all in the rule being mirrored - preserved here rather than
+        // "improved," since silently diverging from the target rule would defeat the point
+        // of matching it.
+        if (typeof l.price_usd === 'number' && !l.sale_unconfirmed) {
           tP += l.price_usd;
           pC++;
           if (l.price_usd < minP) minP = l.price_usd;
