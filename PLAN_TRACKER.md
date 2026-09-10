@@ -766,10 +766,11 @@ for that same price) is resolved as a deterministic ordered scan over the bracke
 iteration — implemented and ready for when duty unblocks, not reachable in practice until then.
 See `docs/SOLVED.md` topic 19.
 
-**Displayed on `ResearchRunDetail`, collapsed by default, active listings only** (`lot_state
-!== 'finished'`) — verified live against a real run with no client budget stated (Mohammed
-Jamilu Danmusa's Yaris/Matrix brief) that the panel correctly renders every component and
-withholds headroom for the right, specific reason. **Sold-comps average confirmed
+**Displayed on `ResearchRunDetail`, collapsed by default** (originally active listings only via
+`lot_state !== 'finished'`; that gate was widened in Prompt 26 — see §4.14) — verified live
+against a real run with no client budget stated (Mohammed Jamilu Danmusa's Yaris/Matrix brief)
+that the panel correctly renders every component and withholds headroom for the right, specific
+reason. **Sold-comps average confirmed
 byte-identical before and after** by literally stashing the Phase 4 diff, reloading, capturing
 `$17,550` (11 sales), restoring, reloading, capturing `$17,550` again on a real run (Hail
 Camry) — not just a code-inspection argument. **`public-run`'s allow-list confirmed unchanged**
@@ -891,6 +892,85 @@ against real production data here and corrected to `null`. `sale_confirmed` is w
 exactly one place in the whole codebase (bid.cars' own content script); Copart and IAAI never
 write it at all, so it can only ever be `null` for either platform, never `false`. See the
 corrected text at §4.12 above.
+
+---
+
+### 4.14 Auction fees as a function of bid, not a bracket lookup on a guessed reference price — **DONE** (10 Sep 2026, Prompt 26, supersedes Prompt 24 Phase 2)
+
+Prompt 24 set out to give an active listing a *better* reference price (a sold-comps average
+instead of `current_bid_usd`) to bracket the auction fee against. Its own Phase 1 pre-flight
+found that an `active_listings`-only run structurally has no sold-comps average at all —
+plausibly the majority case. **That was the design telling us the question was wrong, not an
+obstacle to route around:** there is no correct single price for a car that hasn't sold, so no
+substitute for one — comps average, budget, anything else — is honest. But Copart/IAAI buyer
+fees are tiered by actual sale price, and a bid is not a fixed unknown — it's exactly the thing
+staff are choosing. **The fee is a function of the bid.** Modelled as one instead of guessed at.
+
+**What changed, `bidHeadroomService.ts`:**
+- `getAuctionFeeComponent`'s `referencePriceUsd` is no longer `current_bid_usd ?? listed_price
+  ?? price_usd`. It is now either the actual confirmed sale price (`price_usd` on a finished,
+  `sale_confirmed=true` listing — a real fact) or a staff-entered candidate bid on an active
+  listing — never a number the system picked for itself.
+- Extracted `fetchAuctionFeeRows` so the forward calculation (a known price → its fee) and the
+  new inverse one (a target → the bid that produces it) share one query instead of two copies
+  that could drift apart — exactly the failure mode Prompt 25 just found and fixed elsewhere.
+- Replaced a dead scaffold (`solveMaxBidAgainstBracket`, built in Prompt 21, never called —
+  handled only the buyer-fee bracket alone) with a real combined-region solver
+  (`solveMaxBidForFees`) covering buyer fee + bid-fee midpoint + flat fees together. **Mode A**
+  (solve for max bid against `max_budget_usd` as the ceiling): built correctly, gated on
+  shipping/trucking/duty *all* being available — duty being permanently blocked (C2) means this
+  is expected to be unreachable today, and is: `maxBidSolve.status` is `'unavailable'` in every
+  real case tested.
+- **Mode B** (what actually renders): a candidate-bid input (`current_bid_usd` may prefill it
+  as a convenience and is shown separately as read-only context — it must never itself select a
+  bracket or produce a fee) plus `getFeeBracketBoundaries`, showing the current and next bracket
+  for both buyer fee and bid-fee midpoint, so staff can see where the step changes are near a
+  bid they're actually considering.
+- `computeBidHeadroom` gained `isFinishedLot`: forces headroom to abstain on a sold car (no
+  future bid to size headroom for) while the cost components — the number that validates the
+  fee model against reality — still render.
+
+**`max_budget_usd` — the precise distinction, not a blanket exclusion.** It enters the *solve*
+(the ceiling `solveMaxBidForFees` solves against) but never enters bracket selection as an
+assumed price — that would overstate the fee on every car that bids below budget, the exact
+conflation Prompt 24's Checkpoint 1 wording risked forbidding correctly by being too blunt.
+Grepped: confirmed it only ever reaches `computeHeadroom`'s subtraction and
+`solveMaxBidForFees`'s `targetAfterOtherCosts` — zero references inside the bracket-selection
+path.
+
+**`ResearchRunDetail.tsx:1370`'s `lot_state !== 'finished'` gate removed.** A finished listing
+now reaches the cost-breakdown panel — "what did this car actually cost" is the number that
+checks the fee model against reality, and leaving that branch unreachable would have been the
+same category of mistake as this session's earlier vacuously-true-zero bug (a branch nothing
+can execute reads as tested when it never ran).
+
+**Verified against real data:**
+- Monotonicity of `total(bid) = bid + fees(bid)` tested directly (not reasoned about) against
+  all 108 real currently-effective bracket rows for the default account/tier, every integer
+  dollar $0–$20,000, both title statuses — **zero violations**. A max-bid solve is well-defined
+  whenever duty unblocks.
+- A real active bid.cars/Copart listing (`current_bid_usd=$25`, non-clean title): fee computed
+  at $25→$157.50, $99→$180.00, $100→$265.00 (a real bracket boundary), $2000→$897.50 — the fee
+  visibly tracks the candidate, including a real step at a real boundary, not the $25 current
+  bid alone.
+- Five real finished/`sale_confirmed=true` bid.cars rows checked for a case where `price_usd`
+  and the old formula would have differed: none exists (`current_bid_usd` is always null on a
+  finished bid.cars lot by construction, and every real one is USD) — stated honestly rather
+  than presenting a coincidental match as proof.
+- `npx tsc --noEmit` clean. `getAuctionFeeComponent` grepped to exactly one caller, unchanged.
+
+**Design note, so this isn't "simplified" back into a reference price later:** an active
+listing's fee is *conditional on a staff-entered candidate*, by design, not a system prediction
+with a fallback. There is no honest single number to show absent that input — a comps average
+would only trade one guess for another (and, per Prompt 24 Phase 1, usually isn't even
+available). Any future change reintroducing an automatic price substitute for an active listing
+reopens exactly the bug this prompt fixed.
+
+**Not done, live-browser click-through:** the staff dashboard is login-gated; this session
+doesn't hold a staff session and didn't generate one for Bashir's account without asking.
+Verified instead via `tsc`, grep, and direct computation against the real 108-row bracket set
+and real listing data — the same standard of evidence used elsewhere in this document when a
+live click-through wasn't available.
 
 ---
 

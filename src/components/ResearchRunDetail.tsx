@@ -1367,22 +1367,27 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                             <Trash2 className="w-4 h-4" />
                           </button>
                         )}
-                        {listing.lot_state !== 'finished' && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setExpandedCostListingIds(prev => {
-                                const next = new Set(prev);
-                                if (next.has(listing.id)) next.delete(listing.id); else next.add(listing.id);
-                                return next;
-                              });
-                            }}
-                            className={`p-2 rounded transition-colors ${expandedCostListingIds.has(listing.id) ? 'text-[#a58039] bg-[#a58039]/10' : 'text-gray-400 hover:text-[#a58039] hover:bg-[#a58039]/10'}`}
-                            title="Landed cost & bid headroom (internal only)"
-                          >
-                            <DollarSign className="w-4 h-4" />
-                          </button>
-                        )}
+                        {/* PROMPT 26 - widened from "active listings only": a finished listing
+                            now reaches this too. "What did this car actually cost" validates
+                            the fee model against reality; headroom itself still abstains on a
+                            sold car (ListingCostBreakdown/computeBidHeadroom), but the cost
+                            components render. Leaving this unreachable for finished listings
+                            would have been the same failure as this session's vacuously-true
+                            zero - a branch nothing can reach. */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedCostListingIds(prev => {
+                              const next = new Set(prev);
+                              if (next.has(listing.id)) next.delete(listing.id); else next.add(listing.id);
+                              return next;
+                            });
+                          }}
+                          className={`p-2 rounded transition-colors ${expandedCostListingIds.has(listing.id) ? 'text-[#a58039] bg-[#a58039]/10' : 'text-gray-400 hover:text-[#a58039] hover:bg-[#a58039]/10'}`}
+                          title="Landed cost & bid headroom (internal only)"
+                        >
+                          <DollarSign className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

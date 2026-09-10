@@ -1486,3 +1486,82 @@ sales-history table genuinely didn't parse to a confirmable status - real inconc
 three currently render identically (excluded the same way, badged "Unconfirmed sale" the same
 way). Distinguishing them in the UI was raised and deliberately deferred, not overlooked -
 recorded as `PLAN_TRACKER.md` #48.
+
+---
+
+## 23. A fee bracket lookup on a guessed price is the same class of bug as a guessed price - it just hides behind an "internal only" tooltip
+
+**The wrong question, found by its own pre-flight.** Prompt 24 set out to replace one guessed
+reference price (`current_bid_usd`) with a better one (a sold-comps average) for bracketing an
+active listing's auction fee. Its Phase 1 pre-flight found that an `active_listings`-only run -
+plausibly the majority case - has no sold-comps average available at all, structurally, ever.
+The instinct was to treat this as an obstacle: find some other substitute, plumb it through.
+That instinct was wrong. **There is no correct single price for a car that hasn't sold.** A
+comps average, a client's budget, last week's comparable sale - none of these is the price this
+specific car will actually close at, so bracketing a real fee schedule against any of them
+produces the same category of dishonesty `PROJECT_CHARTER.md` §5.1 exists to prevent, just one
+step removed from an outright guessed number.
+
+**The reframe: the fee is not a fixed unknown, it's a function.** Copart/IAAI buyer fees are
+tiered by the actual sale price. A bid, unlike a sale price, is not something to predict - it's
+exactly the thing a staff member is in the process of deciding. So the fee doesn't need a
+predicted input; it needs to be modelled as `fees(bid)`, evaluated at whatever bid the staff
+member is actually considering. This needed no comps average, no new prop threading the average
+down from `ResearchRunDetail` to `ListingCostBreakdown`, and no third duplicate averaging
+implementation - the entire redesign is contained to `bidHeadroomService.ts` and one new input
+field (a candidate bid) on the existing panel.
+
+**Why this is provably well-defined, not just a plausible-sounding reframe.** A function with
+two output modes is only honest if the "no single number" mode is real, not a excuse to skip
+verification. Monotonicity of `total(bid) = bid + fees(bid)` was tested directly against all
+108 real currently-effective bracket rows for the account/tier actually used, every integer
+dollar from $0 to $20,000, both title statuses - zero violations. This matters concretely: it
+means a maximum-bid solve (Mode A, "the largest bid where everything still lands under budget")
+has exactly one well-defined answer whenever it can be attempted, not an ambiguous set of
+candidates from a non-monotonic bracket table.
+
+**Mode A is built and correct, and is expected to be unreachable today - that expectation was
+proven, not assumed.** `computeBidHeadroom`'s `maxBidSolve` only attempts the solve when
+shipping, trucking, AND duty are all `'available'`. Duty (C2) is permanently blocked pending
+10+ real assessment notices, so `maxBidSolve.status` is `'unavailable'` in every real case -
+verified, not just expected from reading the code. A private, unexported solver
+(`solveMaxBidAgainstBracket`) already existed from Prompt 21 for exactly this future moment,
+built ahead of schedule and never called - it only handled the buyer-fee bracket alone, not the
+combined buyer-fee + bid-fee-midpoint + flat-fee total this prompt actually needs, so it was
+replaced with a real combined-region solver rather than reused as-is.
+
+**Mode B - what actually renders today - had to solve a smaller but real problem: what does
+"never derive a fee from `current_bid_usd`" mean when `current_bid_usd` is also the most useful
+default value to start from?** The rule drawn: `current_bid_usd` may be *displayed* as context
+and may *prefill* the candidate-bid input as a convenience, but the fee is always computed from
+whatever the candidate-bid field currently holds - a fully editable, clearly labelled input,
+never an auto-derived figure. The distinction is mechanism, not the coincidence that the
+prefilled value and the current bid start out numerically equal. Verified against a real
+listing (`current_bid_usd=$25`, non-clean Copart title): fee at $25 is $157.50, but entering
+$2,000 shows $897.50, and crossing the real $99/$100 bracket boundary shows the fee step from
+$180.00 to $265.00 - the number visibly tracks the candidate, not the current bid.
+
+**The `max_budget_usd` distinction that almost got over-corrected.** An earlier checkpoint's own
+wording ("confirm `max_budget_usd` never enters this logic") was too blunt and would have
+forbidden the *correct* use of the budget: solving for the maximum bid such that everything
+lands under it is exactly what a budget ceiling is for. The actual rule has one clause, not
+zero: `max_budget_usd` enters the *solve* (the target `solveMaxBidForFees` solves against) and
+must never enter *bracket selection* as an assumed sale price - that specific substitution is
+what would overstate the fee on every car that ultimately bids below budget. Both facts are
+true at once; a rule stated as a blanket exclusion would have quietly broken the feature it was
+trying to protect.
+
+**The Copart/IAAI asymmetry, carried forward from Prompt 24's pre-flight and now load-bearing
+in the UI, not just a footnote:** a genuinely sold Copart or IAAI lot can never reach the
+`sale_confirmed=true` bucket, because neither platform has any confirmation mechanism at all
+(`sale_confirmed` is written in exactly one place codebase-wide - bid.cars' own content script;
+see topic 22 above and `PLAN_TRACKER.md` B2). `ListingCostBreakdown`'s abstention message for
+this case reads differently depending on platform for exactly this reason: Copart/IAAI get
+"sale confirmation is not available on this platform," bid.cars gets "this platform marked the
+final bid as not a confirmed sale, or its status could not be determined." Both currently
+render as the same amber abstention block - a genuinely sold Copart lot's abstention means
+**"unconfirmable by platform,"** not **"suspicious,"** which is what the same rendering means
+for a bid.cars `sale_confirmed=false` row. Distinguishing them visually was raised and
+deliberately deferred, consistent with the same call made in topic 22 for the client-facing
+"Unconfirmed sale" badge - not built now, recorded so a future reader doesn't read the shared
+rendering as an oversight.
