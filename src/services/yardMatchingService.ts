@@ -90,6 +90,20 @@ function parseBidcarsLocation(location: string): { stateAbbr: string; city: stri
   return { stateAbbr, city: match[1].trim() };
 }
 
+// IAAI: "San Diego (CA)", "Raleigh (NC)" - attrs.BranchName from the real embedded
+// ProductDetailsVM JSON (Prompt 22 Phase 5/6), confirmed against live lots. Same "City (ST)"
+// shape as bid.cars' own format - a real, separate parser rather than silently reusing
+// parseBidcarsLocation, so the two sources' edge cases (bid.cars' vendor-code-prefix and
+// missing-state cases, documented above) never get conflated with whatever IAAI-specific
+// quirk a future branch-name format might introduce.
+function parseIaaiLocation(location: string): { stateAbbr: string; city: string } | null {
+  const match = location.match(/^(.+?)\s*\(([A-Za-z]{2})\)\s*$/);
+  if (!match) return null;
+  const stateAbbr = match[2].toUpperCase();
+  if (!stateAbbr) return null;
+  return { stateAbbr, city: match[1].trim() };
+}
+
 // The auction platform a sighting should be matched against is not always source_platform.
 // bid.cars is a resale aggregator, not a yard network - a bidcars sighting's real platform
 // is source_auction_platform (copart/iaai), set by the extension from the lot number prefix.
@@ -110,6 +124,13 @@ function parseLocationForPlatform(sighting: SightingForMatching, effectivePlatfo
   if (!sighting.location) return null;
   if (sighting.source_platform === 'copart') return parseCopartLocation(sighting.location);
   if (sighting.source_platform === 'bidcars') return parseBidcarsLocation(sighting.location);
+  // Real gap, found closing out Prompt 22 Stage 2's own checklist (item 16): this branch was
+  // missing entirely - resolveEffectivePlatform already treated 'iaai' as a direct platform,
+  // but nothing ever parsed an IAAI location string, so every IAAI sighting fell through to
+  // unmatched regardless of how well-formed its location was. Not present before this fix
+  // because no real IAAI location data existed yet when Prompt 20 built this matcher
+  // (AGENTS.md S4.6 - never guess at a format with nothing real to check it against).
+  if (sighting.source_platform === 'iaai') return parseIaaiLocation(sighting.location);
   return null;
 }
 
