@@ -430,6 +430,20 @@ city/state, with an unmatched or ambiguous result surfaced as "not quotable" rat
 approximation. Measured baseline: 65.5% matched, 34.5% unmatched, 0% ambiguous across all
 171 live sightings (`PLAN_TRACKER.md` §4.9/debt #32-34).
 
+**IAAI capture** (`chrome-extension/content-iaai.js`, Prompt 22 Stage 2/B1) reads a single
+source: `document.getElementById('ProductDetailsVM')`, a `<script type="application/json">`
+block IAAI embeds on every lot page regardless of login state — no DOM scraping. Location comes
+through as `"City (ST)"` (`attrs.BranchName`), the same shape bid.cars uses but parsed by its
+own `parseIaaiLocation()` in `yardMatchingService.ts` rather than reusing bid.cars' parser, so
+future format quirks on either platform can't silently bleed into the other. `lot_state` is
+always `'active'` — confirmed on the real platform that a sold/ended lot simply redirects to the
+search page rather than rendering a "sold" view, so IAAI sightings carry no closed-lot state to
+capture (see `docs/SOLVED.md` topic 21). `current_bid_usd`, `seller`, and `seller_type` are only
+populated when `auctionInformation.userLoginStatus === true` in the embedded JSON; logged-out,
+IAAI masks these fields (literal `"******"` for seller/seller_type, `0` for bid) rather than
+omitting them, so the capture gates on the real login flag instead of pattern-matching each
+field's mask shape.
+
 **`auction_fee_brackets`** (migration 031) — the two genuinely bracket-shaped Copart buyer
 fees (`fee_type`: `buyer_fee` | `bid_fee`), keyed on `member_account` (free text — Copart's
 own two real accounts, `Jamilu Danmusa Danmusa (Copart Non-Licensed)` and `White Nexus Ltd

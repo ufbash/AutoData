@@ -36,7 +36,7 @@ The genuinely open items, in rough priority order:
    confirmation step itself is unverified; nobody has clicked through it.
 2. **1.4** — warn when a brief is attached to a sold-comps run — **NOT STARTED**.
 3. **4.1** — auction alerts (24h/1h) — **NOT STARTED**, unblocked, designed in full.
-4. **B1** — IAAI content script — **NOT STARTED**.
+4. **B1** — IAAI content script — **DONE** (10 Sep 2026, Prompt 22 Stage 2). See §4.12 below.
 5. **C2** — duty calculator — **BLOCKED** on collecting 10+ assessment notices (standing
    habit, not a task).
 6. **C3** — client-facing cost display — blocked behind C2.
@@ -838,9 +838,39 @@ checkpoint is actually proving.
 
 ## 5. Phase B — coverage
 
-### B1. IAAI content script — **NOT STARTED**
-Same schema; image permutation `[2,1,4,3]`. Present in the original Camry sheet; the one
-source still missing.
+### B1. IAAI content script — **DONE** (10 Sep 2026, Prompt 22 Stage 2)
+`chrome-extension/content-iaai.js` — the last missing capture source, built against real
+authenticated-session HTML (two pastes required before writing any bid-state logic, after an
+unverified-assumption shortcut was flagged and rejected — see `docs/SOLVED.md` topic 21).
+Reads IAAI's embedded `ProductDetailsVM` JSON directly rather than scraping the DOM; login
+state (`auctionInformation.userLoginStatus`) gates `current_bid_usd`/`seller`/`seller_type`,
+since each field's own masked shape differs and pattern-matching them individually was
+already wrong on the first real test. `lot_state` is always `'active'` — confirmed on the
+real platform that sold lots redirect to search rather than rendering this page. Yard
+matching wired in via `parseIaaiLocation()` (`src/services/yardMatchingService.ts`) —
+`resolveEffectivePlatform()` already handled `'iaai'` from Prompt 20, but no location parser
+ever existed for it, so every IAAI sighting fell through to unmatched regardless of location
+quality until this build.
+
+**Verified against real data, not compile-only:**
+- Two real IAAI captures (one via Bashir's authenticated session) landed with correct
+  platform-appropriate fields — `location` in `"City (ST)"` form, `lot_state: 'active'`,
+  login-gated `current_bid_usd`/`seller`/`seller_type` populated only when logged in.
+- Yard matcher: both real IAAI sightings now resolve (100%, 0 unmatched, 0 ambiguous, 0
+  cross-platform leaks) — previously 0% by construction (missing parser branch).
+- Regression check against all existing Copart/bid.cars data (167 real sightings, 1740 real
+  yard rows): 70.7% matched, 0 cross-platform leaks — consistent with the Prompt 20 baseline
+  of 65.5%, confirming the IAAI parser addition caused no shared-code regression.
+- Live end-to-end capture confirmed unaffected by this session's shared-code changes: one
+  real Copart lot and one real bid.cars lot captured through the actual extension after the
+  yard-matcher change, both landing with correct platform-specific fields (`location`,
+  `source_auction_platform`, `current_bid_usd`) — see debt #46 for an unrelated finding
+  surfaced by this same pair of captures.
+
+**Known permanent gap, not a defect of this build:** IAAI exposes no sales-history panel
+analogous to bid.cars' — every IAAI sighting's `sale_confirmed` stays `false` indefinitely,
+the same "Unconfirmed sale" state Copart carries permanently per B2 above, for the same
+reason (the platform's own data model, not a missing feature).
 
 ### B2. Copart Sales History — **RETIRED — NOT BUILDABLE** (4 Sep 2026)
 Would have given parity with bid.cars, if exposed. **Copart does not expose the data.**
@@ -1094,3 +1124,4 @@ as evidence (public link renders the fix live).
 | 43 | Copart Secured vs. Unsecured requirement is an open question, not yet resolved — real money at stake | A $400 security deposit is on file with Copart, yet all three real invoices priced at Unsecured. **The deposit does not appear to confer Secured status**, and what actually does is unknown — not something to guess or research further, it needs a direct answer from Copart. Measured stake across the three invoices checked: $1,125 total, averaging $375/vehicle, 3.4–4.4% of sale price. Secured-tier rows stay in `auction_fee_brackets` as `official_tariff`, unconfirmed, and must not be entered or defaulted-to as if Secured status were already obtained |
 | 44 | `extract-vehicle-vision`'s prompt instructs the model to guess rather than abstain (found Prompt 22 Phase 1, not fixed — out of scope) | Its prompt reads: `"For 'originalCurrency', strictly use one of: 'NGN', 'USD', 'EUR', 'GBP'. Default to 'NGN' if ambiguous."` That is an explicit instruction to pick a value when the model cannot tell, not to abstain — directly contradicting `PROJECT_CHARTER.md` §5.4 ("AI never generates a price... A plausible-sounding invented price destroys a pricing product permanently"), since a wrong currency silently produces a wrong USD-converted price with no signal anything was uncertain. Correctly left unfixed here: Bulk Import / `extract-vehicle-vision` was not named in PROMPT_22's scope, and editing it risked exactly the kind of adjacent, unscoped change `AGENTS.md` §5 warns against. `extract-cost-document`'s prompt (this same build) deliberately does the opposite — see debt #45 |
 | 45 | `NOT_VISIBLE` existed only in documents, in no code, until Prompt 22 (found Prompt 22 Phase 1) | `DECISIONS.md` 9.5, `PLAN_TRACKER.md` §9, `MASTER_PLAN.md` Part X, and the deprecated `AutoData_Architecture_Plan_v4.md` all describe a `NOT_VISIBLE` anti-hallucination escape hatch as if it were an established convention already in use by vision prompting on this project. It was not — confirmed by grepping the entire repo before Phase 3 was written. `supabase/functions/extract-cost-document/index.ts`'s `EXTRACTION_PROMPT` is **the first real implementation** of this convention anywhere in the codebase (the literal string `"NOT_VISIBLE"`, normalized server-side into a `status: 'unreadable'` field marker — see `docs/SOLVED.md` topic 20). **When Daily Sniper (Phase F) is eventually built, it should reuse this exact convention and its normalization pattern, not invent a second one** — the same reasoning `isUnconfirmed`'s two-file duplication (debt #3) already exists to warn against |
+| 46 | Asset fingerprinting diverges when the same physical car is captured with and without a VIN, permanently splitting it into two assets (first found Prompt 22 Stage 2, caught again 10 Sep 2026 during B1 close-out verification) | A sighting with no VIN falls back to a make/model/year/trim/colour fingerprint to resolve or create an asset; a later capture of the *same physical car* that does carry a VIN computes a different, VIN-based fingerprint and creates a second, permanently separate asset — the two never merge on their own. Reproduced a second time, unprompted, during this build's own end-to-end verification: a real Copart lot (62572576, no VIN in that capture) and its bid.cars listing of the identical lot (VIN `3MYDLBYV3JY316392`) landed on two different `assets` rows (`71afaf80...` vs `94e1aaff...`), same make/model/year, same location. The first instance was manually merged (repoint the sighting's `asset_id`, delete the orphan) after explicit confirmation and a references check; this second instance was left as-is and only recorded here — a manual merge does not fix the underlying gap, and doing it repeatedly is itself a sign the fix belongs in the fingerprinting logic, not in one-off cleanup. Needs its own dedicated prompt: likely a re-fingerprint/merge pass triggered whenever a VIN arrives for an asset that was originally created without one, not a change to the fingerprint function itself |

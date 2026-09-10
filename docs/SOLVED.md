@@ -1372,3 +1372,59 @@ deterministic OCR engine cross-checked against the vision model, which this buil
 attempt). Treat dual-pass agreement as raising the bar for what a human reviewer should
 double-check quickly versus scrutinize carefully - never as a reason to skip the human step
 altogether.
+
+---
+
+## 21. IAAI capture - a real embedded JSON blob beats DOM scraping, and login state gates specific fields, not the whole page
+
+**The problem, stated plainly:** IAAI's lot page renders bid state, seller, and VIN
+differently depending on whether the viewer is logged in, and none of this was verifiable
+from documentation or by analogy to Copart/bid.cars - `AGENTS.md` §4.6 (never guess at
+DOM/JSON structure) and §4.1 (never guess `current_bid_usd`/`lot_state` as a liveness proxy,
+three prior real bugs) both applied directly. Proceeding on the assumption that a logged-out
+page is "identical to a logged-in view since login only gates the bidding widget" was flagged
+and rejected before any parser was written - that claim is itself unverified, stacked on top
+of the thing it exists to justify skipping. Two real authenticated-session HTML pastes were
+required before writing any bid-state logic.
+
+**What the real logged-in HTML actually showed:** IAAI embeds a complete, typed data source
+on every lot page - `<script type="application/json" id="ProductDetailsVM">` - containing
+`inventoryView.attributes`, `vehicleInformation`/`vehicleDescription`/`saleInformation`, and
+`auctionInformation` (including `prebidInformation` and a `userLoginStatus` boolean). This is
+present **regardless of login state**; it self-corrects rather than disappearing when logged
+out - masked values when logged out, real values when logged in. `chrome-extension/
+content-iaai.js` reads this JSON directly instead of scraping the DOM, which also turned out
+more complete: `imageDimensions.keys.$values` yielded 18 images on one real lot versus 11 from
+scraping rendered `<img>` tags.
+
+**The login-state bug, found via a real capture landing with garbage data:** the first
+version populated `current_bid_usd` as `0` and `seller`/`seller_type` as the literal string
+`"******"` when captured logged out, because each field's own masked shape was being
+pattern-matched individually. Masked shapes are not uniform - VIN keeps a real prefix when
+masked, Seller/SellerType become the literal `"******"` string, current bid becomes `0` - so
+matching each field's own mask pattern is fragile and was already wrong on the first real
+test. Fixed by gating all three login-restricted fields (`current_bid_usd`, `seller`,
+`seller_type`) on the single real signal, `auctionInformation.userLoginStatus === true`,
+leaving them unpopulated (not a guessed placeholder) when false.
+
+**Sold lots do not render this page at all - confirmed on the real platform, not assumed.**
+Following a sold lot's own link redirects to IAAI's search page; there is no sold/ended lot
+view to scrape in the first place. `lot_state: 'active'` is therefore set unconditionally by
+this content script - it is not an unverified default, it reflects that every page this
+script can ever run on is, by IAAI's own behaviour, an active lot.
+
+**The close-date field, and a mistake avoided:** IAAI's displayed close-date text reads
+"8:30am CDT" while the embedded JSON's `prebidInformation.adjustedCloseDate` differs from it
+by roughly an hour. The instinct to reconcile these by back-calculating an offset was
+rejected - `#AdjustedCloseDate` is IAAI's own field name for the value it intends consumers to
+treat as authoritative, and manufacturing an offset to match a differently-purposed display
+string risks quietly encoding a wrong assumption that breaks the next time IAAI changes either
+value's formatting. `sale_date` is read straight from `adjustedCloseDate`, unmodified.
+
+**A separate, unrelated bug found only by the user's own live testing, not by review:** the
+extension's popup kept reporting "Not on a supported lot page" on a real IAAI tab despite the
+content script matching. `manifest.json`'s `content_scripts.matches` glob
+(`*://*.iaai.com/VehicleDetail/*`) is case-sensitive with no case-insensitive option in the
+manifest format itself, and the real URL path was lowercase (`/vehicledetail/...`). Fixed by
+broadening the manifest match to the whole host (`*://*.iaai.com/*`) and moving the actual gate
+into JS as a case-insensitive regex, `isIaaiLotPage()`: `/^\/vehicledetail\/\d+/i`.
