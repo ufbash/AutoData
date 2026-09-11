@@ -1565,3 +1565,51 @@ for a bid.cars `sale_confirmed=false` row. Distinguishing them visually was rais
 deliberately deferred, consistent with the same call made in topic 22 for the client-facing
 "Unconfirmed sale" badge - not built now, recorded so a future reader doesn't read the shared
 rendering as an oversight.
+
+---
+
+## 24. A rule against an unselected field fails silently - and how to actually trust a zero
+
+**The confirmed pattern.** `current_bid_usd` was permanently `null` on every `RunListing` for
+as long as `listRunListings` existed (`PLAN_TRACKER.md` §4.15) - two compounding mistakes:
+`sightings.current_bid_usd`, the real column, was never in the query's select list, and the
+fallback (`raw_payload.current_bid_usd`) read a path that doesn't exist either (the real value
+sits one level deeper, at `raw_payload.captured_fields.current_bid_usd`). Nothing errored.
+Nothing warned. Every rule reading that field quietly evaluated a permanent `null` for years,
+and under the absence-is-not-violation doctrine, `null` reads as "no preference" - the failure
+mode is not loud, it is invisible, and it looks identical to "this rule correctly found nothing
+wrong."
+
+**Prompt 27 went looking for a second instance of the same mistake, deliberately** - three real
+findings (an unflagged 2012 car, false trim WARNs, a misleading A2 badge) all looked, on the
+surface, like they could be another silent-null case. They weren't. Auditing all nine
+spec-match rules (`ResearchRunDetail.tsx`) by hand - every listing-side field and every
+brief-side field, traced to its actual `.select()` and mapping code, not assumed - found both
+sides clean: `listRunListings`'s select already carried `mileage_miles`, `title_type`,
+`runs_and_drives` and (via the nested `assets` join) `year`, `trim`, `transmission`, `fuel`,
+`exterior_color`, all mapped from the real columns; `client_briefs:*` is a wildcard select, so
+no brief field can ever be silently dropped. **This is the useful negative result the pattern
+demands: checking and finding a class of bug absent is not wasted effort, it's the other half
+of "don't trust a zero without proving it."**
+
+**The actual causes, once plumbing was ruled out, were three different, more ordinary things:**
+a design boundary that already existed and was already disclosed in the UI (`sold_comps` runs
+never run spec/risk rules at all - `PROJECT_CHARTER.md` §5.6, `PLAN_TRACKER.md` debt #52); a
+vocabulary gap identical in shape to the Gas/Petrol and "Any, except White" fixes (topic 12) -
+an uncovered instance, not a broken mechanism (§4.16/2B); and a badge that computed the right
+trigger but discarded a field (`auction_history.status`) it already had access to when writing
+the message (§4.16/2C). None of these needed the `current_bid_usd` fix's shape of repair -
+proof that "a rule never fires" has more than one real cause, and jumping straight to the
+select-list explanation without checking would have been its own kind of unverified assumption.
+
+**The method that makes any of this trustworthy: synthetic fire/no-fire proof.** A rule with
+zero real positives is not evidence the rule works - it's equally consistent with the rule
+being silently broken. The only way to tell them apart is to construct a listing/brief pair
+that *must* trigger the rule and one that *must not*, and run the real logic (not a
+paraphrase of it) against both. Three of the nine rules here (year-min, transmission, fuel)
+had a genuine zero on live production data at the time of this audit - proven vacuous-by-
+lack-of-violating-data rather than vacuous-by-brokenness, by running the exact rule logic
+against synthetic pairs built specifically to trigger each one. This is the same principle
+that caught a structurally-unreachable guard earlier this session (topic 16) - a check that
+can never fire looks identical to a check that works, and the only way to know which one you
+have is to force it.

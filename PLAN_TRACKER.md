@@ -1076,6 +1076,85 @@ without dragging the other along.
 
 ---
 
+### 4.16 Spec-rule audit: all nine rules, plumbing verified clean; two real fixes; one design question surfaced — **DONE** (11 Sep 2026, Prompt 27)
+
+Three real findings from use: (A) a 2012 car in Ahmed Ibrahim's 2013–2016 Honda Accord brief
+went unflagged; (B) false "trim differs" WARNs on Mohammed Jamilu Danmusa's E-Class brief
+(`350`/`350 4MATIC` vs `E350` — the same trim, written differently); (C) an A2 badge reading
+"has been to auction before" on a listing that had run and **not sold**, implying a sale that
+never happened. Ran under this prompt's own standing authority — audit, then fix directly,
+without a per-item approval gate.
+
+**Full audit table — all nine spec-rule `if` blocks in `ResearchRunDetail.tsx`, quoted,
+fields traced both sides, proven with synthetic fire/no-fire input:**
+
+| # | Rule | Listing field | Brief field | Select-list status | Real behaviour | Synthetic proof |
+|---|---|---|---|---|---|---|
+| 1 | `:460` max mileage | `mileage_miles` | `max_mileage` | Both real columns | Fires correctly (3/21 real) | 150k>100k fires; 90k≤100k clean |
+| 2 | `:463` year min | `year` (via `assets`) | `year_min` | Both real columns | Correct logic; genuine zero on real data — see root cause below | 2012<2013 fires; 2013≥2013 clean |
+| 3 | `:466` year max | `year` | `year_max` | Both real columns | Fires correctly (4/21 real) | 2017>2016 fires; 2016≤2016 clean |
+| 4 | `:469` condition | `runs_and_drives` | `condition_required` | Both real columns | Fires correctly (3/21 real) | `false` fires; `true` clean |
+| 5 | `:474` titles accepted | `title_type` | `titles_accepted` | Both real columns | Fires correctly (1/21 real, also observed live) | Salvage∉[clean] fires; Clean∈[clean] clean |
+| 6 | `:502` colour | `exterior_color` (via `assets`) | `colour_preference` | Both real columns | Fires correctly, incl. exclusion path (1/21 real, also observed live) | White≠Black fires; Black=Black clean |
+| 7 | `:514` transmission | `transmission` (via `assets`) | `transmission` | Both real columns | Correct logic; genuine zero on real data | Manual≠Automatic fires; Auto≈Automatic clean |
+| 8 | `:526` fuel | `fuel` (via `assets`) | `fuel_type` | Both real columns | Correct logic; genuine zero on real data | Diesel≠Gas fires; Petrol≈Gas clean |
+| 9 | `:538` trim | `trim` (via `assets`) | `trim` | Both real columns | **Fired wrongly on Mercedes class-letter trims — fixed, §"2B" below** (5/21 real, incl. the 4 real false positives) | LX∌EX-L fires; EX-L Premium⊇EX-L clean |
+
+**No `current_bid_usd`-style select-list bug anywhere in these nine.** `listRunListings`
+(single source for all nine — one listing-object shape, unlike the three-shape §4.15 bug) and
+`client_briefs:*` (wildcard select — no brief field can ever be silently omitted) are both
+clean, confirmed by hand against the real `.select()`/mapping code, not assumed. Real
+production data also checked directly: of 21 live `active_listings`/`mixed` listings, rules 1,
+3, 4, 5, 6, 9 have genuinely fired; rules 2, 7, 8 show a genuine zero (proven vacuous-or-real by
+the synthetic pairs above, not left untrusted) — the handover's own #3, applied to all nine, not
+just the one Bashir happened to notice.
+
+**Root cause of Finding A — not a plumbing bug, a design boundary, correctly identified and
+left alone (stop conditions #2 and #5):** `ResearchRunDetail.tsx:401`'s `if (isActiveListings
+|| isMixed) { ... }` wraps **all nine spec rules AND A2's prior-auction-history hard block**
+(confirmed by brace-matching — one unbroken block, lines 401–618). **A `sold_comps`-type run
+never evaluates any of this, for any listing, ever.** Ahmed Ibrahim's real brief has exactly
+one run, and it is `sold_comps` — confirmed directly: two of its three included listings are
+real 2012 Accords, the year rule's logic is provably correct (synthetic proof above), and it
+simply never runs against this run's type. **This is `PROJECT_CHARTER.md` §5.6, applied
+consistently, not a bug** — "risk and spec rules apply [to active listings] and only here." A
+2012 Accord in 2013–2016 sold-comps research is legitimate market data; flagging it would
+apply client-protection rules to market history, exactly what §5.6 warns against. The app
+already says so, in the run's own UI, unprompted by this audit: *"Spec matching applies to
+active-listings runs only. This brief is stored with the run but no spec rules will run against
+it."* **Genuinely ambiguous, not decided here:** does Bashir want some signal — even
+informational, non-blocking — when a sold-comps run includes cars outside the brief's stated
+range, or is silent inclusion the intended behaviour for market research? A2's hard block sits
+in the identical gate, unweakened, untouched, flagged for awareness only since the prompt asked
+specifically about hard-block scope relative to these nine.
+
+**2B — trim vocabulary (Finding B), fixed.** See the dedicated commit — extends
+`specVocabulary.ts` with `trimMatches()`, deriving a class-letter prefix from the brief's own
+`model` (`"E-Class"` → `"E"`, or a named line like GLE/GLC/GLS/GLA/GLB/CLA/CLS/SLC/SLK whose
+model name already is the class letters) rather than hardcoding "Mercedes." Verified live: all
+4 real flagged listings on Danmusa's brief stop flagging; a genuinely different trim (`E550`)
+still flags, both by direct computation against the regex and structurally (the strip only
+fires on `<Letter><digit>`, so an unrelated trim word starting with the same letter, e.g.
+"Executive", is never touched).
+
+**2C — A2 badge wording (Finding C), fixed.** See the dedicated commit — `auctionHistoryFlags.ts`
+gains `previouslySold` alongside the existing `previouslyUnsold`; the badge text now reads
+differently for sold vs. not-sold vs. status-absent, with sold taking priority when a listing's
+history is mixed (a car that has EVER sold and reappeared is the closer-to-fraud signal per
+`PROJECT_CHARTER.md` §6, the stronger fact to surface). A2's trigger and hard-block behaviour
+are unchanged — wording only. Verified live against two real cases: Danmusa's Oklahoma City
+listing (`status: "Not sold"`) and a pre-existing test fixture, "ZZZ TEST - A2 Case1
+ActiveBlock" (a 2021 Tesla Model 3 with a real mixed Sold/Not sold/No information history) —
+both render the correct, distinct wording.
+
+**Debt: no universal vehicle database.** The class-letter fix is deliberately narrow (a prefix
+pattern, not a trim taxonomy) — a real vehicle-spec database (make/model/trim/generation,
+resolving "350" ≡ "E350" ≡ "E-Class 350" for any manufacturer's naming quirks generally) is the
+eventual general solution, and a large build in its own right. Not started here — recorded per
+this prompt's own explicit instruction not to build it.
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **DONE** (10 Sep 2026, Prompt 22 Stage 2)
@@ -1376,3 +1455,5 @@ as evidence (public link renders the fix live).
 | 48 | `sale_confirmed = null` means two different things depending on `logged_via`, and nothing in the UI currently distinguishes them (found Prompt 25, deferred per Bashir 10 Sep 2026) | On a `manual_entry`/`ai_vision` row, `null` is structural — no code path could ever set it, since neither entry method parses a sales-history table. On an `extension_dom_capture` row from Copart or IAAI, `null` means "unconfirmable by platform" — neither has any sales-history mechanism at all (`sale_confirmed` is written in exactly one place codebase-wide, bid.cars' own content script). On a bid.cars `extension_dom_capture` row, `null` can also mean "the sales-history table didn't parse to a confirmable status" — genuine inconclusive data. All three render identically today (excluded the same way, badged "Unconfirmed sale" the same way). Worth labelling differently eventually — e.g. "not tracked on this platform" vs. "sale status unclear" — not built now, per Bashir's explicit call when this was raised |
 | 49 | `getStats`'s `manual_entry`/`ai_vision` carve-out doesn't cover `api_import` (found Prompt 25, theoretical — not a live discrepancy) | `logged_via_enum` has a fourth value, `api_import`, that would structurally have the same "no sales-history mechanism, `null` is not ambiguity" property as `manual_entry`/`ai_vision` — but it's excluded from the carve-out in both `getStats` and this prompt's `public-run` mirror of it. Nothing in the codebase currently produces `api_import` rows (confirmed by grep), so this doesn't affect any real data today. Extend the carve-out to include it if `api_import` is ever wired up as a real ingestion path |
 | 50 | A third independent implementation of "the sold group" exists in `ResearchRunDetail.tsx` (found 11 Sep 2026, fixing the `current_bid_usd` mapping bug at §4.15) | `ResearchRunDetail.tsx:659-660`'s checklist WARNs (`limited_sample`, `different_model`, `population_mismatch`, `unconfirmed_sale`) compute their own `soldList` from `lot_state === 'finished'` alone — separate from `displayGroups`' sold/active split (also in this file, the one §4.15 fixed) and separate again from `public-run`'s own version (Prompt 25/debt #47). None of the three currently disagree in a way that's been observed live, and this one is correct on its own terms, but three divergent implementations of the same concept in one codebase is exactly the risk that materialised once already (debt #47) - worth consolidating if a fourth divergence is ever found, not before |
+| 51 | No universal vehicle database — trim/spec matching stays pattern-based (found/deferred 11 Sep 2026, Prompt 27) | The Mercedes class-letter fix (`trimMatches`, §4.16/2B) is deliberately narrow: a prefix-stripping pattern derived from the brief's own model, not a real vehicle taxonomy. A general solution — resolving "350" ≡ "E350" ≡ "E-Class 350" (or equivalent naming quirks for any manufacturer, not just German class-letter conventions) — needs an actual make/model/trim/generation reference database, which is a large, separate build (`SCHEMA.md` §4's E2 standardisation resolver anticipates something like this). Explicitly out of scope for Prompt 27; the class-letter pattern closes the real, reported gap without it |
+| 52 | Spec-match rules (all nine) and A2's hard block never evaluate against `sold_comps`-type runs (found 11 Sep 2026, Prompt 27 — genuinely ambiguous, not a bug) | `ResearchRunDetail.tsx:401`'s `if (isActiveListings \|\| isMixed)` gate wraps every spec rule and A2's prior-auction-history BLOCK in one unbroken block (lines 401-618) — a `sold_comps` run's listings are never checked against the brief's spec, or against prior-auction history, at all. Consistent with `PROJECT_CHARTER.md` §5.6 ("risk and spec rules apply to active listings and only here") and already disclosed in the run's own UI ("Spec matching applies to active-listings runs only"). This is why Ahmed Ibrahim's 2012 Accords in a 2013-2016 sold-comps run were never flagged — correct per the current design, not a plumbing bug. Left open: does Bashir want any signal (even informational) when a sold-comps run's own listings fall outside the brief's stated range? Not decided here — report only, per this prompt's own stop condition |
