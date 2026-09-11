@@ -116,9 +116,17 @@ const UploadPanel: React.FC<{ orgId: string; onUploaded: () => void }> = ({ orgI
   );
 };
 
+// PROMPT 28 Stage 2 - the currencies currencyService.ts can actually fetch a rate for. Not
+// the whole ISO list: adding a currency here without a corresponding entry in
+// currencyService's FALLBACK_RATES would let a reviewer pick one confirmExtraction can never
+// resolve a rate for.
+const CONFIRMABLE_CURRENCIES = ['usd', 'ngn', 'eur', 'gbp'] as const;
+const CURRENCY_LABELS: Record<string, string> = { usd: 'USD', ngn: 'NGN (Naira)', eur: 'EUR', gbp: 'GBP' };
+
 interface ReviewRowState {
   included: boolean;
   values: Record<string, string>;
+  currency: string;
 }
 
 const ReviewDetail: React.FC<{
@@ -148,13 +156,13 @@ const ReviewDetail: React.FC<{
         const f = row.fields[field];
         values[field] = f && f.status === 'read' && f.value != null ? String(f.value) : '';
       }
-      return { included: row.suggested_target_table === targetTable, values };
+      return { included: row.suggested_target_table === targetTable, values, currency: 'usd' };
     }));
   }, [targetTable, extraction]);
 
   const handleConfirm = async () => {
     setError(null);
-    const includedRows = rowStates.filter(r => r.included).map(r => r.values);
+    const includedRows = rowStates.filter(r => r.included).map(r => ({ ...r.values, currency: r.currency }));
     if (includedRows.length === 0) {
       setError('Include at least one row (check the box) to confirm.');
       return;
@@ -250,6 +258,28 @@ const ReviewDetail: React.FC<{
                   {row.cross_check && (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${row.cross_check === 'agreed' ? 'bg-green-50 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                       {row.cross_check === 'agreed' ? 'two passes agreed' : row.cross_check.replace(/_/g, ' ')}
+                    </span>
+                  )}
+                </div>
+                {/* PROMPT 28 Stage 2 - the reviewer's call, never the model's: the extraction
+                    prompt's currency guard marks a non-USD monetary field NOT_VISIBLE rather
+                    than guess, so a human reads the source document alongside this panel,
+                    types the real figure in its original currency, and picks that currency
+                    here. The FX rate itself is fetched at confirm time, never typed. */}
+                <div className="mb-2">
+                  <label className="block text-[10px] text-gray-500 mb-1">Currency (human-set)</label>
+                  <select
+                    value={state.currency}
+                    onChange={e => setRowStates(rs => rs.map((r, j) => j === i ? { ...r, currency: e.target.value } : r))}
+                    className="border border-gray-300 rounded px-2 py-1 text-xs"
+                  >
+                    {CONFIRMABLE_CURRENCIES.map(c => (
+                      <option key={c} value={c}>{CURRENCY_LABELS[c]}</option>
+                    ))}
+                  </select>
+                  {state.currency !== 'usd' && (
+                    <span className="text-[10px] text-blue-700 ml-2">
+                      Enter the amount below in {CURRENCY_LABELS[state.currency]} — the USD equivalent is fetched and frozen on confirm.
                     </span>
                   )}
                 </div>

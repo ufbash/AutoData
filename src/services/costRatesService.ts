@@ -24,6 +24,14 @@ export interface CostRate {
   effective_to: string | null;
   created_at: string;
   created_by: string | null;
+  // PROMPT 28 Stage 2 (C1d) - additive. 'usd' with the three below null for every row this
+  // admin screen itself ever creates (it has no currency picker - out of scope, no reported
+  // need for one here); a non-usd row only ever arrives via the extraction review screen's
+  // confirm step. Frozen at confirmation, never recomputed - see migration 033.
+  currency: string;
+  amount_usd: number | null;
+  fx_rate: number | null;
+  fx_rate_date: string | null;
 }
 
 export const listCostRates = async (orgId: string): Promise<CostRate[]> => {

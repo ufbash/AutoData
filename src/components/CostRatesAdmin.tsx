@@ -34,6 +34,21 @@ const SOURCE_LABELS: Record<CostRateSource, string> = {
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
+// PROMPT 28 Stage 2 (C1d) - a non-usd row's rate_value is in its ORIGINAL currency, not
+// dollars; labelling it with "$" here would be exactly the mislabeling this whole feature
+// exists to prevent, just relocated to this screen. Not a conversion - amount_usd is already
+// frozen at confirmation (migration 033); this only picks which precomputed figure to show.
+// showUsdEquivalent is only meaningful for rate_value itself - rate_value_max has no frozen
+// USD-equivalent field of its own (migration 033 only freezes the primary figure), so calling
+// this for the max value never appends one, rather than mismatching it against rate_value's.
+const formatRateAmount = (rate: CostRate, value: number, showUsdEquivalent = true): string => {
+  if (rate.rate_unit === 'percent') return `${value}%`;
+  if (rate.currency === 'usd') return `$${value.toLocaleString()}`;
+  const symbol = rate.currency.toUpperCase();
+  const usdEquivalent = showUsdEquivalent && rate.amount_usd != null ? ` (≈ $${rate.amount_usd.toLocaleString()})` : '';
+  return `${symbol} ${value.toLocaleString()}${usdEquivalent}`;
+};
+
 const emptyForm = (): NewCostRateInput => ({
   cost_category: 'inland_trucking',
   label: '',
@@ -317,12 +332,8 @@ const CostRatesAdmin: React.FC = () => {
                       </div>
                       <div className="mt-1 font-bold text-[#403f4c]">{rate.label}</div>
                       <div className="text-sm text-gray-600">
-                        {rate.rate_unit === 'percent' ? `${rate.rate_value}%` : `$${rate.rate_value.toLocaleString()}`}
-                        {rate.rate_value_max != null && (
-                          rate.rate_unit === 'percent'
-                            ? ` – ${rate.rate_value_max}%`
-                            : ` – $${rate.rate_value_max.toLocaleString()}`
-                        )}
+                        {formatRateAmount(rate, rate.rate_value)}
+                        {rate.rate_value_max != null && ` – ${formatRateAmount(rate, rate.rate_value_max, false)}`}
                       </div>
                       <div className="text-xs text-gray-400 mt-1">Effective from {rate.effective_from}</div>
                     </div>
@@ -379,10 +390,8 @@ const CostRatesAdmin: React.FC = () => {
                     </div>
                     <div className="mt-1 font-medium text-gray-600">{rate.label}</div>
                     <div className="text-sm text-gray-500">
-                      {rate.rate_unit === 'percent' ? `${rate.rate_value}%` : `$${rate.rate_value.toLocaleString()}`}
-                      {rate.rate_value_max != null && (
-                        rate.rate_unit === 'percent' ? ` – ${rate.rate_value_max}%` : ` – $${rate.rate_value_max.toLocaleString()}`
-                      )}
+                      {formatRateAmount(rate, rate.rate_value)}
+                      {rate.rate_value_max != null && ` – ${formatRateAmount(rate, rate.rate_value_max, false)}`}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
                       {rate.effective_from} → {rate.effective_to}

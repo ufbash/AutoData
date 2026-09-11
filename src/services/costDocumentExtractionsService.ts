@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient';
 import { CostCategory, CostRateBasis, CostRateUnit, CostRateSource } from './costRatesService';
+import { fetchExchangeRates } from './currencyService';
 
 // PROMPT 22 Phase 4 — the review/confirm screen's data layer. Reads/writes
 // cost_document_extractions (migration 032) and, only on confirm, writes to the appropriate
@@ -149,14 +150,56 @@ export interface ConfirmInput {
 // Writes each included row to the chosen live rate table, then marks the extraction
 // confirmed with the resulting row ids — never the other way around, so a partial failure
 // here never leaves the extraction claiming a confirmation that didn't actually land.
+// PROMPT 28 Stage 2 (C1d) - freeze at confirmation, never recompute at read
+// (PROJECT_CHARTER.md S5.10's dated-rate discipline, extended to currency). The FX rate is
+// fetched here, once for the whole confirm, never typed by the reviewer; the currency itself
+// is the reviewer's own call, read off the source document the extraction guard correctly
+// abstained on. A currency this can't resolve a rate for aborts before anything is written -
+// currencyService's own convertToUSD has a silent "return the unconverted amount" fallback
+// for a missing rate, which is exactly the ~1,395x mispricing class of bug this whole design
+// exists to prevent, so it is never reached from here: the rate's presence is checked first.
+interface CurrencyFields {
+  currency: string;
+  amount_usd: number | null;
+  fx_rate: number | null;
+  fx_rate_date: string | null;
+}
+
+const resolveCurrencyFields = (
+  rawAmount: number,
+  currencyRaw: string | undefined,
+  isPercentUnit: boolean,
+  rates: Record<string, number> | null,
+  fxDate: string
+): CurrencyFields => {
+  const currency = (currencyRaw || 'usd').toLowerCase();
+  // A percentage has no currency dimension to convert - always usd, regardless of what the
+  // reviewer selected, since the stored value is a rate, not an amount.
+  if (currency === 'usd' || isPercentUnit) {
+    return { currency: 'usd', amount_usd: null, fx_rate: null, fx_rate_date: null };
+  }
+  const code = currency.toUpperCase();
+  const rate = rates?.[code];
+  if (!rate) {
+    throw new Error(`No exchange rate available for currency "${code}" - cannot confirm without a fetched rate.`);
+  }
+  const amountUsd = Math.round((rawAmount / rate) * 100) / 100;
+  return { currency, amount_usd: amountUsd, fx_rate: rate, fx_rate_date: fxDate };
+};
+
 export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> => {
   const { orgId, userId, extractionId, targetTable, source, effectiveFrom, rows } = input;
   if (rows.length === 0) throw new Error('At least one row must be included to confirm.');
+
+  const needsRates = rows.some(r => (r.currency || 'usd').toLowerCase() !== 'usd');
+  const rates = needsRates ? await fetchExchangeRates() : null;
+  const fxDate = new Date().toISOString().slice(0, 10);
 
   const insertedIds: string[] = [];
 
   for (const row of rows) {
     if (targetTable === 'cost_rates') {
+      const currencyFields = resolveCurrencyFields(Number(row.rate_value), row.currency, row.rate_unit === 'percent', rates, fxDate);
       const { data, error } = await supabase.from('cost_rates').insert({
         org_id: orgId,
         created_by: userId,
@@ -169,10 +212,12 @@ export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> 
         source,
         effective_from: effectiveFrom,
         effective_to: null,
+        ...currencyFields,
       }).select('id').single();
       if (error) throw new Error(`Failed to insert cost_rates row ("${row.label}"): ${error.message}`);
       insertedIds.push(data.id);
     } else if (targetTable === 'trucking_rates') {
+      const currencyFields = resolveCurrencyFields(Number(row.price), row.currency, false, rates, fxDate);
       const portRaw = String(row.destination_port_raw || '').trim();
       const { data, error } = await supabase.from('trucking_rates').insert({
         org_id: orgId,
@@ -189,10 +234,12 @@ export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> 
         source,
         effective_from: effectiveFrom,
         effective_to: null,
+        ...currencyFields,
       }).select('id').single();
       if (error) throw new Error(`Failed to insert trucking_rates row: ${error.message}`);
       insertedIds.push(data.id);
     } else if (targetTable === 'auction_fee_brackets') {
+      const currencyFields = resolveCurrencyFields(Number(row.fee_value), row.currency, row.fee_unit === 'percent', rates, fxDate);
       const { data, error } = await supabase.from('auction_fee_brackets').insert({
         org_id: orgId,
         created_by: userId,
@@ -209,6 +256,7 @@ export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> 
         source,
         effective_from: effectiveFrom,
         effective_to: null,
+        ...currencyFields,
       }).select('id').single();
       if (error) throw new Error(`Failed to insert auction_fee_brackets row: ${error.message}`);
       insertedIds.push(data.id);
