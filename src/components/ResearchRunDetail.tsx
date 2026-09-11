@@ -19,7 +19,7 @@ import {
   deleteSighting
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
-import { parsePreference, colourMatches, transmissionMatches, fuelMatches } from '../utils/specVocabulary';
+import { parsePreference, colourMatches, transmissionMatches, fuelMatches, trimMatches } from '../utils/specVocabulary';
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
@@ -536,7 +536,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
           }
         }
         if (brief.trim != null && brief.trim !== '' && brief.trim.toLowerCase() !== 'either' && l.trim != null) {
-          if (!l.trim.toLowerCase().includes(brief.trim.toLowerCase())) {
+          if (!trimMatches(l.trim, brief.trim, brief.model)) {
             addSpecRule(specWarn, `trim differs (${l.trim} vs ${brief.trim} requested)`, l.id);
           }
         }

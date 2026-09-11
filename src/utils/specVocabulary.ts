@@ -72,6 +72,54 @@ export function transmissionMatches(listingTransmission: string, briefTransmissi
   return normalisedIncludes(listingTransmission, briefTransmission, TRANSMISSION_GROUPS);
 }
 
+// --- Trim: the class-letter prefix (Prompt 27 Phase 2B) ---
+//
+// Real bug, found live: on a Mercedes E-Class brief, listings captured as trim "350" and
+// "350 4MATIC" both flagged WARN against a brief trim of "E350" - they are the same trim.
+// Mercedes (and other German makes) commonly omit the class letter when a listing source
+// writes out the trim on its own, since the model field ("E-Class") already carries it. The
+// existing containment check (`listing.includes(brief)`) never had a chance: "350" plainly
+// does not contain "E350" as a substring.
+//
+// Not a vocabulary-group problem like Gas/Petrol - there's no fixed synonym list, the letter
+// itself is the class marker and it can legitimately be absent on either side. Derived from
+// the BRIEF's own model (the class the client actually asked for), never hardcoded to
+// "Mercedes" as a string - the same "<Letter>-Class" shape covers C/E/S-Class, and named
+// SUV/coupe lines (GLE/GLC/GLS/GLA/GLB/CLA/CLS) are matched directly since their model name
+// already IS the class letters, with no separate "Class" suffix to parse off of.
+const NAMED_CLASS_MODELS = ['GLE', 'GLC', 'GLS', 'GLA', 'GLB', 'CLA', 'CLS', 'SLC', 'SLK'];
+
+function extractClassLetter(model: string | null | undefined): string | null {
+  if (!model) return null;
+  const trimmed = model.trim();
+  const classSuffixMatch = trimmed.match(/^([A-Za-z])[\s-]*Class\b/i);
+  if (classSuffixMatch) return classSuffixMatch[1].toUpperCase();
+  const named = NAMED_CLASS_MODELS.find(n => new RegExp(`^${n}\\b`, 'i').test(trimmed));
+  return named ?? null;
+}
+
+// Strips the class letter only when it directly prefixes a number ("E350" -> "350"), so a
+// genuinely different trim word starting with the same letter ("Executive") is never touched -
+// it will never match `^<Letter>\d`.
+function stripClassLetterPrefix(trim: string, classLetter: string | null): string {
+  if (!classLetter) return trim;
+  return trim.replace(new RegExp(`^${classLetter}(\\d)`, 'i'), '$1');
+}
+
+/**
+ * True if `listingTrim` and `briefTrim` describe the same trim once a shared class-letter
+ * prefix (derived from the brief's own model, e.g. "E-Class" -> "E") is normalised off both
+ * sides. Preserves the existing containment behaviour otherwise (a listing's drivetrain
+ * qualifier, e.g. "4MATIC", still matches a brief with none) and is a complete no-op - byte
+ * for byte the old behaviour - whenever `briefModel` doesn't resolve to a class letter at all.
+ */
+export function trimMatches(listingTrim: string, briefTrim: string, briefModel?: string | null): boolean {
+  const classLetter = extractClassLetter(briefModel);
+  const listing = stripClassLetterPrefix(listingTrim.trim(), classLetter).toLowerCase();
+  const brief = stripClassLetterPrefix(briefTrim.trim(), classLetter).toLowerCase();
+  return listing.includes(brief);
+}
+
 // --- Negative and open preferences (Prompt 16 Phase 3) ---
 //
 // A brief's free-text preference field can mean three different things, and conflating them is
