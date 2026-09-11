@@ -668,6 +668,9 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
         lot_state,
         sale_confirmed,
         current_bid_usd,
+        estimated_retail_value_usd,
+        estimated_cost_low_usd,
+        estimated_cost_high_usd,
         stored_image_urls,
         image_store_status,
         images_stored_at,
@@ -698,7 +701,11 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
   return (data || []).map((row: any) => {
     const sighting = Array.isArray(row.sightings) ? row.sightings[0] : (row.sightings || {});
     const asset = Array.isArray(sighting.assets) ? sighting.assets[0] : (sighting.assets || {});
-    const raw = sighting.raw_payload || {};
+    // PROMPT 29 Stage 3 - `const raw = sighting.raw_payload || {}` used to live here. Removed:
+    // every field that was ever read off it has now been fixed to read the real sightings
+    // column instead (current_bid_usd - Prompt 27; estimated_retail_value_usd/
+    // estimated_cost_low_usd/estimated_cost_high_usd - this stage), so nothing reads raw_payload
+    // in this function any more.
     return {
       id: row.id,
       sighting_id: row.sighting_id,
@@ -727,9 +734,16 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       current_bid_usd: sighting.current_bid_usd ?? null,
       listed_price: sighting.listed_price ?? null,
       listed_currency: sighting.listed_currency ?? null,
-      estimated_retail_value_usd: raw.estimated_retail_value_usd ?? null,
-      estimated_cost_low_usd: raw.estimated_cost_low_usd ?? null,
-      estimated_cost_high_usd: raw.estimated_cost_high_usd ?? null,
+      // Fixed 11 Sep 2026 (Prompt 29 Stage 3) - the fourth instance of the current_bid_usd
+      // bug: raw.estimated_*_usd read raw_payload's top level, where these fields never live -
+      // the real values sit at raw_payload.captured_fields.estimated_*_usd, and the real
+      // sightings columns (correctly populated at capture time - research-capture/index.ts)
+      // weren't selected at all. Always null since this function existed.
+      // estimated_retail_value_usd has a live consumer (VehicleDetailModal.tsx's "Estimated
+      // Retail Value" line) that has therefore always rendered blank for every listing.
+      estimated_retail_value_usd: sighting.estimated_retail_value_usd ?? null,
+      estimated_cost_low_usd: sighting.estimated_cost_low_usd ?? null,
+      estimated_cost_high_usd: sighting.estimated_cost_high_usd ?? null,
       seller_type: sighting.seller_type || null,
       sale_date: sighting.sale_date || null,
       has_key: sighting.has_key ?? null,
