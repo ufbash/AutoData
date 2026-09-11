@@ -1,10 +1,26 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+// PROMPT 29 Stage 2 - the single definition of the sold population, shared literally with the
+// staff dashboard (src/components/ResearchRunDetail.tsx imports this same file). Closes the
+// divergence that caused the Prompt 25 client-facing bug: there is no second copy to drift.
+import { isInSoldPopulation, countsTowardSoldAverage, SoldGroupListing, RunType } from "../_shared/soldGroup.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// The nested sighting row this function selects, reduced to the shape the shared rules read.
+// Explicit rather than a cast, so a future select-list change that drops one of these fields
+// is a type error here instead of a silently-null rule (the AGENTS.md §4 failure mode).
+const soldGroupShape = (sighting: any): SoldGroupListing => ({
+  lot_state: sighting.lot_state ?? null,
+  current_bid_usd: sighting.current_bid_usd ?? null,
+  price_usd: sighting.price_usd ?? null,
+  sale_confirmed: sighting.sale_confirmed ?? null,
+  logged_via: sighting.logged_via ?? null,
+  source_platform: sighting.source_platform ?? null,
+});
 
 serve(async (req) => {
   // 1. CORS Preflight
@@ -281,10 +297,21 @@ serve(async (req) => {
       }
     }
 
+    // PROMPT 29 Stage 2 - keyed off the real, raw sighting (which carries lot_state) rather
+    // than the mapped public object (which deliberately never exposes lot_state at all - see
+    // the allow-list below). This is the exact same "which listings are the sold population"
+    // question the stats block used to answer with a narrower, fourth copy of the predicate
+    // (`current_bid_usd === null` alone, missing the `lot_state !== 'active'` clause a real
+    // mixed run needs) - found auditing this file for Stage 2, not reported by any prompt.
+    const inSoldPopulationById = new Map<string, boolean>();
+    (listingsData || []).forEach((row: any) => {
+      inSoldPopulationById.set(row.id, isInSoldPopulation(soldGroupShape(row.sighting || {}), run.run_type));
+    });
+
     const publicListings = (listingsData || []).map((row: any) => {
       const sighting = row.sighting || {};
       const asset = sighting.asset || {};
-      
+
       const mapped: any = {
         // PROMPT 19 Phase 3 - deliberate, minimal widening (PROJECT_CHARTER.md S5.9):
         // `id` is the opaque listing identifier the client needs to reference when
@@ -345,12 +372,13 @@ serve(async (req) => {
         // (same predicate, same manual_entry/ai_vision carve-out) rather than inventing a
         // second standard. Only meaningful within the sold population for this run's type -
         // false for every active listing, which has no "confirmed sale" concept at all.
+        // PROMPT 29 Stage 2 - the predicate that used to be re-derived here now comes from the
+        // shared definition (../_shared/soldGroup.ts), imported literally by this function AND
+        // by ResearchRunDetail.tsx. This exact re-derivation is what silently diverged for
+        // months and produced the Prompt 25 bug; there is now nothing left to diverge FROM.
         sale_unconfirmed: (() => {
-          const isSoldGroup = run.run_type === 'sold_comps' || (run.run_type === 'mixed' && sighting.current_bid_usd === null);
-          if (!isSoldGroup) return false;
-          if (sighting.sale_confirmed === false) return true;
-          if (sighting.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(sighting.logged_via)) return true;
-          return false;
+          if (!isInSoldPopulation(soldGroupShape(sighting), run.run_type)) return false;
+          return !countsTowardSoldAverage(soldGroupShape(sighting));
         })(),
 
         // PROMPT 28 Stage 1 - disclosure, not a spec flag (PROJECT_CHARTER.md S5.1: widen
@@ -359,8 +387,7 @@ serve(async (req) => {
         // an unknown year is not a violation (S4.1), it is unclassifiable, and stays null.
         // Never excludes the listing from anything; purely informational.
         range_status: (() => {
-          const isSoldGroup = run.run_type === 'sold_comps' || (run.run_type === 'mixed' && sighting.current_bid_usd === null);
-          if (!isSoldGroup || !rangeStated || asset.year == null) return null;
+          if (!isInSoldPopulation(soldGroupShape(sighting), run.run_type) || !rangeStated || asset.year == null) return null;
           const belowMin = briefYearMin != null && asset.year < briefYearMin;
           const aboveMax = briefYearMax != null && asset.year > briefYearMax;
           return (belowMin || aboveMax) ? 'out_of_range' : 'in_range';
@@ -378,9 +405,10 @@ serve(async (req) => {
       let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
       let rangeInCount = 0, rangeOutCount = 0, rangeUnknownCount = 0;
 
-      const soldListings = run.run_type === 'mixed'
-        ? publicListings.filter((l: any) => l.current_bid_usd === null)
-        : publicListings;
+      // PROMPT 29 Stage 2 - now the same shared predicate as everywhere else, keyed by id
+      // against the raw-sighting-derived map above (this mapped object has no lot_state to
+      // check directly - see the allow-list note where `mapped` is built).
+      const soldListings = publicListings.filter((l: any) => inSoldPopulationById.get(l.id) === true);
 
       soldListings.forEach((l: any) => {
         // PROMPT 25 - matches getStats' exact rule (ResearchRunDetail.tsx): an unconfirmed

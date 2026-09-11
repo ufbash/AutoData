@@ -21,6 +21,10 @@ import {
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
 import { parsePreference, colourMatches, transmissionMatches, fuelMatches, trimMatches } from '../utils/specVocabulary';
+// PROMPT 29 Stage 2 - the one definition of the sold population, imported literally (not
+// copied) by both this component and the public-run Edge Function. See that file's header for
+// why it lives under supabase/functions/_shared/ and how both toolchains parse it.
+import { countsTowardSoldAverage, isInSoldPopulation, classifySaleConfirmation } from '../../supabase/functions/_shared/soldGroup.ts';
 import AddCapturesModal from './AddCapturesModal';
 import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
@@ -310,14 +314,10 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     let rangeInCount = 0, rangeOutCount = 0, rangeUnknownCount = 0;
     const rangeStated = isSoldGroup && !!brief && (brief.year_min != null || brief.year_max != null);
     list.forEach(l => {
-      let includePrice = true;
-      if (isSoldGroup) {
-        if (l.sale_confirmed === false) {
-          includePrice = false;
-        } else if (l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via)) {
-          includePrice = false;
-        }
-      }
+      // PROMPT 29 Stage 2 - the inline predicate that used to live here is now the shared
+      // definition in supabase/functions/_shared/soldGroup.ts, imported literally by both this
+      // component and public-run. Same rule, one copy (debt #47/#50).
+      const includePrice = isSoldGroup ? countsTowardSoldAverage(l) : true;
 
       const p = l.price_usd;
       if (p !== null && includePrice) {
@@ -356,9 +356,12 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   const isSoldComps = run.run_type === 'sold_comps';
   const isActiveListings = run.run_type === 'active_listings';
 
+  // PROMPT 29 Stage 2 - sold-group membership now comes from the shared definition; the
+  // live-group filter stays as-is (it is the complement in practice, and is not one of the
+  // three divergent sold-group definitions this stage unified).
   const displayGroups = isMixed
     ? [
-        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null), true, run.client_brief), type: 'sold' },
+        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => isInSoldPopulation(l, 'mixed')), true, run.client_brief), type: 'sold' },
         { label: "Client Options (Live)", stats: getStats(includedListings.filter(l => l.lot_state !== 'finished' && l.current_bid_usd !== null), false), type: 'active' }
       ]
     : [
@@ -678,14 +681,13 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   // average and the count, always. Mirrors the exact same "is this listing in the sold group,
   // and is its price actually counted" logic getStats uses for the same run, so the per-listing
   // label can never disagree with the composition line it sits next to.
-  const soldGroupForDisclosure = isMixed
-    ? includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null)
-    : (isSoldComps ? includedListings : []);
+  // PROMPT 29 Stage 2 - both halves (sold-group membership, and whether the price counts) now
+  // come from the shared definition rather than a fourth inline copy.
+  const soldGroupForDisclosure = includedListings.filter(l => isInSoldPopulation(l, run.run_type as any));
   const rangeDisclosureOffenders: string[] = [];
   if (run.client_brief && (run.client_brief.year_min != null || run.client_brief.year_max != null)) {
     soldGroupForDisclosure.forEach(l => {
-      const isUnconfirmed = l.sale_confirmed === false || (l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via));
-      if (l.price_usd === null || isUnconfirmed || l.year == null) return; // absence is not violation - unknown year says nothing
+      if (l.price_usd === null || !countsTowardSoldAverage(l) || l.year == null) return; // absence is not violation - unknown year says nothing
       const belowMin = run.client_brief!.year_min != null && l.year < run.client_brief!.year_min;
       const aboveMax = run.client_brief!.year_max != null && l.year > run.client_brief!.year_max;
       if (belowMin || aboveMax) rangeDisclosureOffenders.push(l.id);
@@ -722,7 +724,11 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   });
 
   if (isSoldComps || isMixed) {
-    const soldList = isMixed ? includedListings.filter(l => l.lot_state === 'finished') : includedListings;
+    // PROMPT 29 Stage 2 (debt #50) - this was the third, divergent definition of the sold
+    // group (`lot_state === 'finished'` alone). It now routes through the same shared
+    // predicate as the displayed average and the client page. Verified 11 Sep 2026 that both
+    // predicates select identical rows on every live mixed run, so no WARN count moved.
+    const soldList = includedListings.filter(l => isInSoldPopulation(l, run.run_type as any));
     const soldStats = getStats(soldList, true);
     
     // 3. Limited sample (WARN)
@@ -826,7 +832,17 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     }
 
     // Unconfirmed Sale (WARN)
-    const unconfirmedSaleOffenders = soldList.filter(l => l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via)).map(l => l.id);
+    // PROMPT 29 Stage 2 - same shared classifier. A row is flagged here exactly when its null
+    // is NOT the structural kind (an entry method with no sales-history mechanism at all) -
+    // i.e. 'platform_has_no_mechanism' (Copart/IAAI, unconfirmable by platform) or
+    // 'inconclusive' (bid.cars checked and got no determinate answer). Same set as before,
+    // now named rather than re-derived from a raw null test.
+    const unconfirmedSaleOffenders = soldList
+      .filter(l => {
+        const kind = classifySaleConfirmation(l).kind;
+        return kind === 'platform_has_no_mechanism' || kind === 'inconclusive';
+      })
+      .map(l => l.id);
     checklistItems.push({
       id: 'unconfirmed_sale',
       type: 'WARN',
