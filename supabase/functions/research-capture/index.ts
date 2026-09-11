@@ -139,6 +139,10 @@ serve(async (req: Request) => {
     // Upsert into assets
     let assetId;
     let wasDuplicate = false;
+    // PROMPT 29 Stage 1 (debt #46) - set when this capture upgraded an existing VIN-less asset
+    // in place, or declined to. Reported in the response and stamped on the sighting's
+    // raw_payload, so the decision is auditable after the fact rather than invisible.
+    let fingerprintOutcome: Record<string, unknown> | null = null;
     const { data: existingAsset, error: findError } = await supabase
       .from('assets')
       .select('id, body_style, cylinders, engine_type, transmission, fuel, drivetrain, exterior_color, trim, interior_color, horsepower')
@@ -146,6 +150,78 @@ serve(async (req: Request) => {
       .maybeSingle();
 
     if (findError) throw findError;
+
+    // PROMPT 29 Stage 1 (debt #46) - fingerprint revision on VIN discovery.
+    //
+    // The bug: a capture with no VIN fingerprints on make/model/year/trim/colour; a later
+    // capture of the SAME physical car WITH a VIN fingerprints on the VIN instead, so the car
+    // splits into two permanent assets and the first is orphaned - no future capture can ever
+    // reattach to it. IAAI reproduces this on demand: it masks the VIN logged-out and reveals
+    // it logged-in (PLAN_TRACKER.md B1).
+    //
+    // A VIN is strictly better evidence than the VIN-less formula, so the upgrade runs in one
+    // direction only: a VIN-bearing capture may claim an existing VIN-less asset. A VIN-less
+    // capture never merges into a VIN-bearing asset - it simply takes the VIN-less path below,
+    // exactly as before, because weaker evidence must never collapse two records.
+    //
+    // Deliberately NOT implemented: a "more than one candidate asset" ambiguity branch.
+    // assets.fingerprint_hash is `text unique not null` (migration 002:14, verified enforced in
+    // production), so a lookup by VIN-less fingerprint returns at most one row and that branch
+    // could never fire. Shipping it would repeat the structurally-unreachable guard already
+    // documented in docs/SOLVED.md topic 16. The reachable abstention is a CONFLICT: the
+    // VIN-less fingerprint matches an asset that already carries a DIFFERENT VIN, which means
+    // these are two different cars that happen to share make/model/year/trim/colour. That
+    // abstains - a wrong merge fuses two real cars' histories and is far harder to detect
+    // afterwards than a split.
+    const hasUsableVin = typeof cf.vin === 'string' && cf.vin.length >= 11;
+    if (!existingAsset && hasUsableVin) {
+      const { data: vinlessHash, error: vinlessRpcError } = await supabase.rpc("generate_fingerprint", {
+        p_vin: null,
+        p_make: cf.make ?? null,
+        p_model: cf.model ?? null,
+        p_year: cf.year ?? null,
+        p_trim: cf.trim ?? null,
+        p_exterior_color: cf.exterior_color ?? null,
+        p_interior_color: cf.interior_color ?? null,
+        p_origin_status: null
+      });
+      if (vinlessRpcError) throw new Error(`RPC generate_fingerprint (vin-less probe) failed: ${vinlessRpcError.message}`);
+
+      const { data: vinlessCandidate, error: vinlessFindError } = await supabase
+        .from('assets')
+        .select('id, vin')
+        .eq('fingerprint_hash', vinlessHash)
+        .maybeSingle();
+      if (vinlessFindError) throw vinlessFindError;
+
+      if (vinlessCandidate && vinlessCandidate.vin === null) {
+        // Upgrade in place: the same row acquires the VIN and the VIN-based fingerprint, so
+        // every sighting and auction_history row already pointing at it follows automatically -
+        // nothing is repointed, nothing is orphaned, because no second asset is ever created.
+        const { error: upgradeError } = await supabase
+          .from('assets')
+          .update({ vin: cf.vin, fingerprint_hash: fingerprintHash, updated_at: new Date().toISOString() })
+          .eq('id', vinlessCandidate.id)
+          .is('vin', null); // race guard: only upgrade while it is still VIN-less
+        if (upgradeError) throw upgradeError;
+
+        assetId = vinlessCandidate.id;
+        wasDuplicate = true;
+        fingerprintOutcome = {
+          action: 'upgraded_vinless_asset',
+          asset_id: vinlessCandidate.id,
+          acquired_vin: cf.vin,
+        };
+      } else if (vinlessCandidate && vinlessCandidate.vin !== null && vinlessCandidate.vin !== cf.vin) {
+        fingerprintOutcome = {
+          action: 'abstained_vin_conflict',
+          candidate_asset_id: vinlessCandidate.id,
+          candidate_vin: vinlessCandidate.vin,
+          incoming_vin: cf.vin,
+          note: 'VIN-less fingerprint matched an asset carrying a different VIN - two different cars sharing make/model/year/trim/colour. Created a separate asset rather than fusing their histories.',
+        };
+      }
+    }
 
     if (existingAsset) {
       assetId = existingAsset.id;
@@ -168,6 +244,9 @@ serve(async (req: Request) => {
         updates.updated_at = new Date().toISOString();
         await supabase.from('assets').update(updates).eq('id', assetId);
       }
+    } else if (assetId) {
+      // Already resolved by the VIN-discovery upgrade above - that row IS this car, and it
+      // now carries the VIN. Creating anything here is exactly the split this stage fixes.
     } else {
       const { data: newAsset, error: insertError } = await supabase
         .from('assets')
@@ -230,6 +309,12 @@ serve(async (req: Request) => {
     if (conversionFailed) {
       rawPayloadToSave.price_usd_conversion_failed = true;
       rawPayloadToSave.attempted_currency = listedCurrency;
+    }
+    // PROMPT 29 Stage 1 - same stamping pattern as the conversion failure above: a
+    // fingerprint upgrade or a declined merge is recorded on the sighting that caused it, so
+    // it is queryable later rather than existing only in this function's response.
+    if (fingerprintOutcome) {
+      rawPayloadToSave.asset_fingerprint_outcome = fingerprintOutcome;
     }
 
     // Sighting Data
@@ -391,7 +476,8 @@ serve(async (req: Request) => {
       sighting_id: newSightingId,
       fingerprint: fingerprintHash,
       run_listing_id: runListingId,
-      was_duplicate: wasDuplicate
+      was_duplicate: wasDuplicate,
+      fingerprint_outcome: fingerprintOutcome
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
