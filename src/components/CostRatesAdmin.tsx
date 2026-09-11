@@ -11,6 +11,7 @@ import {
   CostRateSource,
   NewCostRateInput,
 } from '../services/costRatesService';
+import { getPaymentTier, setPaymentTier as savePaymentTier, PaymentTier } from '../services/orgSettingsService';
 import { Loader2, Plus, RefreshCw, History } from 'lucide-react';
 
 const CATEGORY_LABELS: Record<CostCategory, string> = {
@@ -237,12 +238,22 @@ const CostRatesAdmin: React.FC = () => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [supersedingId, setSupersedingId] = useState<string | null>(null);
 
+  // PROMPT 29 Stage 4 - payment tier as configuration, not a hardcoded constant
+  // (bidHeadroomService.ts used to hardcode PAYMENT_TIER = 'unsecured'). No evidence supports
+  // Secured today (PLAN_TRACKER.md debt #43) - this control exists so a real answer from
+  // Copart becomes a settings change, not a code change and redeploy. Default unchanged.
+  const [paymentTier, setPaymentTierState] = useState<PaymentTier>('unsecured');
+  const [savingTier, setSavingTier] = useState(false);
+  const [tierSavedAt, setTierSavedAt] = useState<number | null>(null);
+
   const load = async () => {
     if (!orgId) return;
     setLoading(true);
     setError(null);
     try {
-      setRates(await listCostRates(orgId));
+      const [rateRows, tier] = await Promise.all([listCostRates(orgId), getPaymentTier(orgId)]);
+      setRates(rateRows);
+      setPaymentTierState(tier);
     } catch (err: any) {
       setError(err.message || 'Failed to load cost rates.');
     } finally {
@@ -251,6 +262,21 @@ const CostRatesAdmin: React.FC = () => {
   };
 
   useEffect(() => { load(); }, [orgId]);
+
+  const handleTierChange = async (tier: PaymentTier) => {
+    if (!orgId || !user || tier === paymentTier) return;
+    setSavingTier(true);
+    setError(null);
+    try {
+      await savePaymentTier(orgId, user.id, tier);
+      setPaymentTierState(tier);
+      setTierSavedAt(Date.now());
+    } catch (err: any) {
+      setError(err.message || 'Failed to save payment tier.');
+    } finally {
+      setSavingTier(false);
+    }
+  };
 
   if (role !== 'superadmin') {
     return (
@@ -282,6 +308,32 @@ const CostRatesAdmin: React.FC = () => {
         >
           <Plus className="w-4 h-4" /> Add a Rate
         </button>
+      </div>
+
+      {/* PROMPT 29 Stage 4 - this screen is already superadmin-only end to end (the gate
+          above), so nothing further is needed to satisfy "editable by superadmin." */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">Copart Payment Tier</h2>
+        <p className="text-xs text-gray-500 mb-3">
+          Which bracket schedule auction-fee calculations read (both are already stored, 153 Secured / 171 Unsecured rows).
+          All three real Copart invoices seen priced Unsecured — no evidence supports Secured today (PLAN_TRACKER.md debt #43).
+          Change this only on a direct answer from Copart about the $400 deposit on file.
+        </p>
+        <div className="flex items-center gap-3">
+          <select
+            value={paymentTier}
+            disabled={savingTier}
+            onChange={e => handleTierChange(e.target.value as PaymentTier)}
+            className="border border-gray-300 rounded-md px-3 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            <option value="unsecured">Unsecured (default)</option>
+            <option value="secured">Secured</option>
+          </select>
+          {savingTier && <Loader2 className="w-4 h-4 text-[#a58039] animate-spin" />}
+          {!savingTier && tierSavedAt !== null && Date.now() - tierSavedAt < 4000 && (
+            <span className="text-xs text-green-700">Saved</span>
+          )}
+        </div>
       </div>
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}

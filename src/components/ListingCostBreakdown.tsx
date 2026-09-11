@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { RunListing } from '../services/researchService';
 import { listPortsForYard, PortSummary } from '../services/truckingRatesService';
 import { computeBidHeadroom, getFeeBracketBoundaries, BidHeadroomResult, CostComponent, FeeBoundaries } from '../services/bidHeadroomService';
+import { getPaymentTier, PaymentTier, DEFAULT_PAYMENT_TIER } from '../services/orgSettingsService';
 import { Loader2, Info } from 'lucide-react';
 
 // PROMPT 21 Phase 4, revised PROMPT 26 - the cost breakdown per listing. Collapsed by default
@@ -68,6 +69,16 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boundaries, setBoundaries] = useState<FeeBoundaries | null>(null);
+  // PROMPT 29 Stage 4 - fetched once per mount rather than hardcoded; a settings row that
+  // doesn't exist yet resolves to DEFAULT_PAYMENT_TIER (identical to the old constant), so
+  // nothing changes for an org that has never touched the settings screen.
+  const [paymentTier, setPaymentTier] = useState<PaymentTier>(DEFAULT_PAYMENT_TIER);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPaymentTier(orgId).then(t => { if (!cancelled) setPaymentTier(t); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [orgId]);
 
   const isFinished = listing.lot_state === 'finished';
   const isConfirmedSale = isFinished && listing.sale_confirmed === true;
@@ -165,6 +176,7 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
           shippingMethod: selectedPort?.shipping_method ?? null,
           targetLandedCostUsd: maxBudgetUsd ?? null,
           isFinishedLot: isFinished,
+          paymentTier,
         });
         if (!cancelled) setResult(r);
       } catch (err: any) {
@@ -175,7 +187,7 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, listing.sighting_id, selectedPort, maxBudgetUsd, priceUsd, isFinished]);
+  }, [orgId, listing.sighting_id, selectedPort, maxBudgetUsd, priceUsd, isFinished, paymentTier]);
 
   // Mode B's bracket-boundary display - only ever fetched for a real price basis (a candidate
   // bid or a confirmed sale price), never a guess.
@@ -187,7 +199,7 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
     }
     (async () => {
       try {
-        const b = await getFeeBracketBoundaries(orgId, sighting, listing.title_type, priceUsd!);
+        const b = await getFeeBracketBoundaries(orgId, sighting, listing.title_type, priceUsd!, undefined, paymentTier);
         if (!cancelled) setBoundaries(b);
       } catch {
         if (!cancelled) setBoundaries(null);
@@ -195,7 +207,7 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, listing.sighting_id, priceUsd, result?.maxBidSolve?.status]);
+  }, [orgId, listing.sighting_id, priceUsd, result?.maxBidSolve?.status, paymentTier]);
 
   return (
     <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mt-2" onClick={e => e.stopPropagation()}>

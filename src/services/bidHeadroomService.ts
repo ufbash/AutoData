@@ -1,6 +1,10 @@
 import { supabase } from './supabaseClient';
 import { matchSightingToYard } from './yardMatchingService';
 import type { YardKey, SightingForMatching } from './yardMatchingService';
+// PROMPT 29 Stage 4 - PaymentTier's single definition lives in orgSettingsService.ts, the
+// module that owns reading/writing it as configuration. Imported, not redefined.
+import type { PaymentTier } from './orgSettingsService';
+import { DEFAULT_PAYMENT_TIER } from './orgSettingsService';
 
 // PROMPT 21 Phase 3 — the single shared cost-breakdown and bid-headroom module. Not scattered
 // across components: isUnconfirmed is already duplicated as debt because that happened once
@@ -108,6 +112,7 @@ export interface AuctionFeeInput {
   referencePriceUnavailableDetail?: string;
   orgId: string;
   memberAccount?: string; // defaults to the confirmed default account below
+  paymentTier?: PaymentTier; // PROMPT 29 Stage 4 - defaults to DEFAULT_PAYMENT_TIER below
 }
 
 // CORRECTED (see PLAN_TRACKER.md debt) - the default is Caplimo's OWN Copart account, not
@@ -120,11 +125,13 @@ export interface AuctionFeeInput {
 // stay stored - they priced a real purchase and S5.10 requires that invoice to stay
 // explicable - but they are historical, not the default.
 export const DEFAULT_MEMBER_ACCOUNT = 'Jamilu Danmusa Danmusa (Copart Non-Licensed)';
-// Both real Copart accounts price as Unsecured on every invoice seen - including one funded
-// mostly by wire and one where a $400 security deposit is on file with Copart (PLAN_TRACKER.md
-// debt - open question, not yet resolved). Secured is not offered as a silent default; it
-// stays official_tariff, unconfirmed, until Copart confirms what actually secures an account.
-const PAYMENT_TIER = 'unsecured' as const;
+// PROMPT 29 Stage 4 - was a hardcoded constant; now configuration (org_settings, migration
+// 034). Both real Copart accounts price as Unsecured on every invoice seen - including one
+// funded mostly by wire and one where a $400 security deposit is on file with Copart
+// (PLAN_TRACKER.md debt #43 - open question, not yet resolved). This module never defaults to
+// Secured itself; DEFAULT_PAYMENT_TIER is only the fallback for an org with no settings row
+// yet, and is deliberately identical to the value the old hardcoded constant held, so a
+// missing settings row changes nothing.
 
 interface AuctionFeeRows {
   buyerFeeRows: AuctionFeeBracketRow[];
@@ -137,7 +144,7 @@ interface AuctionFeeRows {
 // Extracted (PROMPT 26) so the forward calculation (getAuctionFeeComponent, a known price ->
 // a fee) and the inverse one (solveMaxBidForFees, a target -> the bid that produces it) share
 // one fetch instead of two copies of the same query drifting apart over time.
-async function fetchAuctionFeeRows(orgId: string, platform: string, memberAccount: string, titleStatus: 'clean' | 'non_clean'): Promise<AuctionFeeRows> {
+async function fetchAuctionFeeRows(orgId: string, platform: string, memberAccount: string, titleStatus: 'clean' | 'non_clean', paymentTier: PaymentTier): Promise<AuctionFeeRows> {
   const { data, error } = await supabase
     .from('auction_fee_brackets')
     .select('member_account, fee_type, title_status, payment_tier, bid_method, bracket_min, bracket_max, fee_unit, fee_value, source, effective_from')
@@ -145,7 +152,7 @@ async function fetchAuctionFeeRows(orgId: string, platform: string, memberAccoun
     .eq('auction_platform', platform)
     .eq('member_account', memberAccount)
     .eq('title_status', titleStatus)
-    .eq('payment_tier', PAYMENT_TIER)
+    .eq('payment_tier', paymentTier)
     .is('effective_to', null);
   if (error) throw new Error(`Failed to load auction fee brackets: ${error.message}`);
 
@@ -173,7 +180,8 @@ function auctionFeeComponentFromRows(
   priceUsd: number,
   memberAccount: string,
   titleStatus: 'clean' | 'non_clean',
-  rows: AuctionFeeRows
+  rows: AuctionFeeRows,
+  paymentTier: PaymentTier
 ): CostComponent {
   const buyerBracket = findBracket(rows.buyerFeeRows, priceUsd);
   if (!buyerBracket) {
@@ -194,7 +202,7 @@ function auctionFeeComponentFromRows(
   const total = buyerFeeAmount + bidFeeMid + rows.flatFeeTotal;
 
   const sourceRows = [
-    { label: `Buyer fee (${memberAccount}, ${titleStatus}, ${PAYMENT_TIER})`, source: buyerBracket.source, effectiveFrom: buyerBracket.effective_from },
+    { label: `Buyer fee (${memberAccount}, ${titleStatus}, ${paymentTier})`, source: buyerBracket.source, effectiveFrom: buyerBracket.effective_from },
     ...rows.flatFees.map(f => ({ label: f.label, source: f.source, effectiveFrom: f.effective_from })),
   ];
   if (proxyBracket) sourceRows.push({ label: 'Bid fee (proxy)', source: proxyBracket.source, effectiveFrom: proxyBracket.effective_from });
@@ -232,8 +240,9 @@ export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<Co
   }
 
   const memberAccount = input.memberAccount || DEFAULT_MEMBER_ACCOUNT;
-  const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus);
-  return auctionFeeComponentFromRows(input.referencePriceUsd, memberAccount, titleStatus, rows);
+  const paymentTier = input.paymentTier ?? DEFAULT_PAYMENT_TIER;
+  const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus, paymentTier);
+  return auctionFeeComponentFromRows(input.referencePriceUsd, memberAccount, titleStatus, rows, paymentTier);
 }
 
 export interface InlandTruckingInput {
@@ -359,7 +368,8 @@ export async function getFeeBracketBoundaries(
   sighting: SightingForMatching,
   titleType: string | null,
   candidateBidUsd: number,
-  memberAccount?: string
+  memberAccount?: string,
+  paymentTier?: PaymentTier
 ): Promise<FeeBoundaries | null> {
   const platform = resolveEffectivePlatform(sighting);
   if (platform !== 'copart') return null;
@@ -367,7 +377,7 @@ export async function getFeeBracketBoundaries(
   if (titleStatus === 'unknown') return null;
 
   const acct = memberAccount || DEFAULT_MEMBER_ACCOUNT;
-  const rows = await fetchAuctionFeeRows(orgId, platform, acct, titleStatus);
+  const rows = await fetchAuctionFeeRows(orgId, platform, acct, titleStatus, paymentTier ?? DEFAULT_PAYMENT_TIER);
 
   const buyerFee = boundaryPair(rows.buyerFeeRows, candidateBidUsd, p => {
     const b = findBracket(rows.buyerFeeRows, p);
@@ -476,6 +486,7 @@ export interface ComputeBidHeadroomInput {
   shippingMethod: 'container' | 'roro' | null;
   targetLandedCostUsd: number | null; // from client_briefs.max_budget_usd
   memberAccount?: string;
+  paymentTier?: PaymentTier; // PROMPT 29 Stage 4 - defaults to DEFAULT_PAYMENT_TIER below
   // PROMPT 26 - a sold car has no future bid to size headroom for; forces headroom to abstain
   // regardless of what other components are available, while still letting the cost
   // components themselves render (that's the number that validates the fee model against
@@ -488,7 +499,7 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
     getAuctionFeeComponent({
       sighting: input.sighting, titleType: input.titleType, referencePriceUsd: input.referencePriceUsd,
       referencePriceUnavailableDetail: input.referencePriceUnavailableDetail,
-      orgId: input.orgId, memberAccount: input.memberAccount,
+      orgId: input.orgId, memberAccount: input.memberAccount, paymentTier: input.paymentTier,
     }),
     getInlandTruckingComponent({
       sighting: input.sighting, destinationPortNormalized: input.destinationPortNormalized,
@@ -518,7 +529,7 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
       const titleStatus = classifyTitleStatus(input.titleType);
       if (platform === 'copart' && titleStatus !== 'unknown') {
         const memberAccount = input.memberAccount || DEFAULT_MEMBER_ACCOUNT;
-        const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus);
+        const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus, input.paymentTier ?? DEFAULT_PAYMENT_TIER);
         const targetAfterOtherCosts = input.targetLandedCostUsd! - inlandTrucking.amountUsd! - oceanFreight.amountUsd! - duty.amountUsd!;
         const maxBid = solveMaxBidForFees(targetAfterOtherCosts, rows);
         if (maxBid !== null) {
@@ -543,7 +554,7 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
   const pricedUnder = {
     memberAccount: input.memberAccount || DEFAULT_MEMBER_ACCOUNT,
     titleStatus: classifyTitleStatus(input.titleType),
-    paymentTier: PAYMENT_TIER,
+    paymentTier: input.paymentTier ?? DEFAULT_PAYMENT_TIER,
   };
 
   return { auctionFees, inlandTrucking, oceanFreight, duty, targetLandedCostUsd: input.targetLandedCostUsd, headroom, pricedUnder, maxBidSolve };
