@@ -580,7 +580,18 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
           .filter((d): d is string => !!d)
           .sort();
         const dateText = dates.length > 0 ? dates.join(', ') : 'date unknown';
-        const detail = `has been to auction before (${flags.appearanceCount} prior appearance${flags.appearanceCount === 1 ? '' : 's'}: ${dateText})`;
+        // PROMPT 27 - the trigger (any prior appearance blocks, DECISIONS.md 4.8) is
+        // unchanged; only the wording now distinguishes what the data actually says.
+        // previouslySold takes priority when both are true - a car that has EVER sold and
+        // reappeared is the closer-to-fraud signal (PROJECT_CHARTER.md S6), the stronger fact
+        // to surface. Neither flag true (status absent/unparseable on every row) gets neutral
+        // wording that claims neither - never defaults to the stronger "sold" claim.
+        const outcomeText = flags.previouslySold
+          ? 'and has sold at a prior auction'
+          : flags.previouslyUnsold
+          ? 'but did not sell at its prior auction(s) (reserve not met / no sale)'
+          : 'sale outcome of prior appearance(s) not recorded';
+        const detail = `has been to auction before (${flags.appearanceCount} prior appearance${flags.appearanceCount === 1 ? '' : 's'}: ${dateText}), ${outcomeText}`;
         if (!priorAuctionByDetail.has(detail)) priorAuctionByDetail.set(detail, []);
         priorAuctionByDetail.get(detail)!.push(l.id);
       }

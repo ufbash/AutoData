@@ -11,6 +11,14 @@ export interface AuctionHistoryFlags {
   checkable: boolean;
   appearanceCount: number;
   previouslyUnsold: boolean;
+  // PROMPT 27 - A2's trigger fires on ANY prior appearance regardless of outcome
+  // (DECISIONS.md 4.8), and that stays unchanged. This flag exists only to let the BADGE
+  // WORDING distinguish two real, different signals the trigger deliberately collapses: a car
+  // that ran and didn't sell (market-ceiling intelligence, PROJECT_CHARTER.md S6) vs. a car
+  // that sold and reappeared (closer to a fraud signal). True if ANY row's status is 'Sold' -
+  // if a vehicle was ever sold at auction, that is the stronger, more relevant fact to surface
+  // even if it also has unsold appearances.
+  previouslySold: boolean;
   highestRejectedBid: number | null;
   hasPriorAuctionHistory: boolean;
   odometerRollback: boolean;
@@ -20,6 +28,7 @@ const NOT_CHECKABLE: AuctionHistoryFlags = {
   checkable: false,
   appearanceCount: 0,
   previouslyUnsold: false,
+  previouslySold: false,
   highestRejectedBid: null,
   hasPriorAuctionHistory: false,
   odometerRollback: false,
@@ -37,6 +46,7 @@ export function deriveAuctionHistoryFlags(rows: AuctionHistoryRow[] | null | und
   const appearanceCount = eventKeys.size;
 
   const previouslyUnsold = rows.some(r => r.status === 'Not sold');
+  const previouslySold = rows.some(r => r.status === 'Sold');
 
   const rejectedBids = rows
     .filter(r => r.status === 'Not sold' && r.bid_amount_usd != null)
@@ -63,6 +73,7 @@ export function deriveAuctionHistoryFlags(rows: AuctionHistoryRow[] | null | und
     checkable: true,
     appearanceCount,
     previouslyUnsold,
+    previouslySold,
     highestRejectedBid,
     hasPriorAuctionHistory,
     odometerRollback,
