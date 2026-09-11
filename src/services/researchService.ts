@@ -667,6 +667,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
         price_usd,
         lot_state,
         sale_confirmed,
+        current_bid_usd,
         stored_image_urls,
         image_store_status,
         images_stored_at,
@@ -718,7 +719,12 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       secondary_damage: sighting.secondary_damage || null,
       title_type: sighting.title_type || null,
       location: sighting.location || null,
-      current_bid_usd: raw.current_bid_usd ?? null,
+      // Fixed 11 Sep 2026 - was reading raw.current_bid_usd (raw_payload's top level, where
+      // this field never lives; the real value sits at raw_payload.captured_fields.
+      // current_bid_usd) instead of the sightings table's own current_bid_usd column, which
+      // this query didn't even select. Silently null for every listing since this function
+      // existed - see PLAN_TRACKER.md debt/fix entry for the sites this affected.
+      current_bid_usd: sighting.current_bid_usd ?? null,
       listed_price: sighting.listed_price ?? null,
       listed_currency: sighting.listed_currency ?? null,
       estimated_retail_value_usd: raw.estimated_retail_value_usd ?? null,
@@ -873,7 +879,7 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
   
   const { data: sightingData, error: sightingError } = await supabase
     .from('sightings')
-    .select('price_usd, lot_state, raw_payload, listed_price, source_platform, sale_confirmed, logged_via')
+    .select('price_usd, lot_state, raw_payload, listed_price, source_platform, sale_confirmed, logged_via, current_bid_usd')
     .eq('id', sightingId)
     .single();
     
@@ -883,7 +889,9 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
     source_platform: sightingData.source_platform,
     lot_state: sightingData.lot_state,
     price_usd: sightingData.price_usd,
-    current_bid_usd: sightingData.raw_payload?.current_bid_usd ?? null,
+    // Fixed 11 Sep 2026 - same mistake as listRunListings/listAvailableSightings. See
+    // PLAN_TRACKER.md.
+    current_bid_usd: sightingData.current_bid_usd ?? null,
     sale_confirmed: sightingData.sale_confirmed
   };
 
@@ -1018,6 +1026,7 @@ export async function listAvailableSightings(
       price_usd,
       lot_state,
       sale_confirmed,
+      current_bid_usd,
       raw_payload,
       assets (
         id,
@@ -1059,7 +1068,10 @@ export async function listAvailableSightings(
         price_usd: row.price_usd ?? null,
         lot_state: row.lot_state ?? null,
         sale_confirmed: row.sale_confirmed ?? null,
-        current_bid_usd: row.raw_payload?.current_bid_usd ?? null,
+        // Fixed 11 Sep 2026 - same mistake as listRunListings: raw_payload.current_bid_usd
+        // doesn't exist at that path, and the real column wasn't selected. See
+        // PLAN_TRACKER.md.
+        current_bid_usd: row.current_bid_usd ?? null,
       };
     });
 

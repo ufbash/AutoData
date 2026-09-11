@@ -966,11 +966,113 @@ would only trade one guess for another (and, per Prompt 24 Phase 1, usually isn'
 available). Any future change reintroducing an automatic price substitute for an active listing
 reopens exactly the bug this prompt fixed.
 
-**Not done, live-browser click-through:** the staff dashboard is login-gated; this session
-doesn't hold a staff session and didn't generate one for Bashir's account without asking.
-Verified instead via `tsc`, grep, and direct computation against the real 108-row bracket set
-and real listing data — the same standard of evidence used elsewhere in this document when a
-live click-through wasn't available.
+**Correction, 11 Sep 2026 — the live-browser click-through above was written before it
+happened, and has since been done.** Bashir logged into the staff dashboard himself (this
+session never handled his credentials) and walked through it together: a real finished,
+`sale_confirmed=true` bid.cars listing (2007-2011 Toyota Yaris run, $1,600 sale) reached the
+cost-breakdown panel, showed the green "Confirmed sale price: $1,600 (fee computed against the
+actual price, not a guess)" banner, computed auction fees at **$775** — matching, to the cent,
+a manual calculation against the real bracket rows (`$555` buyer fee + `$90` bid-fee midpoint +
+`$130` flat fees) — and Bid Headroom correctly rendered **"Unavailable — bid headroom does not
+apply to a finished/sold listing"** while inland trucking (`$450`) still computed independently.
+This directly confirms Checkpoint 2 items 1 and 2 live, not just at the code/type level as
+originally recorded here.
+
+The same walkthrough surfaced a second, real, pre-existing bug in a completely different
+function (`listRunListings`'s `current_bid_usd` mapping) — unrelated to this prompt's own
+changes, fixed separately and documented at §4.15, not folded into this entry so the two stay
+independently revertable.
+
+---
+
+### 4.15 `current_bid_usd` has been permanently null on every `RunListing` since `listRunListings` existed — **FIXED** (11 Sep 2026)
+
+Found live, by hand, during the Prompt 26 walkthrough with Bashir — not by code review. The
+new candidate-bid input on an active listing rendered empty instead of prefilling with the
+listing's real current bid ($125, a live Copart lot via bid.cars). Traced to the actual cause,
+per the handover's own five-things #2: **"A rule against a field the query doesn't return
+fails silently — never fires, never errors. Check the select list."**
+
+`researchService.ts`'s `listRunListings` (the sole source of every `RunListing` — everything
+`ResearchRunDetail`, `ListingCostBreakdown`, and the staff-side `VehicleDetailModal` render)
+mapped `current_bid_usd: raw.current_bid_usd ?? null`, where `raw = sighting.raw_payload`. Two
+compounding mistakes: **`sightings.current_bid_usd` — the real, correctly-populated database
+column — was never in this query's select list at all**, and `raw_payload.current_bid_usd`
+doesn't exist at that path either — confirmed against a real sighting that the actual value
+sits one level deeper, at `raw_payload.captured_fields.current_bid_usd`. The result: `null`,
+unconditionally, for every `RunListing` this function has ever produced, for as long as it has
+existed. Two other functions in the same file had the identical mistake — `listAvailableSightings`
+(feeding `AddCapturesModal`'s `AvailableSighting`) and `attachSightingToRun`'s ad-hoc sighting
+object — same root cause, same fix, all three in this commit.
+
+**Why nothing ever errored or was noticed:** the old reference-price logic everywhere that
+consumed this field used a fallback chain, `current_bid_usd ?? listed_price ?? price_usd`, and
+`price_usd` correctly mirrors the live current bid for an active listing (`research-capture`
+writes it that way at capture time) — so the fallback silently absorbed the always-null field
+and produced the right number anyway, by coincidence, for years. Prompt 26's candidate-bid
+prefill was the first piece of code to read `current_bid_usd` **without** that fallback chain
+(deliberately — falling back to `price_usd` there would have reintroduced exactly the
+"current_bid_usd on its own" bug Prompt 26 exists to prevent), which is why it's the first
+thing to surface this as visible, broken behaviour instead of a silent no-op.
+
+**Every real read of `RunListing.current_bid_usd`, checked individually, per Bashir's explicit
+request — what it evaluated to before, and what changes now that the field is populated:**
+
+- **`ResearchRunDetail.tsx:1315`** — `current_bid_usd !== null ? 'Current bid' : 'Sale /
+  Listed Price'`. Always showed "Sale / Listed Price" for every active listing on the entire
+  staff dashboard, confirmed directly against the real screenshot evidence from this same
+  walkthrough. Now correctly shows "Current bid" — verified live, same listing, same session.
+- **`ResearchRunDetail.tsx:339-340`**, the `mixed`-run-type stats split. The sold-side clause
+  (`current_bid_usd === null`) was always true, degenerating the filter to `lot_state !==
+  'active'` alone — likely low-impact, since a genuinely active listing also carries
+  `lot_state === 'active'` in the common case. The active-side clause (`current_bid_usd !==
+  null`) was always **false**, making the filter always false — **the "Client Options (Live)"
+  stats card in every `mixed`-type run has shown an empty list, unconditionally, regardless of
+  how many active listings the run actually contains.** Real, not theoretical: 2 of 33 live
+  runs are `mixed`-type today, and both have been affected for as long as they've existed. Now
+  populates correctly.
+- **`researchService.ts:806`** (the staff-relayed approval function) — `is_bid: currentBid !==
+  null` was always `false`, meaning **`approved_snapshot.is_bid` has always recorded `false`**
+  even for a staff-relayed approval of a genuinely live auction bid, on every approval ever
+  recorded this way. `display_price` itself stayed correct by accident via the `price_usd`
+  branch ahead of the broken fallback. This is the one behaviour change with a real downstream
+  consequence worth flagging distinctly: **historical `approved_snapshot` rows recorded before
+  this fix may have `is_bid: false` on records that were genuinely bids** — those rows are not
+  retroactively corrected (per `PROJECT_CHARTER.md` §5.8/§5.10, a stored record isn't rewritten
+  after the fact) and should be read with this in mind if ever consulted as dispute evidence.
+  New approvals from this point forward record `is_bid` correctly.
+- **`AddCapturesModal.tsx:48`'s `eligibleSold`** (via `listAvailableSightings`) and
+  **`attachSightingToRun`'s** identical gate — the `!hasValue(current_bid_usd)` clause was
+  always true (a no-op), so a sighting's sold-comps eligibility never actually checked whether
+  it had a live current bid. Now it does — a sighting that's genuinely still active will
+  correctly be **excluded** from sold-comps eligibility for the first time. Stricter, correct
+  direction; not expected to reject anything that was legitimately being accepted before, since
+  `lot_state`/`sale_confirmed` were already doing most of that work.
+
+**Checked and confirmed unaffected**, per the same request:
+- **A1b's population-coherence guard** keys off `source_platform` only — never reads
+  `current_bid_usd`. Clean.
+- **The "Unconfirmed Sale," "Limited sample," and "Different model" WARN checklist items**
+  compute their own `soldList` from `lot_state === 'finished'` alone (`ResearchRunDetail.tsx:
+  659-660`) — **a third, independent implementation of "the sold group,"** distinct from both
+  the buggy `displayGroups` split above and `public-run`'s own version (Prompt 25). Correct on
+  its own terms, unaffected by this bug, but recorded as debt #50 below since three divergent
+  implementations of the same concept in one codebase is exactly the risk Prompt 25 already
+  materialised once.
+- **`PublicRunView.tsx`/`public-run`** — confirmed already reading `current_bid_usd` directly
+  from the `sightings` column, never from `raw_payload`. The client-facing page never had this
+  bug.
+
+**Fix:** added `current_bid_usd` to the select list in all three functions
+(`listRunListings`, `listAvailableSightings`, `attachSightingToRun`) and mapped it from the
+real column instead of `raw_payload`. `npx tsc --noEmit` clean. Verified live: the same real
+Oklahoma City listing ($125 current bid) that exposed the bug now shows "Current bid" as its
+label and correctly prefills `125` into the candidate-bid input (`document.querySelector
+('input[type=number]').value === "125"`, checked directly against the live DOM).
+
+Committed separately from Prompt 26 (a pre-existing, unrelated bug this prompt's own testing
+happened to surface, not a change to anything Prompt 26 built) so either can be reverted
+without dragging the other along.
 
 ---
 
@@ -1273,3 +1375,4 @@ as evidence (public link renders the fix live).
 | 47 | Three separate, un-shared implementations of the sold-comps average — `ResearchRunDetail.tsx`'s `getStats`, `public-run/index.ts`'s stats block, and `researchService.ts`'s single-listing display-price helper (found Prompt 25) | These have already diverged once in production — see the fix at §4.13 above, where `public-run` silently omitted the `sale_confirmed` exclusion `getStats` applies. Deliberately not refactored into one shared module by this same prompt: `public-run` is Deno server-side, `getStats` is client-side React, and forcing a shared module across that boundary was judged a bigger change than the fix warranted. Recorded as the same category of risk as `isUnconfirmed`'s two-file duplication (debt #3) — any future change to one rule (e.g. adding the `api_import` carve-out gap noted below) must be applied to both by hand, or this diverges a second time |
 | 48 | `sale_confirmed = null` means two different things depending on `logged_via`, and nothing in the UI currently distinguishes them (found Prompt 25, deferred per Bashir 10 Sep 2026) | On a `manual_entry`/`ai_vision` row, `null` is structural — no code path could ever set it, since neither entry method parses a sales-history table. On an `extension_dom_capture` row from Copart or IAAI, `null` means "unconfirmable by platform" — neither has any sales-history mechanism at all (`sale_confirmed` is written in exactly one place codebase-wide, bid.cars' own content script). On a bid.cars `extension_dom_capture` row, `null` can also mean "the sales-history table didn't parse to a confirmable status" — genuine inconclusive data. All three render identically today (excluded the same way, badged "Unconfirmed sale" the same way). Worth labelling differently eventually — e.g. "not tracked on this platform" vs. "sale status unclear" — not built now, per Bashir's explicit call when this was raised |
 | 49 | `getStats`'s `manual_entry`/`ai_vision` carve-out doesn't cover `api_import` (found Prompt 25, theoretical — not a live discrepancy) | `logged_via_enum` has a fourth value, `api_import`, that would structurally have the same "no sales-history mechanism, `null` is not ambiguity" property as `manual_entry`/`ai_vision` — but it's excluded from the carve-out in both `getStats` and this prompt's `public-run` mirror of it. Nothing in the codebase currently produces `api_import` rows (confirmed by grep), so this doesn't affect any real data today. Extend the carve-out to include it if `api_import` is ever wired up as a real ingestion path |
+| 50 | A third independent implementation of "the sold group" exists in `ResearchRunDetail.tsx` (found 11 Sep 2026, fixing the `current_bid_usd` mapping bug at §4.15) | `ResearchRunDetail.tsx:659-660`'s checklist WARNs (`limited_sample`, `different_model`, `population_mismatch`, `unconfirmed_sale`) compute their own `soldList` from `lot_state === 'finished'` alone — separate from `displayGroups`' sold/active split (also in this file, the one §4.15 fixed) and separate again from `public-run`'s own version (Prompt 25/debt #47). None of the three currently disagree in a way that's been observed live, and this one is correct on its own terms, but three divergent implementations of the same concept in one codebase is exactly the risk that materialised once already (debt #47) - worth consolidating if a fourth divergence is ever found, not before |
