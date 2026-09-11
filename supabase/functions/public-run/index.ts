@@ -44,7 +44,7 @@ serve(async (req) => {
     // 4. Look up the run
     const { data: run, error: runError } = await supabaseClient
       .from('research_runs')
-      .select('id, client_name, notes, created_at, run_type')
+      .select('id, client_name, notes, created_at, run_type, client_brief:client_briefs(year_min, year_max)')
       .eq('share_token', token)
       .eq('share_enabled', true)
       .is('deleted_at', null)
@@ -56,6 +56,14 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
+
+    // PROMPT 28 Stage 1 - fetched only to compute a derived per-listing/aggregate range
+    // disclosure below. year_min/year_max themselves are never added to `publicRun` (the
+    // hand-built allow-list a few lines down) - server-side use only, per S5.9.
+    const briefForRange = Array.isArray((run as any).client_brief) ? (run as any).client_brief[0] : (run as any).client_brief;
+    const briefYearMin: number | null = briefForRange?.year_min ?? null;
+    const briefYearMax: number | null = briefForRange?.year_max ?? null;
+    const rangeStated = briefYearMin != null || briefYearMax != null;
 
     // PROMPT 19 Phase 3 - client approval. A blocked run cannot be approved: this reuses
     // the exact share_enabled/deleted_at gate the `run` lookup above already enforces -
@@ -343,6 +351,19 @@ serve(async (req) => {
           if (sighting.sale_confirmed === false) return true;
           if (sighting.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(sighting.logged_via)) return true;
           return false;
+        })(),
+
+        // PROMPT 28 Stage 1 - disclosure, not a spec flag (PROJECT_CHARTER.md S5.1: widen
+        // bands and say so, never silently). 'out_of_range' only within the sold population,
+        // only when the brief actually states a range, and only when the year itself is known -
+        // an unknown year is not a violation (S4.1), it is unclassifiable, and stays null.
+        // Never excludes the listing from anything; purely informational.
+        range_status: (() => {
+          const isSoldGroup = run.run_type === 'sold_comps' || (run.run_type === 'mixed' && sighting.current_bid_usd === null);
+          if (!isSoldGroup || !rangeStated || asset.year == null) return null;
+          const belowMin = briefYearMin != null && asset.year < briefYearMin;
+          const aboveMax = briefYearMax != null && asset.year > briefYearMax;
+          return (belowMin || aboveMax) ? 'out_of_range' : 'in_range';
         })()
       };
 
@@ -355,9 +376,10 @@ serve(async (req) => {
     let stats = null;
     if (run.run_type === 'sold_comps' || run.run_type === 'mixed') {
       let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
-      
-      const soldListings = run.run_type === 'mixed' 
-        ? publicListings.filter((l: any) => l.current_bid_usd === null) 
+      let rangeInCount = 0, rangeOutCount = 0, rangeUnknownCount = 0;
+
+      const soldListings = run.run_type === 'mixed'
+        ? publicListings.filter((l: any) => l.current_bid_usd === null)
         : publicListings;
 
       soldListings.forEach((l: any) => {
@@ -371,6 +393,13 @@ serve(async (req) => {
           pC++;
           if (l.price_usd < minP) minP = l.price_usd;
           if (l.price_usd > maxP) maxP = l.price_usd;
+          // PROMPT 28 Stage 1 - composition of the exact set just counted into the average
+          // above, never a separate definition of it.
+          if (rangeStated) {
+            if (l.range_status === 'out_of_range') rangeOutCount++;
+            else if (l.range_status === 'in_range') rangeInCount++;
+            else rangeUnknownCount++;
+          }
         }
         if (typeof l.mileage_miles === 'number') {
           tM += l.mileage_miles;
@@ -384,7 +413,11 @@ serve(async (req) => {
         max_price_usd: pC > 0 ? maxP : null,
         priced_count: pC,
         total_count: soldListings.length,
-        avg_mileage: mC > 0 ? tM / mC : null
+        avg_mileage: mC > 0 ? tM / mC : null,
+        range_stated: rangeStated,
+        range_in_count: rangeStated ? rangeInCount : null,
+        range_out_count: rangeStated ? rangeOutCount : null,
+        range_unknown_count: rangeStated ? rangeUnknownCount : null,
       };
     }
 

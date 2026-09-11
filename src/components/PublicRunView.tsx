@@ -22,6 +22,10 @@ interface PublicRunData {
     priced_count: number;
     total_count: number;
     avg_mileage: number | null;
+    range_stated?: boolean;
+    range_in_count?: number | null;
+    range_out_count?: number | null;
+    range_unknown_count?: number | null;
   };
 }
 
@@ -177,6 +181,14 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
             {listing.sale_unconfirmed && (
               <div className="absolute top-2 right-2 bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm backdrop-blur-sm">
                 Unconfirmed sale
+              </div>
+            )}
+            {/* PROMPT 28 Stage 1 - information, not a warning: deliberately blue, not amber,
+                and never "wrong" or "flagged" wording - this comp is legitimate market history
+                outside the brief's stated range, still fully counted above. */}
+            {listing.range_status === 'out_of_range' && (
+              <div className="absolute bottom-2 left-2 bg-blue-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm backdrop-blur-sm">
+                Outside requested year range
               </div>
             )}
           </div>
@@ -376,6 +388,17 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
                 </div>
               </div>
             </div>
+            {/* PROMPT 28 Stage 1 - disclosure, not a warning: this is the number a client acts
+                on, so the doctrine (PROJECT_CHARTER.md S5.1 - widen bands and say so) applies
+                here too. Every comp above still counts fully in the average; this only states
+                how many sat inside vs. outside what was actually requested. */}
+            {stats.range_stated && (
+              <div className="mt-4 pt-4 border-t border-white/10 text-xs text-gray-300">
+                Sample vs. requested year range: {stats.range_in_count} inside
+                {stats.range_out_count && stats.range_out_count > 0 ? `, ${stats.range_out_count} outside` : ''}
+                {stats.range_unknown_count && stats.range_unknown_count > 0 ? ` (${stats.range_unknown_count} unknown year)` : ''}
+              </div>
+            )}
           </div>
         )}
 

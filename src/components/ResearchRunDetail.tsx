@@ -16,6 +16,7 @@ import {
   ResearchRun,
   RunListing,
   AuctionHistoryRecord,
+  ClientBrief,
   deleteSighting
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
@@ -298,8 +299,16 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   const includedCount = includedListings.length;
   const approvedListing = listings.find(l => l.approved_at);
 
-  const getStats = (list: RunListing[], isSoldGroup: boolean) => {
+  // PROMPT 28 Stage 1 - range composition is derived from the exact same includePrice
+  // membership as the average itself (not a second definition of "the sold group" - debt #50
+  // already flags three of those, this isn't a fourth), so the disclosure can never drift from
+  // what the average actually counted. year_min/year_max unset on the brief means no range was
+  // stated at all - nothing to disclose, not "everything out of range." A comp with no year is
+  // unknown, not out of range (AGENTS.md S4.1 - absence is not violation).
+  const getStats = (list: RunListing[], isSoldGroup: boolean, brief?: ClientBrief | null) => {
     let tP = 0, pC = 0, minP = Infinity, maxP = -Infinity, tM = 0, mC = 0;
+    let rangeInCount = 0, rangeOutCount = 0, rangeUnknownCount = 0;
+    const rangeStated = isSoldGroup && !!brief && (brief.year_min != null || brief.year_max != null);
     list.forEach(l => {
       let includePrice = true;
       if (isSoldGroup) {
@@ -315,6 +324,15 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
         tP += p; pC++;
         if (p < minP) minP = p;
         if (p > maxP) maxP = p;
+        if (rangeStated) {
+          if (l.year == null) {
+            rangeUnknownCount++;
+          } else {
+            const belowMin = brief!.year_min != null && l.year < brief!.year_min;
+            const aboveMax = brief!.year_max != null && l.year > brief!.year_max;
+            if (belowMin || aboveMax) rangeOutCount++; else rangeInCount++;
+          }
+        }
       }
       if (l.mileage_miles !== null) {
         tM += l.mileage_miles; mC++;
@@ -326,7 +344,11 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       maxPrice: pC > 0 ? maxP : null,
       priceCount: pC,
       avgMileage: mC > 0 ? tM / mC : null,
-      count: list.length
+      count: list.length,
+      rangeStated,
+      rangeInCount,
+      rangeOutCount,
+      rangeUnknownCount,
     };
   };
 
@@ -334,13 +356,13 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   const isSoldComps = run.run_type === 'sold_comps';
   const isActiveListings = run.run_type === 'active_listings';
 
-  const displayGroups = isMixed 
+  const displayGroups = isMixed
     ? [
-        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null), true), type: 'sold' },
+        { label: "Market Research (Sold)", stats: getStats(includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null), true, run.client_brief), type: 'sold' },
         { label: "Client Options (Live)", stats: getStats(includedListings.filter(l => l.lot_state !== 'finished' && l.current_bid_usd !== null), false), type: 'active' }
       ]
     : [
-        { label: "Run Listings", stats: getStats(includedListings, isSoldComps), type: isSoldComps ? 'sold' : 'active' }
+        { label: "Run Listings", stats: getStats(includedListings, isSoldComps, run.client_brief), type: isSoldComps ? 'sold' : 'active' }
       ];
 
   // Pre-Share Checklist
@@ -647,6 +669,38 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     passed: odometerRollbackOffenders.length === 0
   });
 
+  // PROMPT 28 Stage 1 - sold-comps range disclosure (debt #52, decided). Applies regardless of
+  // run_type, deliberately outside the isActiveListings||isMixed gate above - unlike the nine
+  // spec rules, this is not a client-protection check on an active listing (PROJECT_CHARTER.md
+  // S5.6 forbids that here) and must reach a sold_comps run's own listings, which is exactly
+  // where the real 2012-Accord-in-a-2013-2016-brief case lives. INFO only, never WARN: a comp
+  // outside the requested range is legitimate market history, not a defect - it stays in the
+  // average and the count, always. Mirrors the exact same "is this listing in the sold group,
+  // and is its price actually counted" logic getStats uses for the same run, so the per-listing
+  // label can never disagree with the composition line it sits next to.
+  const soldGroupForDisclosure = isMixed
+    ? includedListings.filter(l => l.lot_state !== 'active' && l.current_bid_usd === null)
+    : (isSoldComps ? includedListings : []);
+  const rangeDisclosureOffenders: string[] = [];
+  if (run.client_brief && (run.client_brief.year_min != null || run.client_brief.year_max != null)) {
+    soldGroupForDisclosure.forEach(l => {
+      const isUnconfirmed = l.sale_confirmed === false || (l.sale_confirmed === null && !['manual_entry', 'ai_vision'].includes(l.logged_via));
+      if (l.price_usd === null || isUnconfirmed || l.year == null) return; // absence is not violation - unknown year says nothing
+      const belowMin = run.client_brief!.year_min != null && l.year < run.client_brief!.year_min;
+      const aboveMax = run.client_brief!.year_max != null && l.year > run.client_brief!.year_max;
+      if (belowMin || aboveMax) rangeDisclosureOffenders.push(l.id);
+    });
+  }
+  if (rangeDisclosureOffenders.length > 0) {
+    checklistItems.push({
+      id: 'range_disclosure',
+      type: 'INFO',
+      message: `${rangeDisclosureOffenders.length} sold comp(s) fall outside the brief's requested year range - included in the average as legitimate market history, not flagged as a defect.`,
+      offenderIds: rangeDisclosureOffenders,
+      passed: false
+    });
+  }
+
   // 5. No price (WARN)
   const noPriceOffenders = includedListings.filter(l => l.price_usd === null).map(l => l.id);
   checklistItems.push({
@@ -807,6 +861,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       else if (item.id.startsWith('prior_auction_history')) text = 'PRIOR AUCTION HISTORY';
       else if (item.id === 'prior_auction_not_checkable') text = 'History not checkable';
       else if (item.id === 'odometer_rollback') text = 'Odometer rollback';
+      else if (item.id === 'range_disclosure') text = 'Outside requested year range';
       if (text) {
         listingBadges.get(id)!.push({ type: item.type, text });
       }
@@ -1134,6 +1189,22 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                       <div className="text-gray-500 text-xs mb-1">Avg sale price ({group.stats.priceCount} sales)</div>
                       <div className="font-bold text-[#403f4c]">
                         {group.stats.avgPrice !== null ? `$${Math.round(group.stats.avgPrice).toLocaleString()}` : '—'}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* PROMPT 28 Stage 1 - disclosure, never a WARN: labels/counts an out-of-range
+                      comp as market-history information, per PROJECT_CHARTER.md S5.1 ("widen
+                      bands and say so"), while S5.6 still forbids treating it as a spec defect -
+                      the comp is never excluded from the average or count above. Rendered only
+                      when the brief actually states a range; a brief with none has nothing to
+                      disclose (S4.1 - absence is not violation). */}
+                  {group.type === 'sold' && group.stats.rangeStated && (
+                    <div className="bg-blue-50 px-4 py-2 rounded-lg border border-blue-100 text-sm min-w-[220px]">
+                      <div className="text-blue-700 text-xs mb-1 font-medium">Sample vs. requested year range</div>
+                      <div className="font-bold text-blue-900 text-sm">
+                        {group.stats.rangeInCount} inside{group.stats.rangeOutCount > 0 ? `, ${group.stats.rangeOutCount} outside` : ''}
+                        {group.stats.rangeUnknownCount > 0 ? ` (${group.stats.rangeUnknownCount} unknown year)` : ''}
                       </div>
                     </div>
                   )}
