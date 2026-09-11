@@ -1613,3 +1613,40 @@ against synthetic pairs built specifically to trigger each one. This is the same
 that caught a structurally-unreachable guard earlier this session (topic 16) - a check that
 can never fire looks identical to a check that works, and the only way to know which one you
 have is to force it.
+
+---
+
+## 25. The currency guard was correct; the fix was to widen what the tables can hold, not to loosen it
+
+Prompt 22 built `extract-cost-document`'s currency guard after watching the model try to
+silently default a Naira figure to USD - a ~1,395x mispricing, the exact "generated price
+wearing a costume" `PROJECT_CHARTER.md` §5.4 exists to prevent. The guard's rule: every
+monetary field in every destination shape is USD-only, because `rate_unit` only ever offered
+`usd | percent` - no other currency was a valid answer. So when a real Nigerian assessment
+notice states an amount in Naira, the guard correctly marks that field `NOT_VISIBLE` rather
+than record a wrong number with false confidence, and says which currency the document
+actually used in `document_summary` so a human reviewer isn't left guessing why.
+
+**The parked, correct-at-the-time consequence: the pipeline built specifically to process these
+documents could not confirm a single row from one.** Every real Nigerian assessment notice on
+hand abstained on every monetary field, for as long as C1d stayed unbuilt. This was not a bug
+in the guard - the guard was doing exactly its job, refusing to let a number it couldn't
+confirm pass as read. It was a genuine gap in what the destination tables could even represent.
+
+**The two ways to close that gap, and why only one of them was ever on the table.** Loosen the
+guard - teach the model to convert NGN to USD itself, or assume a currency when ambiguous -
+would recreate the original bug this whole mechanism exists to prevent, just moved one step
+earlier in the pipeline. The other option - leave the guard exactly as it is, and give the
+destination tables a `currency` column so a human, reading the same document the model
+correctly declined to guess at, can record the real figure in its real currency - is additive,
+touches the guard not at all, and was Prompt 22's own original design, deliberately parked
+rather than built prematurely.
+
+**Verified, not assumed, that the guard survived untouched:** `extract-cost-document/index.ts`
+has zero diff across this entire build (`git diff --stat` against the file confirms it). The
+proof this actually closes the gap isn't code review, it's a real document: the exact real
+assessment notice that Prompt 22 could only ever reject was walked through the new confirm
+step - "FCS," ₦205,581.08, currency set to NGN, and the review screen fetched the day's rate
+(1326.03, a live API value, not the hardcoded 1,500 fallback) and froze $155.04 as the USD
+equivalent. Re-reading the row afterward returns the identical figure - proof this is a stored
+number, not a live conversion recomputed on each view.

@@ -1155,6 +1155,96 @@ this prompt's own explicit instruction not to build it.
 
 ---
 
+### 4.17 Debt #52 closed: sold-comps range disclosed, not flagged — **DONE** (11 Sep 2026, Prompt 28 Stage 1)
+
+Prompt 27 correctly declined to decide whether a sold comp outside a brief's stated year range
+should get any signal at all, and recorded it as debt #52 rather than guess. Decided now:
+**disclose, never exclude, never badge as a defect.** `PROJECT_CHARTER.md` §5.6 is why the nine
+spec rules and A2's hard block must not fire on a sold comp — a 2012 Accord in a 2013–2016
+brief's market research is legitimate history, and treating it as a spec violation corrupts the
+average. That stands, untouched. But §5.1 requires widening bands honestly, not silently — a
+client reading an average is entitled to know the sample reached outside what they asked for.
+
+**Built:** a blue INFO badge per out-of-range comp on `ResearchRunDetail.tsx` (mechanically
+distinct from WARN/BLOCK — Prompt 27 fixed four false WARNs specifically because false alarms
+train users to ignore badges, and this must not recreate that), plus a "N inside, M outside"
+composition line next to the average — staff and client side (`PublicRunView.tsx`,
+`public-run`). Both derived from the exact same `includePrice` membership `getStats`/the
+public stats block already use for the average itself, not a fourth definition of "the sold
+group" (three already diverge — debt #47, #50). `public-run` gained a `client_brief` join used
+only to compute two derived fields (`range_status` per listing, `range_in/out/unknown_count` in
+`stats`) — `year_min`/`year_max` themselves never enter the response's own allow-list object,
+the same minimal-widening pattern Prompt 25 used for `sale_unconfirmed`.
+
+**Verified live, deployed:** Ahmed Ibrahim's real run labels its one price-counted 2012 Accord
+("0 inside, 1 outside" — the other 2012 Accord is already excluded from the average by Prompt
+25's unconfirmed-sale rule, correctly not double-counted here). Danmusa's real Yaris run: "3
+inside, 3 outside," average **$1,513** on 6 sales, min/max **$1,000/$2,000** — byte-identical to
+the figures verified in Prompt 25, both via the deployed `public-run` API response and the
+rendered public page. Nafisah Bashir's run (no brief linked): zero labels, zero composition
+line — confirms absence is not violation. No real case of "range stated but comp's year
+unknown" exists in production; the `l.year == null` guard was verified by code inspection
+instead.
+
+---
+
+### 4.18 C1d: currency on the rate tables — **DONE** (11 Sep 2026, Prompt 28 Stage 2)
+
+The binding constraint on C2 (which is itself the binding constraint on bid headroom Mode A and
+C3), parked deliberately in Prompt 22: `extract-cost-document`'s currency guard correctly
+abstains on every monetary field in a Naira-denominated document, since `rate_unit` only ever
+offered `usd | percent` — the pipeline built to process real Nigerian assessment notices could
+not confirm a single row from one. The guard is right and untouched (confirmed: zero diff on
+`extract-cost-document/index.ts` across this entire build). The fix widens what the tables can
+hold, never loosens what the model is allowed to guess — see `docs/SOLVED.md` topic 25.
+
+**Migration 033** — `currency` (`NOT NULL DEFAULT 'usd'`), `amount_usd`, `fx_rate`,
+`fx_rate_date` on all three rate tables, plus a CHECK constraint per table enforcing the only
+two valid shapes (all three conversion fields null for a USD or percent-unit row; all three
+populated together for anything else) — an auditor reconstructs the conversion from the row
+alone. Applied; all existing rows (5 `cost_rates`, 1,740 `trucking_rates`, 324
+`auction_fee_brackets`) backfilled to `currency='usd'`, zero existing amounts altered
+(spot-checked against known real values from Prompt 26 — $15/$95/$20 Copart flat fees,
+unchanged).
+
+**Frozen at confirmation, never recomputed at read** — deliberately not `sightings.
+exchange_rate`'s mechanism copied verbatim: a sighting freezes a rate because the fact is
+historical and immutable, a rate row is a standing figure current until superseded by
+`effective_from`/`effective_to`, and freezing the conversion at confirmation is the honest
+extension of that same discipline, not a second one for a different reason. Built into
+`costDocumentExtractionsService.ts`'s `confirmExtraction`: the FX rate is fetched once per
+confirm (`currencyService.ts`, the same module `sightings` already uses), never typed; the
+reviewer's only input is which currency the source document actually used. A currency the fetch
+can't resolve a rate for aborts the whole confirm before anything is written —
+`currencyService`'s own silent "return the unconverted amount" fallback for a missing rate
+(exactly the ~1,395x mispricing class of bug this whole feature exists to prevent) is never
+reached from here, since the rate's presence is checked explicitly first.
+
+**No existing read site touched.** `bidHeadroomService.ts`/`truckingRatesService.ts` select an
+explicit column list that never included the new fields — every USD row (100% of them, always,
+in practice, since Copart/IAAI/US-trucking data is always USD) reads exactly as before.
+`CostRatesAdmin.tsx` needed one necessary display fix: a bare `$` prefix on a non-USD
+`rate_value` would relocate the exact mislabeling this feature exists to prevent to the admin
+screen itself, so it now shows the original currency and amount with the frozen USD-equivalent
+alongside — not a conversion, a formatting choice between two already-computed numbers.
+
+**Verified end-to-end against a real document** — the exact real assessment notice
+("AssessmentNotice (23).pdf") that Prompt 22 could only ever reject, its real extracted
+structure re-staged as a fresh `pending_review` row (confirmed by SQL, not fabricated): "FCS,"
+₦205,581.08 read directly off the real rendered document, confirmed with currency=NGN through
+the actual review screen. Result, queried directly: `rate_value=205581.08`, `currency=ngn`,
+`fx_rate=1326.029544` (a real fetched rate, not the hardcoded 1,500 fallback),
+`fx_rate_date=2026-09-11`, `amount_usd=155.04`, `source`/`effective_from` human-set exactly as
+Prompt 22 Checkpoint 4 established. Re-read after confirming: identical figures — proof this is
+a stored value, not a live conversion. Verified live in `CostRatesAdmin.tsx`: existing USD rows
+unchanged (`$95`, `$20`, `$50`), the new row correctly reads `NGN 205,581.08 (≈ $155.04)`.
+
+This unblocks C2; it does not build it. Duty remains `unavailable` everywhere until the
+51.47%/six-component formula is actually calibrated against 10+ real assessment notices
+(`PLAN_TRACKER.md` §6/C2).
+
+---
+
 ## 5. Phase B — coverage
 
 ### B1. IAAI content script — **DONE** (10 Sep 2026, Prompt 22 Stage 2)
@@ -1456,4 +1546,4 @@ as evidence (public link renders the fix live).
 | 49 | `getStats`'s `manual_entry`/`ai_vision` carve-out doesn't cover `api_import` (found Prompt 25, theoretical — not a live discrepancy) | `logged_via_enum` has a fourth value, `api_import`, that would structurally have the same "no sales-history mechanism, `null` is not ambiguity" property as `manual_entry`/`ai_vision` — but it's excluded from the carve-out in both `getStats` and this prompt's `public-run` mirror of it. Nothing in the codebase currently produces `api_import` rows (confirmed by grep), so this doesn't affect any real data today. Extend the carve-out to include it if `api_import` is ever wired up as a real ingestion path |
 | 50 | A third independent implementation of "the sold group" exists in `ResearchRunDetail.tsx` (found 11 Sep 2026, fixing the `current_bid_usd` mapping bug at §4.15) | `ResearchRunDetail.tsx:659-660`'s checklist WARNs (`limited_sample`, `different_model`, `population_mismatch`, `unconfirmed_sale`) compute their own `soldList` from `lot_state === 'finished'` alone — separate from `displayGroups`' sold/active split (also in this file, the one §4.15 fixed) and separate again from `public-run`'s own version (Prompt 25/debt #47). None of the three currently disagree in a way that's been observed live, and this one is correct on its own terms, but three divergent implementations of the same concept in one codebase is exactly the risk that materialised once already (debt #47) - worth consolidating if a fourth divergence is ever found, not before |
 | 51 | No universal vehicle database — trim/spec matching stays pattern-based (found/deferred 11 Sep 2026, Prompt 27) | The Mercedes class-letter fix (`trimMatches`, §4.16/2B) is deliberately narrow: a prefix-stripping pattern derived from the brief's own model, not a real vehicle taxonomy. A general solution — resolving "350" ≡ "E350" ≡ "E-Class 350" (or equivalent naming quirks for any manufacturer, not just German class-letter conventions) — needs an actual make/model/trim/generation reference database, which is a large, separate build (`SCHEMA.md` §4's E2 standardisation resolver anticipates something like this). Explicitly out of scope for Prompt 27; the class-letter pattern closes the real, reported gap without it |
-| 52 | Spec-match rules (all nine) and A2's hard block never evaluate against `sold_comps`-type runs (found 11 Sep 2026, Prompt 27 — genuinely ambiguous, not a bug) | `ResearchRunDetail.tsx:401`'s `if (isActiveListings \|\| isMixed)` gate wraps every spec rule and A2's prior-auction-history BLOCK in one unbroken block (lines 401-618) — a `sold_comps` run's listings are never checked against the brief's spec, or against prior-auction history, at all. Consistent with `PROJECT_CHARTER.md` §5.6 ("risk and spec rules apply to active listings and only here") and already disclosed in the run's own UI ("Spec matching applies to active-listings runs only"). This is why Ahmed Ibrahim's 2012 Accords in a 2013-2016 sold-comps run were never flagged — correct per the current design, not a plumbing bug. Left open: does Bashir want any signal (even informational) when a sold-comps run's own listings fall outside the brief's stated range? Not decided here — report only, per this prompt's own stop condition |
+| 52 | Spec-match rules (all nine) and A2's hard block never evaluate against `sold_comps`-type runs (found 11 Sep 2026, Prompt 27 — genuinely ambiguous, not a bug) | `ResearchRunDetail.tsx:401`'s `if (isActiveListings \|\| isMixed)` gate wraps every spec rule and A2's prior-auction-history BLOCK in one unbroken block (lines 401-618) — a `sold_comps` run's listings are never checked against the brief's spec, or against prior-auction history, at all. Consistent with `PROJECT_CHARTER.md` §5.6 ("risk and spec rules apply to active listings and only here") and already disclosed in the run's own UI ("Spec matching applies to active-listings runs only"). This is why Ahmed Ibrahim's 2012 Accords in a 2013-2016 sold-comps run were never flagged — correct per the current design, not a plumbing bug. **Resolved 11 Sep 2026, Prompt 28 Stage 1 (§4.17): disclose, never exclude, never badge as a defect** — an INFO label and a composition line, staff and client side, never a spec flag. The `isActiveListings \|\| isMixed` gate and A2's hard block are unchanged |

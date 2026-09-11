@@ -474,3 +474,42 @@ touch the sold-comps average and never reach `public-run`'s allow-list.
 
 Neither the trucking ledger, the matcher, nor the fee/headroom module is wired into the
 public share page — bid headroom stays internal-only, deliberately.
+
+**Currency (migration 033, Prompt 28 Stage 2/C1d)** — all three rate tables (`cost_rates`,
+`trucking_rates`, `auction_fee_brackets`) carry `currency` (`NOT NULL DEFAULT 'usd'`),
+`amount_usd`, `fx_rate`, `fx_rate_date`. Additive only — every existing row backfilled to
+`currency='usd'` with the other three `null`, no existing `rate_value`/`price`/`fee_value`
+altered. A CHECK constraint on each table enforces the only two valid shapes: `currency='usd'`
+with all three conversion fields `null` (nothing was converted — includes every
+`fee_unit='percent'` row in `auction_fee_brackets`, since a percentage has no currency
+dimension to convert regardless of what a source document's absolute figures were denominated
+in), or `currency<>'usd'` with all three populated together — an auditor can reconstruct the
+conversion from the row alone, never from a separate log.
+
+**Frozen at confirmation, never recomputed at read** — `amount_usd`/`fx_rate`/`fx_rate_date`
+are computed once, when a human confirms a staged extraction row as non-USD
+(`costDocumentExtractionsService.ts`'s `confirmExtraction`, via `currencyService.ts`'s
+`fetchExchangeRates`), and never touched again. This is deliberately **not**
+`sightings.exchange_rate`'s mechanism copied verbatim (§1 above) — a sighting freezes a rate
+because the underlying fact (a car sold for ₦X on date Y) is historical and immutable; a rate
+row is a standing figure that stays current until superseded by `effective_from`/`effective_to`
+(§5.10). Freezing the conversion at confirmation is the honest extension of that same
+discipline to currency, not a second mechanism for a different reason. `rate_value`/`price`/
+`fee_value` continue to hold the ORIGINAL-currency figure always (needed to audit against the
+source document); `amount_usd` is the USD-equivalent, frozen once.
+
+**No existing read site was touched.** `bidHeadroomService.ts` and `truckingRatesService.ts`
+select an explicit column list that never included the new fields; every one of them keeps
+reading `rate_value`/`price`/`fee_value` directly, unchanged, for every row that has ever
+existed (all USD). `CostRatesAdmin.tsx`'s display was the one necessary exception — a `$`
+prefix on a Naira figure would be exactly the mislabeling this feature exists to prevent, just
+relocated to the admin screen — so it now shows the original currency and amount, with the
+frozen USD-equivalent alongside for a non-USD row (`NGN 205,581.08 (≈ $155.04)`), never a
+second conversion.
+
+**Why this exists:** `extract-cost-document`'s currency guard (Prompt 22 Phase 3,
+`docs/SOLVED.md` topic 25) correctly marks every monetary field `NOT_VISIBLE` on a document
+that states a non-USD amount, since `rate_unit` only ever offered `usd|percent` — the guard was
+right, but it meant the pipeline built to process real Nigerian assessment notices could not
+confirm a single row from one. The guard is unchanged by this migration; the tables can now
+hold what a human, reading the same document, types in.
