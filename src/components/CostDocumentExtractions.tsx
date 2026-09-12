@@ -6,10 +6,15 @@ import {
   getSignedDocumentUrl,
   confirmExtraction,
   rejectExtraction,
+  setExtractionAsset,
+  setDeclaredValue,
+  searchAssets,
+  getAssetById,
   CostDocumentExtraction,
   DocumentType,
   TargetRateTable,
   ExtractionStatus,
+  AssetSearchResult,
 } from '../services/costDocumentExtractionsService';
 import { CostRateSource } from '../services/costRatesService';
 import { Upload, Loader2, FileText, Check, X, AlertTriangle } from 'lucide-react';
@@ -129,12 +134,136 @@ interface ReviewRowState {
   currency: string;
 }
 
+// PROMPT 29 Stage 6 — pairing an extraction with the vehicle it describes, and (for an
+// assessment notice only) recording its own declared/assessed value. Both are entirely the
+// reviewer's own action: the extraction never reads or suggests either today, so there is
+// nothing here to "accept" a model suggestion for — only a search box the human drives.
+const AssetPairingPanel: React.FC<{
+  extraction: CostDocumentExtraction;
+  userId: string;
+  onChanged: () => void;
+}> = ({ extraction, userId, onChanged }) => {
+  const [pairedAsset, setPairedAsset] = useState<AssetSearchResult | null>(null);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<AssetSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [declaredValueInput, setDeclaredValueInput] = useState(extraction.declared_value != null ? String(extraction.declared_value) : '');
+  const [declaredCurrency, setDeclaredCurrency] = useState(extraction.declared_value_currency || 'NGN');
+
+  useEffect(() => {
+    if (extraction.asset_id) {
+      getAssetById(extraction.asset_id).then(setPairedAsset).catch(() => setPairedAsset(null));
+    } else {
+      setPairedAsset(null);
+    }
+  }, [extraction.asset_id]);
+
+  const runSearch = async (q: string) => {
+    setQuery(q);
+    if (q.trim().length < 2) { setResults([]); return; }
+    setSearching(true);
+    try {
+      setResults(await searchAssets(q));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const pair = async (assetId: string | null) => {
+    setSaving(true);
+    try {
+      await setExtractionAsset(extraction.id, userId, assetId);
+      setResults([]);
+      setQuery('');
+      onChanged();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveDeclaredValue = async () => {
+    setSaving(true);
+    try {
+      const num = declaredValueInput.trim() === '' ? null : Number(declaredValueInput);
+      await setDeclaredValue(extraction.id, num != null && !isNaN(num) ? num : null, num != null ? declaredCurrency as any : null);
+      onChanged();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mb-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
+      <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Vehicle pairing (optional, human-set only)</h4>
+      {pairedAsset ? (
+        <div className="flex items-center justify-between text-xs">
+          <span>
+            Paired with <strong>{pairedAsset.year || ''} {pairedAsset.make} {pairedAsset.model}</strong>
+            {pairedAsset.vin && <span className="text-gray-500"> · VIN {pairedAsset.vin}</span>}
+          </span>
+          <button onClick={() => pair(null)} disabled={saving} className="text-red-600 hover:underline">Unpair</button>
+        </div>
+      ) : (
+        <div className="relative">
+          <input
+            type="text"
+            value={query}
+            onChange={e => runSearch(e.target.value)}
+            placeholder="Search by VIN, make, or model to pair this document with a vehicle…"
+            className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs"
+          />
+          {searching && <Loader2 className="w-3 h-3 animate-spin absolute right-2 top-2 text-gray-400" />}
+          {results.length > 0 && (
+            <div className="border border-gray-200 rounded mt-1 bg-white shadow-sm max-h-40 overflow-y-auto">
+              {results.map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => pair(a.id)}
+                  disabled={saving}
+                  className="block w-full text-left px-2 py-1.5 text-xs hover:bg-gray-50 border-b border-gray-100 last:border-0"
+                >
+                  {a.year || ''} {a.make} {a.model} {a.vin && <span className="text-gray-400">· {a.vin}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {extraction.document_type === 'assessment_notice' && (
+        <div className="mt-3 pt-3 border-t border-gray-200">
+          <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">
+            Declared/assessed value (for later official-vs-actual comparison only — no calculation is done here)
+          </h4>
+          <div className="flex items-center gap-2">
+            <select value={declaredCurrency} onChange={e => setDeclaredCurrency(e.target.value)} className="border border-gray-300 rounded px-2 py-1 text-xs">
+              {['NGN', 'USD', 'EUR', 'GBP'].map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input
+              type="text"
+              value={declaredValueInput}
+              onChange={e => setDeclaredValueInput(e.target.value.replace(/[^0-9.]/g, ''))}
+              placeholder="Value as stated on the notice"
+              className="border border-gray-300 rounded px-2 py-1 text-xs flex-1"
+            />
+            <button onClick={saveDeclaredValue} disabled={saving} className="px-2 py-1 text-xs font-bold bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50">
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ReviewDetail: React.FC<{
   extraction: CostDocumentExtraction;
   orgId: string;
   userId: string;
   onDone: () => void;
-}> = ({ extraction, orgId, userId, onDone }) => {
+  onRefresh: () => void;
+}> = ({ extraction, orgId, userId, onDone, onRefresh }) => {
   const [docUrl, setDocUrl] = useState<string | null>(null);
   const [targetTable, setTargetTable] = useState<TargetRateTable>(
     extraction.extracted_rows[0]?.suggested_target_table || 'cost_rates'
@@ -212,6 +341,8 @@ const ReviewDetail: React.FC<{
       </div>
 
       <div onClick={e => e.stopPropagation()}>
+        <AssetPairingPanel extraction={extraction} userId={userId} onChanged={onRefresh} />
+
         <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Extracted rows — edit before confirming</h4>
         {error && <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">{error}</div>}
 
@@ -411,7 +542,13 @@ const CostDocumentExtractions: React.FC = () => {
               </div>
 
               {expandedId === extraction.id && extraction.extraction_status === 'pending_review' && orgId && user && (
-                <ReviewDetail extraction={extraction} orgId={orgId} userId={user.id} onDone={() => { setExpandedId(null); load(); }} />
+                <ReviewDetail
+                  extraction={extraction}
+                  orgId={orgId}
+                  userId={user.id}
+                  onDone={() => { setExpandedId(null); load(); }}
+                  onRefresh={load}
+                />
               )}
             </div>
           ))}

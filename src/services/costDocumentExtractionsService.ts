@@ -42,7 +42,79 @@ export interface CostDocumentExtraction {
   reviewed_at: string | null;
   created_at: string;
   created_by: string | null;
+  // PROMPT 29 Stage 6 (migration 035) — both always human-set, never model-inferred.
+  asset_id: string | null;
+  asset_paired_by: string | null;
+  asset_paired_at: string | null;
+  declared_value: number | null;
+  declared_value_currency: 'NGN' | 'USD' | 'EUR' | 'GBP' | null;
 }
+
+// Pairs an extraction with the specific vehicle it describes. Always a human's own choice made
+// in the review screen (e.g. by searching the asset by VIN) — never set from anything the
+// extraction itself read off the document. asset_id: null unpairs.
+export const setExtractionAsset = async (
+  extractionId: string,
+  userId: string,
+  assetId: string | null
+): Promise<void> => {
+  const { error } = await supabase
+    .from('cost_document_extractions')
+    .update({
+      asset_id: assetId,
+      asset_paired_by: assetId ? userId : null,
+      asset_paired_at: assetId ? new Date().toISOString() : null,
+    })
+    .eq('id', extractionId);
+  if (error) throw new Error(`Failed to set asset pairing: ${error.message}`);
+};
+
+// Records an assessment notice's own stated declared/assessed value, for later comparison
+// against what was actually paid. Purely a place for the figure to land — no comparison or
+// duty calculation is computed here or anywhere yet.
+export const setDeclaredValue = async (
+  extractionId: string,
+  value: number | null,
+  currency: 'NGN' | 'USD' | 'EUR' | 'GBP' | null
+): Promise<void> => {
+  const { error } = await supabase
+    .from('cost_document_extractions')
+    .update({ declared_value: value, declared_value_currency: value != null ? currency : null })
+    .eq('id', extractionId);
+  if (error) throw new Error(`Failed to set declared value: ${error.message}`);
+};
+
+export interface AssetSearchResult {
+  id: string;
+  vin: string | null;
+  make: string;
+  model: string;
+  year: number | null;
+}
+
+export const getAssetById = async (assetId: string): Promise<AssetSearchResult | null> => {
+  const { data, error } = await supabase
+    .from('assets')
+    .select('id, vin, make, model, year')
+    .eq('id', assetId)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load asset: ${error.message}`);
+  return data;
+};
+
+// Minimal search for the asset picker — matches VIN (exact/partial) or make/model. Human reads
+// the results and picks the one they mean; nothing here is auto-selected.
+export const searchAssets = async (query: string): Promise<AssetSearchResult[]> => {
+  const q = query.trim();
+  if (!q) return [];
+  const { data, error } = await supabase
+    .from('assets')
+    .select('id, vin, make, model, year')
+    .or(`vin.ilike.%${q}%,make.ilike.%${q}%,model.ilike.%${q}%`)
+    .limit(10);
+  if (error) throw new Error(`Failed to search assets: ${error.message}`);
+  return data || [];
+};
 
 export const listExtractions = async (orgId: string, status?: ExtractionStatus): Promise<CostDocumentExtraction[]> => {
   let q = supabase
