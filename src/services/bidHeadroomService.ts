@@ -5,6 +5,7 @@ import type { YardKey, SightingForMatching } from './yardMatchingService';
 // module that owns reading/writing it as configuration. Imported, not redefined.
 import type { PaymentTier } from './orgSettingsService';
 import { DEFAULT_PAYMENT_TIER } from './orgSettingsService';
+import { classifyTitleStatus as classifySharedTitleStatus } from '../../supabase/functions/_shared/specVocabulary.ts';
 
 // PROMPT 21 Phase 3 — the single shared cost-breakdown and bid-headroom module. Not scattered
 // across components: isUnconfirmed is already duplicated as debt because that happened once
@@ -54,20 +55,20 @@ const unavailable = (reason: string, detail = ''): CostComponent => ({
 
 // --- Title status classification ---
 // SCHEMA.md S5: title_type is genuinely messy, format varies by state and capture source.
-// Every fee row confirmed this session (PROMPT_21 Phase 1/2) is Non-Clean - Caplimo's real
-// invoices are 100% salvage titles. Rather than guess on ambiguous text, this classifier only
-// returns 'clean' on an unambiguous positive match and otherwise defaults to 'non_clean' -
-// matching the dominant real-world pattern for this business - but returns 'unknown' when the
-// text gives no signal at all, which makes the auction-fee component abstain rather than
-// silently assume a title status with no evidence either way.
-const CLEAN_INDICATORS = /\bclean title\b|\bclear\b/i;
-const NON_CLEAN_INDICATORS = /salvage|rebuilt|reconstruct|junk|parts only|flood|certificate of salvage|cert of salvage|cert of title-reconstrctd/i;
-
+// PROMPT 31 Stage 3 (debt #58) - this used to be its own independent classifier, diverging from
+// ResearchRunDetail.tsx's separate inline one (confirmed disagreeing on real data - a bare
+// "Certificate of Title" value). Both now resolve through the single shared classifier in
+// `_shared/specVocabulary.ts`; this function is a thin binary view onto it; preserving this
+// module's own long-standing 'clean'|'non_clean'|'unknown' abstain-rather-than-guess contract
+// for the auction-fee bracket lookup (a wrong guess in EITHER direction produces a wrong dollar
+// figure, so 'unknown' must stay reachable here) without touching its four call sites below.
+// Verified byte-identical against every real title_type value in production before this change.
 export function classifyTitleStatus(titleType: string | null | undefined): 'clean' | 'non_clean' | 'unknown' {
-  if (!titleType || !titleType.trim()) return 'unknown';
-  if (NON_CLEAN_INDICATORS.test(titleType)) return 'non_clean';
-  if (CLEAN_INDICATORS.test(titleType)) return 'clean';
-  return 'unknown';
+  const { status, isFloodBranded } = classifySharedTitleStatus(titleType);
+  if (isFloodBranded) return 'non_clean'; // flood always non-clean here, matching the prior regex's own explicit flood match
+  if (status === 'unknown') return 'unknown';
+  if (status === 'clean') return 'clean';
+  return 'non_clean'; // salvage | rebuilt | non_repairable
 }
 
 // --- Effective platform (shared logic with the Prompt 20 matcher - bid.cars is a resale

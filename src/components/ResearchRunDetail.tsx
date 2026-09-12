@@ -20,7 +20,7 @@ import {
   deleteSighting
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
-import { parsePreference, colourMatches, transmissionMatches, fuelMatches, trimMatches } from '../../supabase/functions/_shared/specVocabulary.ts';
+import { parsePreference, colourMatches, transmissionMatches, fuelMatches, trimMatches, isTitleAccepted, classifyTitleStatus } from '../../supabase/functions/_shared/specVocabulary.ts';
 // PROMPT 29 Stage 2 - the one definition of the sold population, imported literally (not
 // copied) by both this component and the public-run Edge Function. See that file's header for
 // why it lives under supabase/functions/_shared/ and how both toolchains parse it.
@@ -497,23 +497,20 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
           }
         }
         if (brief.titles_accepted != null && brief.titles_accepted.length > 0 && l.title_type != null) {
-          const title = l.title_type.toLowerCase();
-          let matched = false;
-          for (const accepted of brief.titles_accepted) {
-            const acc = accepted.toLowerCase();
-            let validTokens = [acc];
-            if (acc === 'clean' || acc === 'clear') validTokens = ['clean', 'clear', 'certificate of title', 'original'];
-            else if (acc === 'salvage') validTokens = ['salvage'];
-            else if (acc === 'rebuilt') validTokens = ['rebuilt', 'reconstructed'];
-            else if (acc === 'non_repairable' || acc === 'junk') validTokens = ['non-repairable', 'junk', 'parts', 'destruction'];
-            
-            if (validTokens.some(t => title.includes(t))) {
-              matched = true;
-              break;
-            }
-          }
-          if (!matched) {
-            addSpecRule(specCritical, `title type not accepted (${l.title_type} vs [${brief.titles_accepted.join(',')}])`, l.id);
+          // PROMPT 31 Stage 3 (debt #58) - was its own inline classifier here, independently
+          // written from bidHeadroomService.ts's, and confirmed disagreeing with it on real data
+          // (a bare "Certificate of Title" value). Both now resolve through the one shared
+          // classifier (_shared/specVocabulary.ts), which takes the more severe reading: a title
+          // it can't confidently classify is never silently treated as accepted.
+          if (!isTitleAccepted(l.title_type, brief.titles_accepted)) {
+            const { status } = classifyTitleStatus(l.title_type);
+            // Surfaces the ambiguous case distinctly rather than resolving it silently into the
+            // same message a confidently-wrong title gets - a staff member reading this should
+            // see "this needs a human to check" as a different fact from "this is salvage".
+            const reason = status === 'unknown'
+              ? `title type could not be confidently classified (raw: "${l.title_type}") - treated as not accepted pending manual review`
+              : `title type not accepted (${l.title_type} vs [${brief.titles_accepted.join(',')}])`;
+            addSpecRule(specCritical, reason, l.id);
           }
         }
 

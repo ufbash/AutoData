@@ -275,3 +275,96 @@ export function parsePreference(raw: string | null | undefined): ParsedPreferenc
 
   return { kind: 'required', value: trimmed };
 }
+
+// --- Title status classification (Prompt 31 Stage 3, debt #58) ---
+//
+// Until this stage, two independent classifiers existed: `bidHeadroomService.ts`'s
+// `classifyTitleStatus` (binary clean|non_clean|unknown, deliberately conservative - built to
+// pick a fee-bracket row, where a wrong guess in EITHER direction produces a wrong dollar
+// figure) and `ResearchRunDetail.tsx`'s inline 4-way spec-match logic (permissive, built to
+// avoid nagging false-alarm WARNs on a brief's titles_accepted preference). They disagreed on
+// real, live data - `"Certificate of title (WV)"` classified as clean-equivalent by the
+// permissive one, unknown by the conservative one - found and registered as debt #58 by Prompt
+// 30's normalizer audit rather than silently discovered later.
+//
+// These are not measuring different things; they encode different tolerances for the SAME
+// thing, and the costs are asymmetric (DECISIONS.md's own reasoning, restated here because it's
+// what this classifier is built to enforce): a clean car wrongly classed salvage produces a
+// false block - visible, annoying, overridable. A salvage car wrongly classed clean passes
+// spec rule 5's titles_accepted gate and can reach a client as a purchase option - a title
+// problem is a customs-seizure risk (PROJECT_CHARTER.md §6), not visible until it's too late,
+// and not the client's to have chosen. One classifier, taking the MORE SEVERE reading for
+// eligibility/blocking purposes, is the only correct resolution - not an average of the two,
+// not "pick whichever recognises more text."
+//
+// A generic "Certificate of Title" (no "Clean"/"Salvage"/etc qualifier) is exactly the case
+// this severity choice bites on: it is the LEGAL DOCUMENT NAME for any title, branded or not -
+// salvage titles are also, formally, a "certificate of title". Treating the bare phrase as a
+// clean signal (the old permissive behaviour) was not a looser tolerance, it was reading a
+// generic term as if it were specific. This classifier does not. Blast radius measured against
+// real data before this was built: 19 real sightings carry a bare "Certificate of [Vehicle]
+// Title" value; 4 of 5 real briefs with `titles_accepted` set include 'Clean'; but the two never
+// currently intersect inside an evaluated `active_listings`/`mixed` run with that exact brief
+// (the one run where a bare-cert-of-title listing sits alongside a clean-accepting brief is
+// `sold_comps`, where spec rule 5 never fires at all - see below) - a real disagreement with,
+// today, zero live-blocking impact, not a theoretical one.
+export type TitleStatusClass = 'clean' | 'salvage' | 'rebuilt' | 'non_repairable' | 'unknown';
+
+export interface TitleClassification {
+  status: TitleStatusClass;
+  // Flood is tracked independently of `status`, never folded into it or into general damage
+  // classification (PROJECT_CHARTER.md §6) - a flood-branded title is never treated as clean
+  // regardless of what other language ("clean title", "certificate of title") appears alongside
+  // it, and a caller that cares about flood specifically (vs. just clean/non-clean) can check
+  // this flag without it being silently absorbed into "salvage".
+  isFloodBranded: boolean;
+}
+
+// Deliberately narrow: only an EXPLICIT clean-title phrase counts. A bare "Certificate of
+// Title" with no qualifier does not - see the module comment above for why that specific
+// generic phrase is the real hazard this severity choice exists to close.
+const TITLE_CLEAN_INDICATORS = /\bclean title\b|\bclear\b/i;
+const TITLE_NON_REPAIRABLE_INDICATORS = /\bnon[- ]repairable\b|\bjunk\b|\bparts only\b|\bdestruction\b/i;
+const TITLE_SALVAGE_INDICATORS = /\bsalvage\b|\bcert(?:ificate)?\s*of\s*salvage\b/i;
+const TITLE_REBUILT_INDICATORS = /\brebuilt\b|\breconstruct(?:ed)?\b|reconstrctd/i;
+const TITLE_FLOOD_INDICATORS = /\bflood\b/i;
+
+/**
+ * The one title-status classifier - both former call sites (the auction-fee bracket lookup and
+ * spec rule 5's titles_accepted check) resolve through this. Unrecognised or absent text
+ * classifies as 'unknown', never guessed toward 'clean' - the severe reading for anything that
+ * isn't unambiguous. Order matters: non_repairable/salvage/rebuilt are checked before clean, so
+ * a string carrying both a branding word and the word "title" (nearly all of them do) never
+ * accidentally matches on a coincidental clean-adjacent word first.
+ */
+export function classifyTitleStatus(titleType: string | null | undefined): TitleClassification {
+  const isFloodBranded = !!titleType && TITLE_FLOOD_INDICATORS.test(titleType);
+  if (!titleType || !titleType.trim()) return { status: 'unknown', isFloodBranded };
+  if (TITLE_NON_REPAIRABLE_INDICATORS.test(titleType)) return { status: 'non_repairable', isFloodBranded };
+  if (TITLE_SALVAGE_INDICATORS.test(titleType)) return { status: 'salvage', isFloodBranded };
+  if (TITLE_REBUILT_INDICATORS.test(titleType)) return { status: 'rebuilt', isFloodBranded };
+  if (TITLE_CLEAN_INDICATORS.test(titleType)) return { status: 'clean', isFloodBranded };
+  return { status: 'unknown', isFloodBranded };
+}
+
+/**
+ * Spec rule 5's own question: does this listing's title satisfy a brief's `titles_accepted`
+ * list? Severe reading applied here, not inside the classifier itself, so the classifier stays
+ * a neutral fact-finder and this function stays the one place eligibility policy lives: an
+ * `unknown` classification or a flood brand never silently passes as accepted, regardless of
+ * what the brief's list contains - the brief would have to explicitly ask for something this
+ * function doesn't yet recognise, which it can't, so the honest answer is "not accepted, needs a
+ * human to look," not a guess in either direction.
+ */
+export function isTitleAccepted(titleType: string | null | undefined, acceptedList: string[]): boolean {
+  const { status, isFloodBranded } = classifyTitleStatus(titleType);
+  if (status === 'unknown' || isFloodBranded) return false;
+  return acceptedList.some(raw => {
+    const acc = raw.trim().toLowerCase();
+    if (acc === 'clean' || acc === 'clear') return status === 'clean';
+    if (acc === 'salvage') return status === 'salvage';
+    if (acc === 'rebuilt') return status === 'rebuilt';
+    if (acc === 'non_repairable' || acc === 'junk') return status === 'non_repairable';
+    return false;
+  });
+}
