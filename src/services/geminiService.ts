@@ -82,7 +82,7 @@ export const normalizeHistoricalData = async (salesBatch: CarSale[]): Promise<Ca
               1. **BMW:** 'Model' MUST be the Series or X-line (e.g., '3 Series', '5 Series', 'X5', 'X6'). 'Trim' is the specific badge and drivetrain (e.g., '330i xDrive', 'M50i', 'Competition'). Do NOT use '330i' as the Model. 
               2. **Mercedes-Benz:** 'Model' MUST be the Class or SUV line (e.g., 'C-Class', 'E-Class', 'G-Class', 'GLE', 'S-Class'). 'Trim' is the engine/badge (e.g., 'C 43 AMG', 'G 63', 'E 350'). Do NOT use 'C43' as the Model. 
               3. **Land Rover:** 'Model' is the core family (e.g., 'Range Rover', 'Range Rover Sport', 'Defender'). 'Trim' is the spec (e.g., 'Autobiography', 'HSE', 'V8 Carpathian'). 
-              4. **General Rule:** 'Model' is the broad family. 'Trim' is the specific performance, package, or engine variant. If a trim is unknown, use 'Base', but never put a trim level into the Model field. 
+              4. **General Rule:** 'Model' is the broad family. 'Trim' is the specific performance, package, or engine variant - never put a trim level into the Model field. If the source data does not state a trim, return null for 'Trim' - do not guess or default to 'Base'; a car whose trim is genuinely unstated is not the same fact as a car confirmed to be the base trim.
 
               I am providing an array of messy car sales records in JSON format.
               The Make, Model, Trim, and Year fields are often mixed up (e.g., Year is inside the Make, Trim is inside the Model). 

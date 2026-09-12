@@ -1844,3 +1844,47 @@ data before writing anything, and would have reported - never merged - any it fo
 actually producing the disagreement before touching the system that merely consumes it. And any
 identity-formula change is, by construction, a backfill-and-collision-report problem, not a
 one-line fix - plan for that before writing the new formula, not after.
+
+---
+
+## 30. A fix proven correct by RPC computation still needs proving through the real path - and the real path can reveal a second, deeper gap
+
+**What topic 29 actually proved, precisely.** Prompt 30 proved debt #46's cross-platform fix by
+calling the real `generate_fingerprint()` RPC with each platform's own raw values run through the
+new canonicalizer, and confirming the two hashes matched. That is real, non-trivial proof - it is
+not the same as "the code looks right." But it is also not proof that the *merge* happens through
+the actual deployed capture endpoint, because the backfill that accompanied it produced zero
+collisions, correctly: every VIN-bearing asset already carries a VIN-based hash, structurally
+unable to collide with a freshly-recomputed VIN-less one. The RPC-level proof and the
+live-endpoint proof are different claims, and only one of them had actually been tested.
+
+**What the real capture found.** Bashir re-captured the bid.cars side of the Mercedes lot after
+the backfill, specifically to close that gap. The capture landed - `captured_at` updated - but
+resolved to the *same* asset it already pointed at, with `asset_fingerprint_outcome: null`: the
+upgrade-probe code path never ran. Tracing why revealed a second, more fundamental limitation
+than the one Prompt 30 fixed: `research-capture/index.ts`'s upgrade logic is gated on
+`!existingAsset` - it only ever runs at the exact moment a VIN-bearing capture arrives and no
+VIN-bearing asset for that VIN exists yet. The very first capture of this pair (bid.cars, with
+VIN, timestamped minutes before Copart's vinless capture of the same lot) satisfied that
+condition and found nothing to upgrade, because the vinless sibling didn't exist yet - so it
+just created a normal new VIN-bearing asset, correctly, by the letter of the current design.
+Every capture after that point (including today's) finds `existingAsset` immediately via the
+main hash lookup and never reaches the probe at all.
+
+**The honest conclusion: the canonicalization fix and the merge-window fix are two different
+things, and only one was built.** Canonicalizing model/trim (Prompt 30) makes it *possible* for
+a VIN-bearing capture's probe to find a canonically-matching vinless sibling. It does nothing for
+the case where the VIN-bearing asset already exists - which, for any pair where the two platforms
+happen to get captured in the "wrong" order (VIN-bearing first), is not an edge case but the
+default outcome. This was always implied by the existing "existing production splits are not
+auto-merged by this fix" caveat in debt #46's own text - Prompt 31's real capture is what turned
+that caveat from a stated limitation into a demonstrated, concrete failure with its own evidence.
+
+**How to extend it:** an RPC-level or unit-level proof that two independently-computed values now
+agree is real evidence for the *formula*, but it is a different claim from "the system that
+consumes this formula behaves correctly end to end" - especially when the surrounding logic has
+its own gating conditions (here, `!existingAsset`) that a formula-level test cannot exercise. When
+a fix touches a stateful, order-dependent process (an upgrade that only fires once, at a specific
+moment, for a specific reason), proving the formula is necessary but not sufficient - budget for
+a real, live run through the actual entry point before calling the case closed, and expect that
+run to sometimes surface a second gap the formula-level proof had no way to see.

@@ -151,6 +151,7 @@ Phase C.
 | 4.12 | A2's damage-severity-decrease escalation is dropped; decreasing odometer between appearances is the proxy critical signal | LOCKED (4 Sep 2026) |
 | 4.13 | A raw client-brief field never enters a public payload; only a value derived from it (a boolean, a count, a status label) may | LOCKED (11 Sep 2026) |
 | 4.14 | Vehicle-identity normalization is derived at fingerprint-computation time only, never written back to a captured make/model/trim field | LOCKED (12 Sep 2026) |
+| 4.15 | Title status has one classifier, taking the severe reading for active-listing eligibility/blocking; disagreement is surfaced, never silently resolved; never applied to sold comps | LOCKED (12 Sep 2026) |
 
 **On 4.11/4.12 — supersedes `PROJECT_CHARTER.md` §6's original wording.** A car auctioned
 twice is itself the disqualifying signal for a client vehicle regardless of whether the two
@@ -231,6 +232,37 @@ trim into its model string and bid.cars doesn't. A future prompt optimizing for 
 this twice" must not fold normalization into the write path. Compute it at read/fingerprint
 time, every time, from the shared `_shared/specVocabulary.ts` module — never a second one
 (the same lesson `soldGroup.ts` already exists to teach).
+
+**On 4.15 — the asymmetry, stated so it survives being "simplified" later.** Two independent
+title-status classifiers (`bidHeadroomService.ts`'s fee-lookup one, `ResearchRunDetail.tsx`'s
+spec-match one) disagreed on real data — a bare `"Certificate of Title"` value, which is the
+*legal document name* for any title, branded or not, not a clean-title signal at all
+(`PLAN_TRACKER.md` §4.21/debt #58). The two were not measuring different things; they were
+applying different tolerances to the same fact, and the costs of being wrong are not symmetric:
+
+- A clean car wrongly classed salvage produces a false BLOCK on an active listing — visible to
+  staff, annoying, and overridable with a typed reason (§4.9's tier 2).
+- A salvage car wrongly classed clean passes spec rule 5's `titles_accepted` gate and reaches a
+  client as a live purchase option. A title problem discovered after purchase is a customs-
+  seizure risk at the Nigerian border (`PROJECT_CHARTER.md` §6) — not visible until it's too
+  late, and not a risk the client chose or can undo.
+
+Given that asymmetry, "average the two tolerances" or "pick whichever recognises more text" are
+both wrong answers — only the more severe reading is defensible for anything that gates whether
+a listing reaches a client. **This must never be softened into a symmetric or permissive
+classifier later** just because it produces more `unknown`/blocked results than the old
+permissive logic did; that reduction in false "accepted" answers is the fix, not a side effect
+to tune away. Three things keep this from becoming its own new failure mode: (1) an `unknown`
+classification is shown to staff as a distinct "needs manual review" message, never silently
+folded into the same badge a confidently-wrong title gets — the disagreement is surfaced, not
+resolved by fiat; (2) flood is tracked as an independent flag, never absorbed into "salvage" or
+into the separate critical-damage-keyword system (§4.9's own list, `SCHEMA.md` §4) that already
+treats it specially; (3) **this severity rule applies to active-listing eligibility only.** §5.6
+already establishes that risk and spec rules must never touch sold comps — a salvage or
+flood-damaged car that genuinely sold is valid market history, and applying a severity rule to a
+sold population would corrupt the very average §4.1/§4.2 exist to protect. Neither classifier
+call site (the fee lookup, spec rule 5) reaches sold-comps code at all; that separation is
+structural, not just policy, and must stay that way if this classifier is ever extended.
 
 ---
 
