@@ -122,16 +122,20 @@ export const standardizeVehicleString = async (input: string): Promise<Standardi
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
-      contents: `Extract vehicle and sales information from this text: "${input}". 
-      
+      contents: `Extract vehicle and sales information from this text: "${input}".
+
       Rules:
-      1. If a year is not present, use "Unknown". 
+      1. If a year is not present, use "Unknown".
       2. If trim is not present, use "Base".
       3. Extract price as a number (ignore currency symbols like NGN, $).
-      4. Detect currency code (default to NGN if ambiguous but looks like Naira).
+      4. For currency: only return one of 'NGN', 'USD', 'EUR', 'GBP' if the text itself makes the
+         currency clear (an explicit symbol or code, or unambiguous context). If the currency is
+         not stated or is ambiguous, return the literal string "NOT_VISIBLE" instead - do NOT
+         guess a default. Do not use outside knowledge (e.g. assuming Naira because a dealer name
+         sounds Nigerian) to fill this in - only what the text itself states.
       5. Extract Dealer/Seller name if present (e.g., "Sold by...", "Dealer: ...").
       6. Extract Date Sold if present (format YYYY-MM-DD).
-      
+
       Ensure Make and Model are proper casing.`,
       config: {
         responseMimeType: "application/json",
@@ -143,7 +147,15 @@ export const standardizeVehicleString = async (input: string): Promise<Standardi
             trim: { type: Type.STRING },
             year: { type: Type.STRING },
             price: { type: Type.NUMBER },
-            currency: { type: Type.STRING, enum: ['NGN', 'USD', 'EUR', 'GBP'] },
+            // PROMPT 30 Stage 3 (debt #53) - "NOT_VISIBLE" added as a valid enum value so the
+            // model has somewhere to abstain to; it used to be instructed to "default to NGN if
+            // ambiguous", which is a guess dressed as a default (the same class of bug fixed in
+            // extract-vehicle-vision, Prompt 29 Stage 5 / debt #44). Known limitation, same as
+            // debt #54: a model does not reliably distinguish "genuinely ambiguous" from
+            // "confidently wrong" - this abstention reduces but does not eliminate a wrong
+            // currency reaching a human. CarForm.tsx's review step (never auto-saved) is the
+            // actual backstop, not the prompt wording.
+            currency: { type: Type.STRING, enum: ['NGN', 'USD', 'EUR', 'GBP', 'NOT_VISIBLE'] },
             dealer: { type: Type.STRING },
             dateSold: { type: Type.STRING }
           },

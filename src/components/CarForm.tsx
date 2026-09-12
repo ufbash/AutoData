@@ -129,7 +129,10 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
   const [trim, setTrim] = useState('');
   const [year, setYear] = useState('');
   const [price, setPrice] = useState<number | null>(null); // Internal numeric value (not used for display)
-  const [currency, setCurrency] = useState<Currency>(Currency.NGN);
+  // '' means "needs review" - an AI abstention (PROMPT 30 Stage 3, debt #53) must be able to
+  // land here instead of silently keeping whatever value was already selected, which is exactly
+  // what a bare `Currency` type with no "unset" member would do.
+  const [currency, setCurrency] = useState<Currency | ''>(Currency.NGN);
   const [dateListed, setDateListed] = useState('');
   const [dateSold, setDateSold] = useState(new Date().toISOString().split('T')[0]);
   const [dealer, setDealer] = useState('');
@@ -257,7 +260,14 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         setPrice(result.price);
         setPriceDisplay(formatNumberWithCommas(result.price));
       }
-      if (result.currency) setCurrency(result.currency as Currency);
+      // PROMPT 30 Stage 3 (debt #53) - a legible currency is set explicitly; an abstention
+      // ("NOT_VISIBLE") or absence must explicitly clear the field to "needs review", never
+      // silently leave the prior value (which defaults to NGN) standing in for a real answer.
+      if (result.currency && result.currency !== 'NOT_VISIBLE') {
+        setCurrency(result.currency as Currency);
+      } else {
+        setCurrency('');
+      }
       if (result.dealer) setDealer(result.dealer);
       if (result.dateSold) setDateSold(result.dateSold);
       setStep('verify');
@@ -365,6 +375,14 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         isValid = false;
       }
 
+      // PROMPT 30 Stage 3 (debt #53) - a price with no currency is meaningless; block submit
+      // rather than silently writing whatever the currency field last happened to hold. Currency
+      // itself is fine left blank when there's no price to attach it to.
+      if (priceDisplay !== '' && currency === '') {
+        newErrors.currency = "Select a currency (AI could not determine it - see the source text)";
+        isValid = false;
+      }
+
       setErrors(newErrors);
       return isValid;
   };
@@ -418,7 +436,9 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
         sale_date: dateSold || undefined,
         listed_price: numericPrice ?? null,
         date_listed: dateListed || undefined,
-        listed_currency: currency,
+        // Blank only reaches here when there's no price to attach it to (validate() blocks
+        // submit otherwise) - undefined rather than an empty string in that case.
+        listed_currency: currency || undefined,
         tags: finalTags,
         daysToSell: daysToSell
       });
@@ -584,13 +604,18 @@ const CarForm: React.FC<CarFormProps> = ({ onSaleAdded, onCancel, initialData, c
             <div className="flex gap-2">
                 <div className="w-24">
                    <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Currency</label>
-                   <select 
-                     value={currency} 
-                     onChange={(e) => setCurrency(e.target.value as Currency)}
-                     className="w-full p-2 border rounded mt-1 bg-[#F0EDDE] border-gray-300 focus:ring-2 focus:ring-[#a58039] outline-none"
+                   <select
+                     value={currency}
+                     onChange={(e) => {
+                       setCurrency(e.target.value as Currency);
+                       if (errors.currency) setErrors({ ...errors, currency: '' });
+                     }}
+                     className={`w-full p-2 border rounded mt-1 bg-[#F0EDDE] outline-none ${errors.currency ? 'border-[#ba3b46] focus:ring-[#ba3b46]' : 'border-gray-300 focus:ring-2 focus:ring-[#a58039]'}`}
                    >
+                     {currency === '' && <option value="">Select...</option>}
                      {Object.values(Currency).map(c => <option key={c} value={c}>{c}</option>)}
                    </select>
+                   {errors.currency && <p className="text-[#ba3b46] text-xs mt-1">{errors.currency}</p>}
                 </div>
                 <div className="flex-1">
                     <label className="block text-xs font-bold text-[#403f4c] uppercase tracking-wide">Sold Price</label>
