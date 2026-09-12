@@ -120,6 +120,108 @@ export function trimMatches(listingTrim: string, briefTrim: string, briefModel?:
   return listing.includes(brief);
 }
 
+// --- Vehicle identity canonicalization, for fingerprint computation only (Prompt 30 Stage 2,
+// debt #46) ---
+//
+// PROJECT_CHARTER.md §5.8: raw at capture, classify at read. This function, like every other
+// one in this file, never touches a stored value - `canonicalizeForFingerprint`'s output feeds
+// ONLY into generate_fingerprint's p_model/p_trim arguments when computing a VIN-less identity
+// hash. The real captured make/model/trim written to `assets`/`sightings` are never mutated.
+//
+// Two real cases this closes, found live during Prompt 29's own verification:
+// - Mercedes lot 66964556: Copart wrote model "E 250 Bluetec" (trim folded into model, no
+//   separate trim field, no hyphen); bid.cars wrote model "E-class" + trim "250 BLUETEC"
+//   (properly split). Two different VIN-less fingerprints for the identical physical car.
+// - Toyota Yaris lot 62572576: Copart wrote model "Yaris IA BASE" (Toyota's real "iA" submodel
+//   marker AND the trim both folded into the model string); bid.cars wrote model "Yaris" + trim
+//   "BASE" (the "iA" marker dropped entirely on capture - a bid.cars data-completeness gap this
+//   normaliser works around for this shape, not a naming convention it can independently
+//   rediscover).
+//
+// Extends the class-letter concept above rather than building a second, divergent normaliser
+// (exactly the failure Prompt 29 Stage 2 spent its own time unwinding for the sold-group
+// definition). `extractClassLetterForIdentity` below additionally recognises a bare
+// "<Letter> <number>" model (no "Class" word, no hyphen - "E 250" for what bid.cars separately
+// spells "E-Class"/"250") - a second, very common way Copart-style listings write a Mercedes
+// class model. This wider recognition is used for identity canonicalization ONLY:
+// `extractClassLetter`/`trimMatches` above keep their exact original, narrower recognition,
+// unchanged - a brief's own model field has never been observed in the bare-letter-number
+// shape, and widening spec-match comparison was neither asked for here nor tested.
+function extractClassLetterForIdentity(model: string): string | null {
+  const classSuffixMatch = model.match(/^([A-Za-z])[\s-]*Class\b/i);
+  if (classSuffixMatch) return classSuffixMatch[1].toUpperCase();
+  const bareLetterNumber = model.match(/^([A-Za-z])\s+\d/);
+  if (bareLetterNumber) return bareLetterNumber[1].toUpperCase();
+  const named = NAMED_CLASS_MODELS.find(n => new RegExp(`^${n}\\b`, 'i').test(model));
+  return named ?? null;
+}
+
+// A short (<= 2 letter) alphabetic token immediately following the recognised base model name is
+// treated as a submodel/badge marker rather than the trim itself (e.g. Toyota's real "Yaris iA"
+// submodel code) ONLY when at least one more token follows it. When it's the last remaining
+// token, it is the only distinguishing information this capture carries, and dropping it would
+// risk fusing two genuinely different vehicles - Prompt 30 Stage 2's own named hazard - so it
+// survives as the canonical trim instead. This is what keeps a bare "Yaris iA" (nothing else)
+// from colliding with a bare "Yaris" (no submodel, no trim) - proven in
+// scratchpad/verify_vehicleIdentity.ts, not asserted.
+const SUBMODEL_QUALIFIER_MAX_LEN = 2;
+
+export interface CanonicalVehicleIdentity {
+  canonicalModel: string;
+  canonicalTrim: string;
+}
+
+/**
+ * Canonicalizes model/trim for FINGERPRINT COMPUTATION ONLY - never for display, never written
+ * back to a stored field. Two captures of the same physical car that disagree only in how a
+ * source folds trim/submodel information into the model string produce the same canonical
+ * (model, trim) pair, and therefore the same VIN-less fingerprint; two captures of genuinely
+ * different vehicles do not (see the submodel-qualifier rule above for how that's protected).
+ */
+export function canonicalizeForFingerprint(
+  model: string | null | undefined,
+  trim: string | null | undefined
+): CanonicalVehicleIdentity {
+  const rawModel = (model ?? '').trim();
+  const rawTrim = (trim ?? '').trim();
+
+  const classLetter = rawModel ? extractClassLetterForIdentity(rawModel) : null;
+
+  let canonicalModel: string;
+  let overflowFromModel: string[];
+
+  if (classLetter) {
+    canonicalModel = classLetter;
+    const withoutClassSuffix = rawModel.replace(/^([A-Za-z])[\s-]*Class\b/i, '').trim();
+    const remainder = withoutClassSuffix !== rawModel
+      ? withoutClassSuffix
+      : rawModel.replace(/^[A-Za-z]\s+/, '').trim();
+    overflowFromModel = remainder.length > 0 ? remainder.split(/\s+/) : [];
+  } else {
+    const tokens = rawModel.length > 0 ? rawModel.split(/\s+/) : [];
+    canonicalModel = tokens[0] ?? '';
+    overflowFromModel = tokens.slice(1);
+  }
+
+  let canonicalTrim: string;
+  if (rawTrim.length > 0) {
+    canonicalTrim = rawTrim;
+  } else if (
+    overflowFromModel.length > 1 &&
+    overflowFromModel[0].length <= SUBMODEL_QUALIFIER_MAX_LEN &&
+    /^[A-Za-z]+$/.test(overflowFromModel[0])
+  ) {
+    canonicalTrim = overflowFromModel.slice(1).join(' ');
+  } else {
+    canonicalTrim = overflowFromModel.join(' ');
+  }
+
+  return {
+    canonicalModel: canonicalModel.toLowerCase(),
+    canonicalTrim: canonicalTrim.toLowerCase(),
+  };
+}
+
 // --- Negative and open preferences (Prompt 16 Phase 3) ---
 //
 // A brief's free-text preference field can mean three different things, and conflating them is

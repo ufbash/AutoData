@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { canonicalizeForFingerprint } from "../_shared/specVocabulary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -120,13 +121,25 @@ serve(async (req: Request) => {
 
     const cf = payload.captured_fields;
 
+    // PROMPT 30 Stage 2 (debt #46) - canonical model/trim for IDENTITY (fingerprint) purposes
+    // only. Two platforms can disagree on how trim/submodel information is folded into the
+    // model string for the exact same physical car (Copart "E 250 Bluetec" vs bid.cars
+    // "E-class"/"250 BLUETEC"; Copart "Yaris IA BASE" vs bid.cars "Yaris"/"BASE") - the
+    // fingerprint formula itself is correct, the inputs disagree. This NEVER touches the raw
+    // cf.model/cf.trim values written to assets/sightings below (PROJECT_CHARTER.md §5.8) - it
+    // only changes what generate_fingerprint's p_model/p_trim receive. When a VIN is present the
+    // SQL function ignores p_model/p_trim entirely, so canonicalizing unconditionally here is a
+    // no-op for VIN-bearing captures and the real fix for VIN-less ones. See
+    // supabase/functions/_shared/specVocabulary.ts for the canonicalization itself.
+    const identity = canonicalizeForFingerprint(cf.model, cf.trim);
+
     // Call generate_fingerprint RPC
     const { data: fingerprintHash, error: rpcError } = await supabase.rpc("generate_fingerprint", {
       p_vin: cf.vin ?? null,
       p_make: cf.make ?? null,
-      p_model: cf.model ?? null,
+      p_model: identity.canonicalModel,
       p_year: cf.year ?? null,
-      p_trim: cf.trim ?? null,
+      p_trim: identity.canonicalTrim,
       p_exterior_color: cf.exterior_color ?? null,
       p_interior_color: cf.interior_color ?? null,
       p_origin_status: null
@@ -175,12 +188,15 @@ serve(async (req: Request) => {
     // afterwards than a split.
     const hasUsableVin = typeof cf.vin === 'string' && cf.vin.length >= 11;
     if (!existingAsset && hasUsableVin) {
+      // Same canonical model/trim as the main call above - the probe must use the identical
+      // identity formula, or it could never find the asset the main call itself would produce
+      // for this same car under its own VIN-less path.
       const { data: vinlessHash, error: vinlessRpcError } = await supabase.rpc("generate_fingerprint", {
         p_vin: null,
         p_make: cf.make ?? null,
-        p_model: cf.model ?? null,
+        p_model: identity.canonicalModel,
         p_year: cf.year ?? null,
-        p_trim: cf.trim ?? null,
+        p_trim: identity.canonicalTrim,
         p_exterior_color: cf.exterior_color ?? null,
         p_interior_color: cf.interior_color ?? null,
         p_origin_status: null

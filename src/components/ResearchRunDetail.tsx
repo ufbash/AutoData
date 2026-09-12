@@ -20,7 +20,7 @@ import {
   deleteSighting
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
-import { parsePreference, colourMatches, transmissionMatches, fuelMatches, trimMatches } from '../utils/specVocabulary';
+import { parsePreference, colourMatches, transmissionMatches, fuelMatches, trimMatches } from '../../supabase/functions/_shared/specVocabulary.ts';
 // PROMPT 29 Stage 2 - the one definition of the sold population, imported literally (not
 // copied) by both this component and the public-run Edge Function. See that file's header for
 // why it lives under supabase/functions/_shared/ and how both toolchains parse it.

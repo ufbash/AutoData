@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { canonicalizeForFingerprint } from "../_shared/specVocabulary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -131,12 +132,17 @@ serve(async (req: Request) => {
 
     for (const v of payload.vehicles || []) {
       try {
+        // PROMPT 30 Stage 2 (debt #46) - same canonicalization research-capture uses, imported
+        // from the same shared module (never a second, divergent implementation), so a
+        // manually-entered or AI-vision vehicle can still match an extension-captured one with
+        // an equivalent identity. Fingerprint-only - v.model/v.trim are written raw below.
+        const identity = canonicalizeForFingerprint(v.model, v.trim);
         const { data: fingerprintHash, error: rpcError } = await supabase.rpc("generate_fingerprint", {
           p_vin: v.vin ?? null,
           p_make: v.make ?? null,
-          p_model: v.model ?? null,
+          p_model: identity.canonicalModel,
           p_year: v.year ?? null,
-          p_trim: v.trim ?? null,
+          p_trim: identity.canonicalTrim,
           p_exterior_color: v.exterior_color ?? null,
           p_interior_color: null,
           p_origin_status: null
