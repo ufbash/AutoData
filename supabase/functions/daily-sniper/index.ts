@@ -1,5 +1,4 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,11 +13,18 @@ serve(async (req: Request) => {
 
   try {
     // 2. Authorization checking
+    // PROMPT 31 Stage 2 (debt #56) - was a hardcoded literal in source (in git history since
+    // ccac489, 21 Jun 2026). Moved to env config, matching the exact pattern every other
+    // secret-header-authenticated function in this codebase already uses (research-capture,
+    // upload-images: RESEARCH_CAPTURE_SECRET; monthly-backup: BACKUP_SECRET) - no new mechanism.
+    // Rotating the value itself is Bashir's action: he must set SNIPER_SECRET in the Supabase
+    // project's Edge Function secrets before this deploys, or every real call starts failing.
     const sniperSecret = req.headers.get("x-sniper-secret");
-    if (sniperSecret !== "MobileSniper2026!") {
-      return new Response(JSON.stringify({ error: "Unauthorized: Invalid Secret" }), { 
-        status: 401, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    const expectedSecret = Deno.env.get("SNIPER_SECRET");
+    if (!expectedSecret || !sniperSecret || sniperSecret !== expectedSecret) {
+      return new Response(JSON.stringify({ error: "Unauthorized: Invalid Secret" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
@@ -45,15 +51,10 @@ serve(async (req: Request) => {
 
     console.log(`Processing payload containing ${images.length} images...`);
 
-    // 4. Initialize Supabase
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-      throw new Error("Missing SUPABASE env vars.");
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    // PROMPT 31 Stage 2 (debt #56) - this function no longer writes to the database (see the
+    // removed `sales` insert below), so it no longer needs the service-role key at all. Dropping
+    // it entirely is a real reduction in blast radius, not just tidying: a function with no DB
+    // client can't be repurposed later to write somewhere it shouldn't with elevated privileges.
 
     // 5. Initialize Gemini
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
@@ -79,8 +80,11 @@ You MUST strictly follow these brand-specific taxonomy rules for Make, Model, an
 - 'Make' is the brand (e.g., 'Mercedes-Benz', 'Toyota'). 
 If a dealer posts '2024 Mercedes C43', you must return { year: '2024', make: 'Mercedes-Benz', model: 'C-Class', trim: 'C 43 AMG' }.
 
-Return as a clean JSON object with keys: { make, model, trim, year, price, originalCurrency, dateListed, dateSold, mileage, dealer }. 
-For 'originalCurrency', strictly use one of: 'NGN', 'USD', 'EUR', 'GBP'. Default to 'NGN' if ambiguous.
+Return as a clean JSON object with keys: { make, model, trim, year, price, originalCurrency, dateListed, dateSold, mileage, dealer }.
+For 'originalCurrency': only return one of 'NGN', 'USD', 'EUR', 'GBP' if the images themselves make
+the currency clear (an explicit symbol or code). If it is not stated or is ambiguous, return the
+literal string "NOT_VISIBLE" instead - do NOT guess a default. Do not use outside knowledge (e.g.
+assuming Naira because the post looks Nigerian) to fill this in.
 Format dates as YYYY-MM-DD.
 If a field is missing, use null.
 Return ONLY the JSON object, no markdown formatting, no conversational text.
@@ -136,40 +140,52 @@ Return ONLY the JSON object, no markdown formatting, no conversational text.
 
     console.log("Parsed Record:", extractedRecord);
 
-    // 8. Fetch Exchange Rates to calculate priceUSD
-    let usdRate = 1;
+    // PROMPT 31 Stage 2 (debt #56) - an abstained currency (null or "NOT_VISIBLE") must never be
+    // treated as NGN, here or anywhere downstream: not for a live-rate lookup, not for a
+    // fallback rate, not in the final response. Every prior version of this block defaulted to
+    // 'NGN' three separate times, which would have silently mispriced computedPriceUSD for any
+    // ambiguous-currency post.
+    const hasLegibleCurrency = typeof extractedRecord.originalCurrency === 'string'
+      && extractedRecord.originalCurrency !== 'NOT_VISIBLE';
+    const legibleCurrency: string | null = hasLegibleCurrency ? extractedRecord.originalCurrency : null;
+
+    // 8. Fetch Exchange Rates to calculate priceUSD - skipped entirely when the currency itself
+    // is not legible, since there is nothing honest to convert from.
+    let usdRate: number | null = null;
     const fallbackRates: Record<string, number> = { 'USD': 1, 'NGN': 1500, 'EUR': 0.92, 'GBP': 0.79 };
-    
-    try {
-      console.log("Fetching live exchange rates...");
-      const rateRes = await fetch('https://open.er-api.com/v6/latest/USD');
-      if (rateRes.ok) {
-        const rateData = await rateRes.json();
-        const currency = extractedRecord.originalCurrency || 'NGN';
-        usdRate = rateData.rates[currency] || fallbackRates[currency] || 1;
-      } else {
-        throw new Error("Rate API not returning 200 OK");
+
+    if (legibleCurrency) {
+      try {
+        console.log("Fetching live exchange rates...");
+        const rateRes = await fetch('https://open.er-api.com/v6/latest/USD');
+        if (rateRes.ok) {
+          const rateData = await rateRes.json();
+          usdRate = rateData.rates[legibleCurrency] || fallbackRates[legibleCurrency] || null;
+        } else {
+          throw new Error("Rate API not returning 200 OK");
+        }
+      } catch (e) {
+        console.warn("Using fallback exchange rates:", e);
+        usdRate = fallbackRates[legibleCurrency] || null;
       }
-    } catch (e) {
-      console.warn("Using fallback exchange rates:", e);
-      const currency = extractedRecord.originalCurrency || 'NGN';
-      usdRate = fallbackRates[currency] || 1;
     }
 
     // 9. Standardize Values (price, priceUSD, daysToSell)
     let cleanPrice: number | null = null;
     let computedPriceUSD: number | null = null;
-    
+
     if (extractedRecord.price !== undefined && extractedRecord.price !== null) {
       const stripped = String(extractedRecord.price).replace(/[^0-9.]/g, '');
       const num = Number(stripped);
       if (num > 0 && !isNaN(num)) {
         cleanPrice = num;
-        if (extractedRecord.originalCurrency === 'USD') {
+        if (legibleCurrency === 'USD') {
           computedPriceUSD = cleanPrice;
-        } else {
+        } else if (legibleCurrency && usdRate) {
           computedPriceUSD = cleanPrice / usdRate;
         }
+        // else: currency not legible, or no rate resolved - priceUSD stays null rather than a
+        // silently-wrong conversion computed against an assumed currency.
       }
     }
 
@@ -189,7 +205,10 @@ Return ONLY the JSON object, no markdown formatting, no conversational text.
       trim: extractedRecord.trim || "Base",
       year: extractedRecord.year || "Unknown",
       price: cleanPrice,
-      originalCurrency: extractedRecord.originalCurrency || "NGN",
+      // Never coerced to "NGN" - null (absent) or the literal "NOT_VISIBLE" (present but
+      // unreadable/ambiguous) both survive as-is, so whatever reviews this response can see the
+      // abstention instead of a confident-looking wrong currency.
+      originalCurrency: legibleCurrency,
       priceUSD: computedPriceUSD,
       exchangeRate: usdRate,
       dateListed: extractedRecord.dateListed || null,
@@ -201,22 +220,20 @@ Return ONLY the JSON object, no markdown formatting, no conversational text.
       recordType: "MARKET_DATA" // Set explicitly for Daily Sniper
     };
 
-    console.log("Inserting finalized payload into Supabase:", payload);
-
-    const { data: insertedData, error: dbError } = await supabase
-      .from('sales')
-      .insert(payload)
-      .select();
-
-    if (dbError) {
-      console.error("Database Insert Error:", dbError);
-      throw dbError;
-    }
+    // PROMPT 31 Stage 2 (debt #56) - this used to insert directly into the deprecated `sales`
+    // table (SCHEMA.md §11: DEPRECATED, RLS-locked, do not read or write it), reachable only
+    // because this function holds the service-role key. Confirmed by repo-wide grep: nothing
+    // ever reads what this wrote - the write was pure risk with no benefit, and it happened with
+    // no human review step of any kind. Removed. This function now only extracts and returns the
+    // data (mirroring extract-vehicle-vision's own extract-and-return shape) - persisting it
+    // anywhere is a separate, real feature (a proper sightings/assets write path with a review
+    // step) that this security-remediation stage deliberately does not build.
+    console.log("Extraction complete, returning payload (no longer persisted - debt #56):", payload);
 
     return new Response(JSON.stringify({
       success: true,
-      message: "Vehicle extracted and logged successfully.",
-      data: insertedData?.[0] || payload
+      message: "Vehicle extracted (not persisted - see debt #56 in PLAN_TRACKER.md).",
+      data: payload
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
