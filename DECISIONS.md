@@ -150,6 +150,7 @@ Phase C.
 | 4.11 | A2 hard block triggers on **any** prior auction appearance, not cross-platform reappearance specifically | LOCKED (4 Sep 2026) |
 | 4.12 | A2's damage-severity-decrease escalation is dropped; decreasing odometer between appearances is the proxy critical signal | LOCKED (4 Sep 2026) |
 | 4.13 | A raw client-brief field never enters a public payload; only a value derived from it (a boolean, a count, a status label) may | LOCKED (11 Sep 2026) |
+| 4.14 | Vehicle-identity normalization is derived at fingerprint-computation time only, never written back to a captured make/model/trim field | LOCKED (12 Sep 2026) |
 
 **On 4.11/4.12 — supersedes `PROJECT_CHARTER.md` §6's original wording.** A car auctioned
 twice is itself the disqualifying signal for a client vehicle regardless of whether the two
@@ -215,6 +216,21 @@ minimal signal `PROJECT_CHARTER.md` §4.7's allow-list discipline exists to perm
 Edge Function widening what a brief-linked run discloses publicly must derive, never pass
 through — the same test `public-run`'s own allow-list has satisfied at every widening so far
 (§4.5, §4.17 in `PLAN_TRACKER.md`).
+
+**On 4.14 — why this must not become a capture-time rewrite later.** Debt #46's real fix
+(`PLAN_TRACKER.md` §4.20, Prompt 30 Stage 2) computes a canonical model/trim
+(`canonicalizeForFingerprint()`) purely to feed `generate_fingerprint`'s identity hash — a
+Copart capture's stored `model` stays exactly `"E 250 Bluetec"`, never rewritten to `"E-Class"`.
+This is `PROJECT_CHARTER.md` §5.8 ("raw at capture, classify at read") applied to identity the
+same way §5.1 already applies it to spec matching (`specVocabulary.ts`'s vocabulary groups) and
+§5.10 applies it to rates. The temptation this decision exists to head off: normalizing at
+*write* time instead would look simpler (no need to re-derive the canonical form on every
+lookup) but would destroy the one thing that let this bug be diagnosed and fixed at all — the
+raw, unaltered record of what each platform actually sent, which is what proved Copart folds
+trim into its model string and bid.cars doesn't. A future prompt optimizing for "why compute
+this twice" must not fold normalization into the write path. Compute it at read/fingerprint
+time, every time, from the shared `_shared/specVocabulary.ts` module — never a second one
+(the same lesson `soldGroup.ts` already exists to teach).
 
 ---
 

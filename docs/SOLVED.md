@@ -1739,3 +1739,108 @@ recorded rather than a blanket "looks fine."
 **How to extend it:** any time a `raw_payload`-shaped bug is found in one place, the right next
 step is a full audit of every reader, keyed to that reader's own actual writer - never a
 find-and-replace across files that assumes the write shape is uniform across pipelines.
+
+---
+
+## 28. Four reader bugs, one writer bug - fixing readers treats the symptom, not the disease
+
+**The pattern, once named:** topic 27 above audited and fixed four separate `raw_payload` reader
+bugs across two prompts (`current_bid_usd`, then three more). Every one of them had the identical
+root cause: `research-capture/index.ts:308` wrote `rawPayloadToSave = { ...payload }` - the
+entire request envelope, whose real fields live nested under `payload.captured_fields` - so any
+reader reaching for a top-level path got a silent `null` forever. Four instances of the same bug
+across two prompts is itself the signal: fixing the fourth reader the same way the first three
+were fixed would only guarantee a fifth, whenever the next field gets added and someone reaches
+for the "obvious" path.
+
+**Why the fix belongs on the write side, not the read side.** A reader-side fix (teach this one
+reader the real path) is inherently local - it protects exactly the field someone happened to
+look at, and nothing else. A writer-side fix (make what gets written predictable) protects every
+future field, including ones nobody has written a reader for yet. This is the general form of
+"fix the thing that produces the bug, not each place the bug shows up" - the same reasoning that
+made Prompt 29's fingerprint fix look at the fingerprinting *function* first (ruled out - the
+formula was correct) before finding the real cause one level up, in what fed it.
+
+**The fix:** flattened `raw_payload`'s write shape to spread `captured_fields` directly onto the
+top level - the exact convention `app-ingest/index.ts` already used correctly
+(`{ ...v, record_type, date_listed }`). One canonical shape system-wide now, so copying "the
+obvious" `raw.<field>` pattern from one pipeline into the other produces a correct result instead
+of reproducing the bug a fifth time. The 176 historical rows under the old nested shape are left
+alone - rewriting them would need a migration for a shape nothing currently reads as a query
+surface; instead, `supabase/functions/_shared/rawPayload.ts`'s accessors handle both shapes
+transparently, so a future reader never needs to know which shape a given row was written under.
+
+**The other half - making a genuinely missing field loud.** A flatter write shape closes today's
+gap but doesn't stop a *sixth* field from being misread if someone reaches into `raw_payload`
+directly instead of using the real `sightings` column. `readRawPayloadField`/
+`requireRawPayloadField` return `{ present, value }` rather than a bare value, and the `require`
+variant throws when a field is genuinely absent under either shape - so "this field doesn't
+exist" and "this field exists and is `null`" can never again be silently conflated the way they
+were four times before this fix. Proven with synthetic input (no live row exercises the throw
+path by construction - the same reasoning as topics 16/26) and separately against a real
+historical row pulled from production moments before the deploy.
+
+**How to extend it:** when the same class of bug is found more than once, stop fixing instances
+and go looking for what actually produces them. A bug found four times across two prompts is not
+four bugs; it's one bug with four symptoms, and the fourth occurrence is exactly the signal that
+the first three fixes were incomplete.
+
+---
+
+## 29. A fingerprint formula can be correct and still produce two hashes for one car - when the disagreement is upstream, in the inputs
+
+**The bug debt #46's first fix didn't close.** Prompt 29 Stage 1 fixed the case where the SAME
+platform reveals a VIN it previously masked (IAAI logged-out vs. logged-in) - a real fix, proven
+live. But the debt's actual motivating case survived: a Copart capture of a Mercedes wrote
+`model: "E 250 Bluetec"`, `trim: null`; bid.cars' capture of the identical lot wrote
+`model: "E-class"`, `trim: "250 BLUETEC"`. Two different VIN-less fingerprints for one physical
+car, because `generate_fingerprint()` hashes whatever make/model/trim strings it's handed, and
+the two platforms handed it different strings for the same fact.
+
+**The key realization: this is not a fingerprinting bug.** The SHA-256 formula does exactly what
+it should with the inputs it receives - the same discipline as topic 26's "the fingerprint
+formula was doing exactly what it should" for the VIN-discovery case. The actual defect is one
+layer upstream: two independent parsers (Copart's page structure, bid.cars' aggregation of it)
+disagree about where "trim" ends and "model" begins for the same underlying fact. No change to
+the hash function, the RPC, or the schema could fix a disagreement that happens before either one
+is ever called.
+
+**The fix: canonicalize identity inputs, never the stored record.** `_shared/specVocabulary.ts`
+gained `canonicalizeForFingerprint(model, trim)`, extending (not duplicating) the Prompt 27
+class-letter concept already built for spec-match comparison - a bare `"<Letter> <number>"`
+model (Copart's "E 250") is now recognized as a class-letter model alongside the existing
+`"<Letter>-Class"` pattern, and a short alphabetic token immediately after the base model name
+is treated as a submodel/trim-folding artifact - but ONLY when something else follows it,
+preserving it as the canonical trim otherwise. That second rule is what keeps a bare "Yaris iA"
+(Toyota's real, distinct rebadged-Mazda2 submodel, confirmed by VIN WMI prefix `3MY` vs. a
+genuine Toyota-built Yaris's `JTD` prefix) from colliding with a bare "Yaris" - the qualifier
+survives as the only distinguishing signal a capture with nothing else to go on actually carries.
+Over-normalizing (treating "iA" as always-droppable noise) would have fused two real, different
+vehicle platforms that happen to share a nameplate; under-normalizing (leaving the class-letter/
+submodel-folding cases alone) would have left the actual reported bug unfixed. The dividing line
+- drop a qualifier only when something else follows it - is what let both succeed.
+
+**Verification discipline: compute both sides independently, then compare - don't assert.** Both
+real pairs (Mercedes lot 66964556, Yaris lot 62572576) were verified by calling the *actual*
+`generate_fingerprint()` Postgres RPC with each side's own real captured values run through the
+canonicalizer, and confirming the two resulting hashes were byte-identical - not by inspecting
+the canonicalizer's code and reasoning it should work. The near-miss cases (E250 vs. E350; a bare
+"Yaris iA" vs. a bare "Yaris") were proven NOT to collide the same way. This mirrors topic 20's
+dual-pass-agreement discipline: agreement between two independently-derived answers is real
+evidence, code review is not.
+
+**The hazard changing an identity formula creates, and how it was handled.** Every VIN-less
+asset's fingerprint is computed from this formula - changing it retroactively invalidates every
+existing VIN-less asset's stored hash (32 real ones, at the time this was found). Recomputing and
+backfilling them is unavoidable (the alternative is silently orphaning all 32 on their next
+capture - the exact bug this fix exists to close, at scale). But recomputation can also produce
+genuine collisions - two previously-distinct assets whose canonical identity now matches, which
+is precisely the class of "should these merge?" decision that must never be made automatically
+(`docs/SOLVED.md` topic 26's same principle). The backfill computed every candidate hash via the
+real RPC first, grouped by result, confirmed zero collisions existed in this codebase's real
+data before writing anything, and would have reported - never merged - any it found.
+
+**How to extend it:** when two systems disagree about the same fact, look for which one is
+actually producing the disagreement before touching the system that merely consumes it. And any
+identity-formula change is, by construction, a backfill-and-collision-report problem, not a
+one-line fix - plan for that before writing the new formula, not after.
