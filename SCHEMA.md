@@ -552,3 +552,49 @@ additions to the staging table §11 already documents via `cost_rates`/`trucking
 Both are additive, human-set-only fields on an existing table — no new duty calculator, no
 automated official-vs-actual comparison is built. They exist to give that future comparison
 somewhere to read from.
+
+---
+
+## 16. `sightings.raw_payload` — the canonical shape (Prompt 30 Stage 1, debt #55)
+
+Two ingestion pipelines write this `jsonb` column, and until this stage they wrote genuinely
+different shapes — the root cause behind four separate reader bugs across two prompts
+(`current_bid_usd`, then `estimated_retail_value_usd`/`estimated_cost_low_usd`/
+`estimated_cost_high_usd` — see `docs/SOLVED.md` §27 for the audit).
+
+**Canonical shape, all rows written from Prompt 30 onward (both pipelines): FLAT.**
+`research-capture/index.ts` used to write `{ ...payload }` — the whole request envelope, with
+every real field nested under `payload.captured_fields`. It now spreads `captured_fields`
+directly onto `raw_payload`'s top level, alongside the envelope's own metadata
+(`source_platform`, `source_url`, `lot_state`, `research_run_id`, `raw_dom_snapshot`,
+`auction_history`, `image_urls`) and any post-hoc stamps (`price_usd_conversion_failed`,
+`attempted_currency`, `asset_fingerprint_outcome`) — exactly the flat-spread convention
+`app-ingest/index.ts` already used correctly (`{ ...v, record_type, date_listed }`). One
+canonical shape system-wide now, not two: copying "the obvious" `raw.<field>` pattern from
+one pipeline into the other produces a correct result instead of a silent `null`.
+
+**Legacy shape, 176 real rows written before this change (`logged_via =
+'extension_dom_capture'` only): NESTED** — `raw_payload.captured_fields.<field>`, envelope
+metadata at the top level. **Not rewritten by a migration** — nothing in the live codebase
+reads `raw_payload` as a query surface for these rows today; every field ever read off it has
+been fixed to read its real `sightings` column instead (§ above / `docs/SOLVED.md` §27). Both
+shapes are handled transparently by the accessors below, so a future reader that does need
+`raw_payload` works uniformly across old and new rows without needing to know which shape a
+given row was written under.
+
+**The rule:** prefer a real `sightings` column over `raw_payload` for anything that has one.
+`raw_payload` is a provenance record of what was actually sent, not a query surface — every
+captured field already has (or should have) a mirrored real column, written directly at
+capture time, independent of whatever shape `raw_payload` itself takes. Reach into
+`raw_payload` only for genuinely archival/debug purposes.
+
+**When you do need to read `raw_payload`:** use `readRawPayloadField`/`requireRawPayloadField`
+from `supabase/functions/_shared/rawPayload.ts` — never a bare `raw.<field>`. `readRawPayloadField`
+returns `{ present, value }` rather than a bare value, so "field genuinely absent" and "field
+present with a real `null` value" can never again be confused the way they were four times
+before this stage. `requireRawPayloadField` throws instead, for a caller that should treat a
+missing field as a bug rather than a legitimate absence — the "make the silent-null failure mode
+loud" guardrail against a fifth reader bug. Proven with synthetic input (no live row exercises the
+throw path by construction, same reasoning as `docs/SOLVED.md` topics 16/26): a request for a
+field that exists under neither the flat top level nor the legacy `captured_fields` nesting
+throws with a message naming the missing field, rather than resolving to `undefined`/`null`.

@@ -305,7 +305,24 @@ serve(async (req: Request) => {
       }
     }
 
-    const rawPayloadToSave: any = { ...payload };
+    // PROMPT 30 Stage 1 (debt #55) - canonical FLAT shape, see
+    // supabase/functions/_shared/rawPayload.ts for the full rationale. Was `{ ...payload }`,
+    // spreading the whole request envelope and leaving every real value nested under
+    // `captured_fields` - the root cause behind four separate reader bugs (Prompt 26 follow-up,
+    // Prompt 29 Stage 3). Flattened to match app-ingest's own flat-spread convention exactly, so
+    // there is one canonical raw_payload shape system-wide, not two. Historical rows written
+    // under the old nested shape are untouched; readRawPayloadField/requireRawPayloadField
+    // handle both transparently.
+    const rawPayloadToSave: any = {
+      source_platform: payload.source_platform,
+      source_url: payload.source_url,
+      lot_state: payload.lot_state ?? null,
+      research_run_id: payload.research_run_id ?? null,
+      raw_dom_snapshot: payload.raw_dom_snapshot ?? null,
+      auction_history: payload.auction_history ?? null,
+      image_urls: payload.image_urls ?? [],
+      ...cf,
+    };
     if (conversionFailed) {
       rawPayloadToSave.price_usd_conversion_failed = true;
       rawPayloadToSave.attempted_currency = listedCurrency;
