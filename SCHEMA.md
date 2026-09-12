@@ -513,3 +513,42 @@ that states a non-USD amount, since `rate_unit` only ever offered `usd|percent` 
 right, but it meant the pipeline built to process real Nigerian assessment notices could not
 confirm a single row from one. The guard is unchanged by this migration; the tables can now
 hold what a human, reading the same document, types in.
+
+---
+
+## 15. `org_settings` and cost-document asset pairing (migrations 034/035, Prompt 29 Stages 4/6)
+
+**`org_settings`** (migration 034) — one row per org, not per rate table, and deliberately
+sparse: today it holds exactly one setting, `copart_payment_tier` (`secured`|`unsecured`,
+default `unsecured`). Exists because `bidHeadroomService.ts` previously hardcoded
+`PAYMENT_TIER = 'unsecured' as const` — correct today (all three real Copart invoices priced
+Unsecured) but a real open question whose answer could change without a deploy (`DECISIONS.md`
+§3/`PLAN_TRACKER.md` debt #43). RLS mirrors §12's standard pattern exactly, same as
+`cost_rates`/`auction_fee_brackets`; "superadmin-editable" is enforced at the application layer
+(`CostRatesAdmin.tsx`'s screen, already fully superadmin-gated), not a stricter RLS policy — the
+same division of enforcement `cost_document_extractions` (§ below) already uses. A missing row
+for an org resolves to the same default the old constant used
+(`orgSettingsService.ts`'s `getPaymentTier`), so this table's introduction was a no-op for every
+org until someone deliberately changes the setting.
+
+**`cost_document_extractions` additions** (migration 035) — two independent, both-optional
+additions to the staging table §11 already documents via `cost_rates`/`trucking_rates`/
+`auction_fee_brackets`'s shared context:
+
+- **`asset_id`** (nullable, FK to `assets`) pairs a staged document with the specific vehicle it
+  describes — e.g. an assessment notice for one particular imported car. Paired with
+  `asset_paired_by`/`asset_paired_at`, both set together or not at all (a shape CHECK enforces
+  this), so a pairing is always traceable to the human who made it, at the moment they made it.
+  **Never model-inferred**: `extract-cost-document`'s prompt does not read or suggest a
+  chassis/VIN today, and this migration does not add that. If a future extraction pass ever does
+  read one off an assessment notice, it must surface only as a candidate for a human to search
+  for and confirm through the review screen's asset picker — never write `asset_id` directly.
+- **`declared_value`/`declared_value_currency`** capture an assessment notice's own stated
+  declared/assessed value, for later comparison against what was actually paid. A CHECK
+  constrains both to be set together (a value with no currency can't later be compared) and
+  only alongside `document_type = 'assessment_notice'` — this figure means nothing for a
+  trucking/shipping/customs quote.
+
+Both are additive, human-set-only fields on an existing table — no new duty calculator, no
+automated official-vs-actual comparison is built. They exist to give that future comparison
+somewhere to read from.

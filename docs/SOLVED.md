@@ -1650,3 +1650,92 @@ step - "FCS," ₦205,581.08, currency set to NGN, and the review screen fetched 
 (1326.03, a live API value, not the hardcoded 1,500 fallback) and froze $155.04 as the USD
 equivalent. Re-reading the row afterward returns the identical figure - proof this is a stored
 number, not a live conversion recomputed on each view.
+
+---
+
+## 26. Fingerprint revision: upgrade a VIN-less asset in place, never merge into one that already has a VIN, and prove abstention with a state the normal write path cannot produce
+
+**The problem, restated correctly.** Two capture pipelines can each be right about the same
+physical car and still create two `assets` rows: one capture arrives with no VIN (fingerprint
+falls back to make/model/year/trim/colour), a later capture of the *identical car* arrives with
+a VIN (a completely different, VIN-based fingerprint) - and nothing merges them, because a
+fingerprint lookup only ever finds a row by exact hash match. This is debt #46 in
+`PLAN_TRACKER.md`, and it had already happened twice in production before this fix.
+
+**Why the master prompt's own two premises about testing this were wrong, and had to be
+reported, not worked around.** First: the prompt assumed a specific detection query would find
+the real known split pair. It didn't - the two real rows differ in exactly the fields the query
+matched on, because the two platforms that captured them parse model/trim differently. Second:
+the prompt assumed "ambiguity" meant a lookup finding *multiple* candidate rows to choose
+between. That case is structurally impossible: `assets.fingerprint_hash` is `text unique not
+null`, so any lookup by hash returns at most one row, ever. Neither premise survived contact
+with the actual schema and data - both were stated plainly rather than silently forced to fit.
+
+**The actually-reachable case, once the impossible one was ruled out.** A VIN-bearing capture
+computes the VIN-less fingerprint too (as a probe) and looks for an existing asset under it. Two
+outcomes are real: no match (create as before), or a match whose `vin` column is `null` - a
+genuine same-car candidate, safe to upgrade in place (same row acquires the VIN and the
+VIN-based hash; `sightings`/`auction_history` FKs need no repointing since the row id doesn't
+change). The one case that must never happen automatically: a match whose `vin` column is
+**already set to something else**. That is an inconsistent state - a VIN-less-computed
+fingerprint pointing at a row that already has a different VIN - and it cannot arise through the
+normal RPC-only write path (a legitimate VIN-less capture never sets a VIN; a legitimate
+VIN-bearing capture either creates fresh or upgrades a genuine null). The defensive branch that
+handles it (abstain, do not merge, record the conflict) therefore has no live positives to test
+against by construction, the same class of problem topic 16 above describes for the yard
+matcher's ambiguity check.
+
+**Solution: construct the impossible state deliberately, as synthetic test data, to prove the
+abstention branch actually abstains.** Inserted a real asset row, then explicitly overwrote its
+`fingerprint_hash` to the VIN-less formula's output while leaving its `vin` column populated -
+the inconsistent state unreachable via the RPC path. Ran the real capture logic against it and
+confirmed: no upgrade attempted, no merge, the conflict recorded (`asset_fingerprint_outcome:
+{action: 'abstained_vin_conflict', ...}`) rather than silently overwritten or silently ignored.
+First attempt at this test was itself wrong - the synthetic row's fingerprint initially matched
+its own VIN consistently, which a vinless probe would never find - corrected by explicitly
+setting the *inconsistent* hash, not just any hash.
+
+**How to extend it:** same generalisation as topic 16 - a rule whose real-world positive count
+is zero must be proven with a case built to be positive, not trusted on the strength of a clean
+production history alone. And separately: when a stated test premise (a detection query, a
+definition of "ambiguous") doesn't survive checking against the real schema or real data, say so
+and find the actually-reachable case, rather than forcing the original premise to appear to
+work.
+
+---
+
+## 27. Auditing every `raw_payload` mapping, not just the one already known to be broken
+
+**Starting point:** `researchService.ts`'s `current_bid_usd` field was found reading from
+`raw.current_bid_usd` - a path into the *request envelope* `research-capture` happened to spread
+wholesale into `raw_payload` (`rawPayloadToSave = { ...payload }` at
+`research-capture/index.ts:308`) - while the real, always-correctly-written value lived in a
+proper `sightings.current_bid_usd` column that was simply missing from the `.select()` list.
+Fixed once (commit `ccabb3c`). The question this topic answers: is that the only instance, or
+one of several?
+
+**Method - check every raw_payload read, don't assume the pattern repeats or stops.** For each
+service reading `raw_payload` (or a field the shape of it): (1) find the exact write path that
+produced that `raw_payload` for that specific pipeline - not assumed from another pipeline's
+code, since two ingestion paths can shape the same-named column completely differently; (2)
+check whether the field being read actually lives at that path, or lives instead as a real,
+correctly-populated column that just never made it into the `.select()` list; (3) only then
+decide whether a read is broken, and fix it the same way (select-list addition,
+path correction) rather than guessing a blanket rule from one instance.
+
+**The contrast case that proves the method, not just the bug.** `app-ingest/index.ts` writes
+`raw_payload` as `{ ...v, record_type, date_listed }` - a flat spread of the vehicle object
+itself, structurally different from `research-capture`'s envelope-spread. `storageService.ts`'s
+`raw.<field>` reads against *that* pipeline's `raw_payload` are genuinely correct, for exactly
+the same reason `researchService.ts`'s reads against `research-capture`'s `raw_payload` were
+not: the write shape differs, so the same-looking read code is either right or wrong depending
+on which write path produced the data it's reading. Checking, rather than assuming either "the
+bug generalises" or "this pipeline is fine because that one was," is what separates confirmed
+fixes from guesses: 3 more genuinely broken fields were found and fixed in `researchService.ts`
+(`estimated_retail_value_usd`, `estimated_cost_low_usd`, `estimated_cost_high_usd`); 6 already-
+correct reads elsewhere were confirmed correct and left untouched, each with its own reason
+recorded rather than a blanket "looks fine."
+
+**How to extend it:** any time a `raw_payload`-shaped bug is found in one place, the right next
+step is a full audit of every reader, keyed to that reader's own actual writer - never a
+find-and-replace across files that assumes the write shape is uniform across pipelines.

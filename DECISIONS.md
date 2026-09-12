@@ -149,6 +149,7 @@ Phase C.
 | 4.10 | Duplicate vehicle in a run is a hard block, never overridable | LOCKED |
 | 4.11 | A2 hard block triggers on **any** prior auction appearance, not cross-platform reappearance specifically | LOCKED (4 Sep 2026) |
 | 4.12 | A2's damage-severity-decrease escalation is dropped; decreasing odometer between appearances is the proxy critical signal | LOCKED (4 Sep 2026) |
+| 4.13 | A raw client-brief field never enters a public payload; only a value derived from it (a boolean, a count, a status label) may | LOCKED (11 Sep 2026) |
 
 **On 4.11/4.12 — supersedes `PROJECT_CHARTER.md` §6's original wording.** A car auctioned
 twice is itself the disqualifying signal for a client vehicle regardless of whether the two
@@ -200,6 +201,20 @@ is a dated record of who decided and why.
 frame damage, rollover, stripped and all-over on top of the originally-specified list,
 because for a car heading to a Nigerian client these are as bad or worse. VIN tampering in
 particular is a customs-seizure and fraud risk.
+
+**On 4.13 — the allow-list precedent, formalised.** First applied by Prompt 25's
+`sale_unconfirmed` (a derived boolean, never the raw `sale_confirmed` enum value itself, in
+`public-run`'s response) and again by Prompt 28 Stage 1's sold-comps range disclosure:
+`public-run` joins `client_brief` to compute `range_status` per listing and
+`range_in/out/unknown_count` in `stats`, but the brief's own `year_min`/`year_max` never enter
+the response's allow-list object — a client sees "3 inside, 3 outside," never the raw band
+that produced it. The reasoning generalises beyond years: a raw brief field can carry client
+context (budget ceiling, a name, an internal note) that was never meant for the public share
+link, while a value derived from it (a count, a boolean, a status label) is exactly the
+minimal signal `PROJECT_CHARTER.md` §4.7's allow-list discipline exists to permit. Any future
+Edge Function widening what a brief-linked run discloses publicly must derive, never pass
+through — the same test `public-run`'s own allow-list has satisfied at every widening so far
+(§4.5, §4.17 in `PLAN_TRACKER.md`).
 
 ---
 
