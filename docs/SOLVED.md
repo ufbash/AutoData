@@ -527,9 +527,6 @@ carries no CORS headers."
 [functions.research-capture]
 verify_jwt = false
 
-[functions.daily-sniper]
-verify_jwt = false
-
 [functions.public-run]
 verify_jwt = false
 
@@ -566,7 +563,7 @@ itself. For *why* these five/six functions specifically need `verify_jwt = false
 them is called by a caller that does not carry a Supabase user JWT — the Chrome extension
 (`research-capture`, `upload-images`, authenticated instead via `X-Research-Secret`), the
 public share page (`public-run`, authenticated via the `share_token` query param, see topic
-7), and a cron-triggered function (`monthly-backup`, `daily-sniper`). This inference is
+7), and a cron-triggered function (`monthly-backup`). This inference is
 supported directly by reading each function's own auth code (e.g.
 `upload-images/index.ts:20-26` checks `x-research-secret` instead of a JWT; `public-run`
 has no `Authorization` check at all, see topic 7) rather than by any comment stating the
@@ -1888,3 +1885,28 @@ a fix touches a stateful, order-dependent process (an upgrade that only fires on
 moment, for a specific reason), proving the formula is necessary but not sufficient - budget for
 a real, live run through the actual entry point before calling the case closed, and expect that
 run to sometimes surface a second gap the formula-level proof had no way to see.
+
+---
+
+## 31. Retiring `daily-sniper` removed three standing doctrine exceptions, not just one function
+
+**What it was.** `daily-sniper/index.ts` was the system's only external caller (invoked directly
+by a phone Shortcuts automation, not by anything in this repo or its authenticated app), its only
+static-shared-secret auth path outside the extension/cron functions already covered by AGENTS.md
+§4.3, and its only consequential writer with **no human review gate** at all - `BulkImport.tsx`
+and `CarForm.tsx` both route through a review step before anything is saved; this function wrote
+straight to the database from an unreviewed AI extraction (see debt #56, `PLAN_TRACKER.md`).
+
+**Why it's gone rather than fixed further.** Prompt 31 already remediated the acute security
+issues (env-var secret, dropped the `sales`-table write, currency abstention). Prompt 32 Stage 1
+retired the function entirely: the live site now accepts uploads from Bashir's phone directly,
+through the normal reviewed pipeline, covering the same workflow `daily-sniper` existed for back
+when AutoData was a localhost project with no upload path. With the workflow it existed for gone,
+the standing exceptions it required go with it.
+
+**How to extend it:** if a future feature ever again needs an external caller with its own
+static-secret auth and no review gate, treat that combination as a deliberate, documented
+exception requiring its own justification - not a pattern to copy from history, since this is
+the second time (after `extract-vehicle-vision`'s original currency-guessing bug) that an
+unreviewed AI-written field reaching the database directly turned out to be the actual risk, not
+just the specific bug found in it.

@@ -72,7 +72,6 @@ src/
 supabase/
   functions/
     app-ingest/index.ts            — CarForm/BulkImport ledger writes; JWT + superadmin
-    daily-sniper/index.ts          — built, unused; static x-sniper-secret auth
     extract-vehicle-vision/index.ts — server-side Gemini vision extraction; JWT + superadmin
     intake-brief/index.ts          — client-facing intake form read/write, strict allow-list both
                                       directions, confirmation email (added 6 Sep 2026)
@@ -418,10 +417,9 @@ spec-rule `if` blocks in §B.6 were miscounted as 8 when the line-by-line list t
 | Function | `verify_jwt` in config.toml | Auth mechanism in code | Agree? |
 |---|---|---|---|
 | `research-capture` | `false` (`supabase/config.toml:2`) | Static `x-research-secret` header check (`research-capture/index.ts:73`) | Yes |
-| `daily-sniper` | `false` (`config.toml:5`) | Static `x-sniper-secret` header, hardcoded value (`daily-sniper/index.ts:17-18`) | Yes |
-| `public-run` | `false` (`config.toml:8`) | No secret/JWT — public by share token only; code still requires *a* bearer `Authorization` header be present (`public-run/index.ts:39-44`) using the anon key, but performs no per-caller identity check | Yes (gateway open; code's own check is presence-only, not identity) |
-| `monthly-backup` | `false` (`config.toml:11`) | Static `x-backup-secret` header (`monthly-backup/index.ts:25`) | Yes |
-| `upload-images` | `false` (`config.toml:14`) | Static `x-research-secret` header (`upload-images/index.ts:20`) | Yes |
+| `public-run` | `false` (`config.toml:5`) | No secret/JWT — public by share token only; code still requires *a* bearer `Authorization` header be present (`public-run/index.ts:39-44`) using the anon key, but performs no per-caller identity check | Yes (gateway open; code's own check is presence-only, not identity) |
+| `monthly-backup` | `false` (`config.toml:8`) | Static `x-backup-secret` header (`monthly-backup/index.ts:25`) | Yes |
+| `upload-images` | `false` (`config.toml:11`) | Static `x-research-secret` header (`upload-images/index.ts:20`) | Yes |
 | `app-ingest` | not present in `config.toml` (defaults `true`) | Requires `Authorization: Bearer <jwt>`, verifies via `supabase.auth.getUser(jwt)` (`app-ingest/index.ts:40-64`) | Yes |
 | `extract-vehicle-vision` | not present in `config.toml` (defaults `true`) | Requires `Authorization` header, verifies via `supabase.auth.getUser(token)` (`extract-vehicle-vision/index.ts:20-38`) | Yes |
 | `store-images` | not present in `config.toml` (defaults `true`) | Requires `Authorization` header (`store-images/index.ts:39`) | Yes |
@@ -429,9 +427,9 @@ spec-rule `if` blocks in §B.6 were miscounted as 8 when the line-by-line list t
 No row disagrees across all three columns (config value, AGENTS.md §4.3's documented
 requirement, and the function's own code) — AGENTS.md §4.3's list (`verify_jwt = false`
 required for `research-capture`, `upload-images`, `public-run`, `monthly-backup`; must not be
-set for `app-ingest` or `extract-vehicle-vision`) matches `config.toml` exactly for those six
-functions. `daily-sniper` and `store-images` are not named in AGENTS.md §4.3 but their config
-values are internally consistent with their own code's auth mechanism.
+set for `app-ingest` or `extract-vehicle-vision`) matches `config.toml` exactly for those five
+functions. `store-images` is not named in AGENTS.md §4.3 but its config value is internally
+consistent with its own code's auth mechanism.
 
 **`public-run` field allow-list, quoted verbatim** — `supabase/functions/public-run/index.ts:112-117`:
 ```ts

@@ -364,7 +364,6 @@ trusted from the client.
 | `public-run` | none (share token) | public client deliverable | **false** |
 | `intake-brief` | none (share token) | client-facing intake form: read/write one brief, strict field allow-list both directions, confirmation email via Resend | **false** |
 | `monthly-backup` | static `X-Backup-Secret` | pg_cron monthly CSV export via Resend | **false** |
-| `daily-sniper` | static secret | built, unused | — |
 
 Getting `verify_jwt` wrong surfaces as a CORS error in the browser. See `AGENTS.md` §4.3.
 
