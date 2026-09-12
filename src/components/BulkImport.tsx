@@ -136,11 +136,19 @@ export default function BulkImport({ onSave, currentRates }: BulkImportProps) {
         compressed2.type
       );
 
+      // extract-vehicle-vision abstains per-field with null (absent from source) or the sentinel
+      // string "NOT_VISIBLE" (present but couldn't be confidently read) - never a guessed value.
+      // Both must reach the reviewer as a genuinely blank field, never as the literal sentinel
+      // text or a silently-substituted default: either would look like real extracted data.
+      const readField = (v: unknown): string | null => (v == null || v === 'NOT_VISIBLE' ? null : String(v));
+
+      const trimRaw = readField(data.trim);
+      const modelRaw = readField(data.model);
       // Default values to prevent nulls in input fields
-      const trimValue = data.trim === data.model ? data.model : (data.trim || 'Base');
-      
+      const trimValue = trimRaw && trimRaw === modelRaw ? modelRaw : (trimRaw || 'Base');
+
       // Dealer Normalization
-      let dealerValue = data.dealer || 'Unknown';
+      let dealerValue = readField(data.dealer) || 'Unknown';
       if (dealerValue !== 'Unknown') {
         const match = existingDealers.find(d => d.toLowerCase() === dealerValue.toLowerCase());
         if (match) {
@@ -150,32 +158,37 @@ export default function BulkImport({ onSave, currentRates }: BulkImportProps) {
 
       // Clean up Price output
       let cleanPrice: number | null = null;
-      if (data.price !== undefined && data.price !== null) {
-          const stripped = String(data.price).replace(/[^0-9.]/g, '');
+      const priceRaw = readField(data.price);
+      if (priceRaw !== null) {
+          const stripped = priceRaw.replace(/[^0-9.]/g, '');
           const num = Number(stripped);
           if (num > 0 && !isNaN(num)) {
               cleanPrice = num;
           }
       }
 
-      // Sanitize Currency to ensure valid USD base-calculation uses exact enum
-      let finalCurrency = Currency.NGN;
-      if (data.originalCurrency) {
-        const cStr = String(data.originalCurrency).toUpperCase();
+      // Map to the exact Currency enum when legible; leave blank (never a guessed default) when
+      // the model abstained (null / "NOT_VISIBLE") or returned something unrecognized, so the
+      // reviewer sees and resolves it via the currency select's own missing-value highlight below.
+      let finalCurrency = '';
+      const currencyRaw = readField(data.originalCurrency);
+      if (currencyRaw) {
+        const cStr = currencyRaw.toUpperCase();
         if (cStr.includes('USD') || cStr.includes('$')) finalCurrency = Currency.USD;
         else if (cStr.includes('EUR') || cStr.includes('€')) finalCurrency = Currency.EUR;
         else if (cStr.includes('GBP') || cStr.includes('£')) finalCurrency = Currency.GBP;
+        else if (cStr.includes('NGN') || cStr.includes('₦')) finalCurrency = Currency.NGN;
       }
 
       const result: Partial<CarSale> = {
-        make: data.make || '',
-        model: data.model || '',
+        make: readField(data.make) || '',
+        model: modelRaw || '',
         trim: trimValue,
-        year: data.year || 'Unknown',
+        year: readField(data.year) || 'Unknown',
         price: cleanPrice,
         originalCurrency: finalCurrency,
-        dateListed: data.dateListed || '',
-        dateSold: data.dateSold || '',
+        dateListed: readField(data.dateListed) || '',
+        dateSold: readField(data.dateSold) || '',
         daysToSell: data.daysToSell ?? null,
         mileage: data.mileage ?? null,
         dealer: dealerValue,
@@ -450,6 +463,7 @@ export default function BulkImport({ onSave, currentRates }: BulkImportProps) {
                   const isMissingPrice = !res.price;
                   const isMissingMake = !res.make;
                   const isMissingModel = !res.model;
+                  const isMissingCurrency = !res.originalCurrency;
 
                   return (
                     <tr key={pair.id} className="border-b hover:bg-gray-50">
@@ -487,12 +501,13 @@ export default function BulkImport({ onSave, currentRates }: BulkImportProps) {
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center border-b border-gray-200 focus-within:border-[#a58039] transition-colors py-1">
-                          <select 
-                            value={res.originalCurrency || Currency.NGN}
+                          <select
+                            value={res.originalCurrency || ''}
                             onChange={(e) => updateResultField(pair.id, 'originalCurrency', e.target.value as Currency)}
-                            className="bg-transparent text-xs text-[#a58039] font-bold mr-1 outline-none cursor-pointer p-0 appearance-none"
+                            className={`bg-transparent text-xs font-bold mr-1 outline-none cursor-pointer p-0 appearance-none ${isMissingCurrency ? 'text-red-600' : 'text-[#a58039]'}`}
                             title="Currency"
                           >
+                            {isMissingCurrency && <option value="">?</option>}
                             {Object.values(Currency).map(c => <option key={c} value={c}>{c}</option>)}
                           </select>
                           <input 
