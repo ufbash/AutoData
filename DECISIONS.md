@@ -463,3 +463,36 @@ users who matter most.
 | 7 | Post-2023 vehicles in the valuation table | Table ends 2023; extrapolation method undecided |
 | 8 | Publish the fee schedule publicly? | Transparency argues yes; negotiating room argues no |
 | 9 | Is licensing AutoData to a second licensee a goal? | Affects roadmap priority |
+
+---
+
+## 12. Asset merges (Prompt 32 Stage 2, debt #46)
+
+| # | Decision | Status |
+|---|---|---|
+| 12.1 | An asset merge is **always human-confirmed, never automatic** - regardless of how good detection gets | LOCKED |
+| 12.2 | A wrong merge (fusing two different real cars) is **worse than a split** and harder to detect afterward | LOCKED |
+| 12.3 | A merge repoints foreign keys and soft-retires the orphan; it never deletes it | LOCKED |
+| 12.4 | Provenance fields (who did what, when, against the state of the world as it existed then) are never rewritten or moved on merge - only the pointer moves | LOCKED |
+
+**Why 12.1/12.2, stated plainly so this doesn't get "optimized" later by someone reading only
+the candidate detector:** a split leaves an orphan you can find by querying - `sightings`/
+`auction_history` still exist, just attached to the wrong asset id, and a `SELECT` finds it. A
+fusion looks exactly like one well-documented car. `auction_history` is keyed on `asset_id`, so
+a wrong fusion also silently corrupts A2 - the flag built specifically to catch a car being
+auctioned twice would then be reading two different cars' appearances as one car's history. The
+failure mode a merge introduces is strictly worse than the failure mode it fixes, which is why
+detection is fully automatic (Prompt 32 built real, indexed matching against production data)
+while the act of merging is not, and never should be, however confident detection becomes. If a
+future prompt proposes auto-merging "high-confidence" candidates, that proposal needs to argue
+against this decision explicitly, not just cite an improved detector.
+
+**Why 12.4:** a document's `asset_paired_by`/`asset_paired_at` (the first table this came up for,
+`cost_document_extractions`) record a human's decision to pair a document to a vehicle, at the
+time they made it, against the asset as it existed then. If that asset is later merged into
+another, the human's decision does not retroactively become a decision about a different asset
+made at the time of the merge - only the pointer (`asset_id`) moves. This is the same reasoning
+that already keeps `source`/`effective_from` human-set in the cost-rate extraction pipeline, and
+the same reason an FX rate is frozen at confirmation rather than recomputed later - a general
+house pattern, not a one-off rule for this one table. Applies to any future table with a
+similar "who confirmed this, when" pair of columns.

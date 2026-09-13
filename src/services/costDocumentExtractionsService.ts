@@ -104,12 +104,20 @@ export const getAssetById = async (assetId: string): Promise<AssetSearchResult |
 
 // Minimal search for the asset picker — matches VIN (exact/partial) or make/model. Human reads
 // the results and picks the one they mean; nothing here is auto-selected.
+//
+// PROMPT 32 Stage 2 (debt #46) - excludes soft-retired (merged-away) assets. Without this, a
+// human pairing a NEW cost document could pick a dead orphan by mistake - its raw fields are
+// still intact and would still match a VIN/make/model search - and the document would attach to
+// a row nothing else references any more. getAssetById (below) intentionally does NOT filter
+// this, since it is also used to display an already-paired document's target, which may
+// legitimately be a since-merged asset.
 export const searchAssets = async (query: string): Promise<AssetSearchResult[]> => {
   const q = query.trim();
   if (!q) return [];
   const { data, error } = await supabase
     .from('assets')
     .select('id, vin, make, model, year')
+    .is('merged_into_asset_id', null)
     .or(`vin.ilike.%${q}%,make.ilike.%${q}%,model.ilike.%${q}%`)
     .limit(10);
   if (error) throw new Error(`Failed to search assets: ${error.message}`);

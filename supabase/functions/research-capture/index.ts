@@ -149,6 +149,24 @@ serve(async (req: Request) => {
       throw new Error(`RPC generate_fingerprint failed: ${rpcError.message}`);
     }
 
+    // PROMPT 32 Stage 3 (debt #46) - every capture's OWN VIN-less canonical identity, computed
+    // unconditionally regardless of whether this capture itself has a VIN. Stored on the asset
+    // (migration 037's vinless_identity_hash) so a future VIN-less capture of a VIN-bearing car
+    // can find it via one indexed lookup, without recomputing canonicalizeForFingerprint against
+    // every asset on every capture. For a VIN-less capture this is identical to fingerprintHash
+    // above; computed separately here so the VIN-bearing branch gets it too, for free.
+    const { data: vinlessHash, error: vinlessHashError } = await supabase.rpc("generate_fingerprint", {
+      p_vin: null,
+      p_make: cf.make ?? null,
+      p_model: identity.canonicalModel,
+      p_year: cf.year ?? null,
+      p_trim: identity.canonicalTrim,
+      p_exterior_color: cf.exterior_color ?? null,
+      p_interior_color: cf.interior_color ?? null,
+      p_origin_status: null
+    });
+    if (vinlessHashError) throw new Error(`RPC generate_fingerprint (vinless identity) failed: ${vinlessHashError.message}`);
+
     // Upsert into assets
     let assetId;
     let wasDuplicate = false;
@@ -188,21 +206,6 @@ serve(async (req: Request) => {
     // afterwards than a split.
     const hasUsableVin = typeof cf.vin === 'string' && cf.vin.length >= 11;
     if (!existingAsset && hasUsableVin) {
-      // Same canonical model/trim as the main call above - the probe must use the identical
-      // identity formula, or it could never find the asset the main call itself would produce
-      // for this same car under its own VIN-less path.
-      const { data: vinlessHash, error: vinlessRpcError } = await supabase.rpc("generate_fingerprint", {
-        p_vin: null,
-        p_make: cf.make ?? null,
-        p_model: identity.canonicalModel,
-        p_year: cf.year ?? null,
-        p_trim: identity.canonicalTrim,
-        p_exterior_color: cf.exterior_color ?? null,
-        p_interior_color: cf.interior_color ?? null,
-        p_origin_status: null
-      });
-      if (vinlessRpcError) throw new Error(`RPC generate_fingerprint (vin-less probe) failed: ${vinlessRpcError.message}`);
-
       const { data: vinlessCandidate, error: vinlessFindError } = await supabase
         .from('assets')
         .select('id, vin')
@@ -216,7 +219,7 @@ serve(async (req: Request) => {
         // nothing is repointed, nothing is orphaned, because no second asset is ever created.
         const { error: upgradeError } = await supabase
           .from('assets')
-          .update({ vin: cf.vin, fingerprint_hash: fingerprintHash, updated_at: new Date().toISOString() })
+          .update({ vin: cf.vin, fingerprint_hash: fingerprintHash, vinless_identity_hash: vinlessHash, updated_at: new Date().toISOString() })
           .eq('id', vinlessCandidate.id)
           .is('vin', null); // race guard: only upgrade while it is still VIN-less
         if (upgradeError) throw upgradeError;
@@ -235,6 +238,46 @@ serve(async (req: Request) => {
           candidate_vin: vinlessCandidate.vin,
           incoming_vin: cf.vin,
           note: 'VIN-less fingerprint matched an asset carrying a different VIN - two different cars sharing make/model/year/trim/colour. Created a separate asset rather than fusing their histories.',
+        };
+      }
+    }
+
+    // PROMPT 32 Stage 3 (debt #46) - the missing direction. A VIN-less capture arriving after a
+    // VIN-bearing asset already exists for the same car: its exact fingerprint_hash lookup
+    // (existingAsset, above) can only ever match another VIN-less asset - VIN-bearing assets
+    // hash on the VIN, not the vinless-canonical formula - so without this it falls straight
+    // through to creating a second asset, the exact split Stage 2 exists to clean up.
+    //
+    // Attaching is not merging (per the master prompt): this only decides which asset a fresh
+    // sighting belongs to at capture time, cheap and reversible, and does not touch any
+    // already-accumulated history the way Stage 2's merge does - so it does not go through that
+    // review gate. But the same abstention applies: more than one VIN-bearing asset sharing this
+    // exact vinless identity is a genuine ambiguity (two real cars with identical
+    // make/model/year/trim/colour), not something to pick between - create a new asset and let
+    // Stage 2's review catch it later if it turns out to be a real split.
+    if (!existingAsset && !assetId && !hasUsableVin) {
+      const { data: vinBearingMatches, error: vinBearingFindError } = await supabase
+        .from('assets')
+        .select('id, vin')
+        .eq('vinless_identity_hash', vinlessHash)
+        .not('vin', 'is', null)
+        .is('merged_into_asset_id', null);
+      if (vinBearingFindError) throw vinBearingFindError;
+
+      if (vinBearingMatches && vinBearingMatches.length === 1) {
+        // Attach only - the VIN-bearing asset's own identity fields are untouched. This
+        // sighting simply belongs to a car that already has stronger (VIN) evidence elsewhere.
+        assetId = vinBearingMatches[0].id;
+        wasDuplicate = true;
+        fingerprintOutcome = {
+          action: 'attached_vinless_to_vin_bearing_asset',
+          asset_id: assetId,
+        };
+      } else if (vinBearingMatches && vinBearingMatches.length > 1) {
+        fingerprintOutcome = {
+          action: 'abstained_ambiguous_vin_bearing_match',
+          candidate_asset_ids: vinBearingMatches.map((m: { id: string }) => m.id),
+          note: `${vinBearingMatches.length} different VIN-bearing assets share this VIN-less capture's exact identity - genuinely ambiguous which one (if any) this sighting belongs to. Created a separate asset rather than guessing.`,
         };
       }
     }
@@ -261,14 +304,17 @@ serve(async (req: Request) => {
         await supabase.from('assets').update(updates).eq('id', assetId);
       }
     } else if (assetId) {
-      // Already resolved by the VIN-discovery upgrade above - that row IS this car, and it
-      // now carries the VIN. Creating anything here is exactly the split this stage fixes.
+      // Already resolved above - either the VIN-discovery upgrade (that row IS this car and now
+      // carries the VIN) or Stage 3's symmetric attach (this VIN-less sighting belongs to an
+      // existing VIN-bearing asset). Creating anything here is exactly the split this stage
+      // exists to prevent.
     } else {
       const { data: newAsset, error: insertError } = await supabase
         .from('assets')
         .insert({
           org_id: defaultOrgId,
           fingerprint_hash: fingerprintHash,
+          vinless_identity_hash: vinlessHash,
           vin: cf.vin ?? null,
           make: cf.make ?? null,
           model: cf.model ?? null,

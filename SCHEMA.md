@@ -597,3 +597,55 @@ loud" guardrail against a fifth reader bug. Proven with synthetic input (no live
 throw path by construction, same reasoning as `docs/SOLVED.md` topics 16/26): a request for a
 field that exists under neither the flat top level nor the legacy `captured_fields` nesting
 throws with a message naming the missing field, rather than resolving to `undefined`/`null`.
+
+---
+
+## 17. Asset merge (migrations 036/037/038, Prompt 32 Stages 2-3, debt #46)
+
+**The merge record, on `assets` itself** (migration 036) — soft-retirement, same pattern as
+`clients`/`client_briefs`' `deleted_at`/`deleted_by` (migration 023), pointed at a survivor
+instead of "deleted":
+
+| Column | Meaning |
+|---|---|
+| `merged_into_asset_id` | `NULL` for a live asset. Set on the orphan, pointing at the survivor. |
+| `merged_at` | When a human confirmed the merge. |
+| `merged_by` | `auth.users.id` of who confirmed it. |
+| `vinless_identity_hash` | Every asset's own VIN-less canonical identity (migration 037), used by the symmetric-attach probe below. On an orphan, mutated to a sentinel at merge time — see below. |
+
+Nothing is ever deleted. The orphan keeps every raw field it held (§5.8) and remains directly
+queryable — that IS the audit record of "what the orphan held," no separate table needed.
+
+**`merge_assets(p_survivor_id, p_orphan_id, p_confirmed_by)`** is the only path that actually
+merges two assets — one atomic Postgres function (`supabase/functions/asset-merge-confirm` is
+its only caller). It repoints every known `asset_id` FK to the survivor, then mutates the
+orphan's `fingerprint_hash` AND `vinless_identity_hash` to `'merged:<original>:<orphan_id>'`
+sentinels — both derived identity values, not raw captured fields, so this doesn't touch §5.8.
+**Why both must be sentinelled:** without it, a future capture that recomputes the orphan's old
+identity would resolve straight back to the dead row through whichever key was left live -
+`research-capture`'s exact-hash lookup (guarded by `fingerprint_hash`) or Stage 3's new
+symmetric-attach probe (guarded by `vinless_identity_hash`) - silently reviving the exact split
+the merge just fixed. Caught twice in review during Prompt 32: once for `fingerprint_hash`
+(Stage 2, before any deploy), once for `vinless_identity_hash` (Bashir's review of Stage 3,
+migration 038, after the column existed but before its own backfill ran).
+
+**Every `asset_id` FK a merge must repoint - re-verify this list whenever a migration adds a new
+one, per the standing obligation below:**
+
+| Table | Column | Notes |
+|---|---|---|
+| `sightings` | `asset_id` | |
+| `auction_history` | `asset_id` | |
+| `cost_document_extractions` | `asset_id` | Found during Prompt 32 Stage 2 pre-flight - Prompt 29 only knew about the first two. `asset_paired_by`/`asset_paired_at` on this table are provenance (who paired this document, when) and are deliberately NOT touched by a merge - only the FK moves. |
+
+**Standing obligation for whoever adds a fourth:** a table with an `asset_id` FK that
+`merge_assets()` doesn't know about is a half-merge waiting to happen - it will silently orphan
+rows the moment someone writes to it after a merge, with no error to surface it. If you add such
+a table, add it to `merge_assets()`'s repoint list (migration file, then redeploy) and to the
+table above in the same change.
+
+**Detection** (`supabase/functions/asset-merge-candidates`) and **conflict/abstention logic**
+(`supabase/functions/_shared/assetMergeConflicts.ts`, a pure module so it can be - and is -
+proven with synthetic input) are read-only and never merge anything themselves. See
+`DECISIONS.md` for why a merge is always human-confirmed, never automatic, and `docs/SOLVED.md`
+topics 31-32 for the fuller narrative.

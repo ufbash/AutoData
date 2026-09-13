@@ -1910,3 +1910,56 @@ exception requiring its own justification - not a pattern to copy from history, 
 the second time (after `extract-vehicle-vision`'s original currency-guessing bug) that an
 unreviewed AI-written field reaching the database directly turned out to be the actual risk, not
 just the specific bug found in it.
+
+---
+
+## 32. Debt #46, actually closed - why canonicalization alone couldn't do it, and why capture order was the real cause
+
+**What canonicalization (Prompt 30) actually fixed, precisely.** It made two platforms' VIN-less
+fingerprints agree when they described the same car (Copart folding trim into its model string
+vs bid.cars splitting them). That is necessary, and topic 30 proved it works at the RPC level.
+**It does not merge anything, and was never going to,** because of a fact about *when* the
+upgrade probe runs: `research-capture/index.ts`'s probe only ever fires inside
+`if (!existingAsset && hasUsableVin)`. On the real pair this project kept reproducing (lot
+66964556): bid.cars captured first (VIN-bearing, no VIN-less sibling existed yet to find), so it
+created a normal new asset by the letter of the design. Copart captured second, creating its own
+VIN-less asset, with no logic looking for a VIN-bearing sibling in *that* direction. Both assets
+now exist. Every future capture of either platform matches its own asset immediately via the
+main fingerprint lookup and never reaches the probe at all - not because the probe is broken, but
+because the condition that would make it relevant (`!existingAsset`) is never true again for
+either side.
+
+**The actual cause: capture order decided whether a car split, not the fingerprint formula.** If
+Copart had captured first, the VIN-bearing bid.cars capture arriving second would have found the
+VIN-less sibling and upgraded it in place - no split, same two platforms, same car, opposite
+order. This is not a fixable ordering problem (you cannot control which platform's scraper runs
+first) - it is evidence that a split, once formed, is a permanent state requiring an explicit fix,
+and that new splits need a fix that doesn't care about order at all.
+
+**Two separate fixes, deliberately built in that order (Prompt 32).** Stage 2: a genuine merge
+operation for splits that already exist - human-confirmed, never automatic, because a wrong
+merge (fusing two real different cars) is worse than a split and much harder to detect (see
+`DECISIONS.md` §12). Stage 3: made the probe symmetric, so capture order stops mattering for new
+captures going forward - a VIN-less capture arriving after a VIN-bearing asset now finds it too,
+via a new stored `vinless_identity_hash` column (every asset's own VIN-less canonical identity,
+computed and stored regardless of whether that asset itself has a VIN), rather than recomputing
+canonicalization against every row on every capture.
+
+**A bug found by review, not by the original build: sentinel twice, not once.** Stage 2's merge
+function mutates an orphan's `fingerprint_hash` to a sentinel so it can never be rediscovered by
+a future capture computing the same hash. Stage 3 added a second identity column
+(`vinless_identity_hash`) for the new symmetric probe - and initially left it unsentineled on
+merge. Bashir caught this in review before deploy: a soft-retired orphan would still carry a
+live, matching `vinless_identity_hash`, so a fresh VIN-less capture could attach straight back
+onto the dead row through the new column, silently reviving the exact split the merge had just
+fixed - the identical failure mode the first sentinel was built to prevent, just through the
+door the first fix didn't know existed yet.
+
+**How to extend it:** whenever an identity-matching mechanism gains a new stored/indexed key (the
+way `vinless_identity_hash` was added alongside the existing `fingerprint_hash`), check whether
+the soft-retirement/merge logic sentinels that key too - a merge that "removes" a row from future
+matching via one key but not another only looks fixed. Proven both directions (VIN-bearing
+then VIN-less, and VIN-less then VIN-bearing) and the ambiguous-match abstention (two different
+real cars sharing one VIN-less identity) with synthetic, self-cleaning rows run directly against
+the real `generate_fingerprint` RPC - not asserted, since none of these three cases had a live
+positive to test against by construction.
