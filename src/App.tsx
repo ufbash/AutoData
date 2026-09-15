@@ -20,6 +20,7 @@ import CostRatesAdmin from './components/CostRatesAdmin';
 import TruckingRatesLookup from './components/TruckingRatesLookup';
 import CostDocumentExtractions from './components/CostDocumentExtractions';
 import AssetMergeReview from './components/AssetMergeReview';
+import WonVehicleTrackingView from './components/WonVehicleTrackingView';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -791,6 +792,12 @@ const App: React.FC = () => {
 
   if (intakeMatch) {
     return <IntakeFormView token={intakeMatch[1]} />;
+  }
+
+  const trackMatch = window.location.pathname.match(/^\/track\/([A-Za-z0-9]{32,128})$/);
+
+  if (trackMatch) {
+    return <WonVehicleTrackingView token={trackMatch[1]} />;
   }
 
   return (

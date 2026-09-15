@@ -3,6 +3,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief, createBriefWithIntakeLink } from '../services/researchService';
 import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon } from 'lucide-react';
 import { listReferenceMakes, listReferenceModels, ReferenceMake, ReferenceModel } from '../services/vehicleReferenceService';
+import { listWonVehiclesForBrief, WonVehicle } from '../services/wonVehicleService';
+import WonVehicleDetail from './WonVehicleDetail';
 
 // PROMPT 33 Stage 3 - make/model as vocabulary selections, with an explicit "not listed" free-text
 // fallback. A vocabulary that blocks a real car the client wants is worse than the free-text
@@ -316,6 +318,10 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const [briefs, setBriefs] = useState<ClientBrief[]>([]);
   const [briefsLoading, setBriefsLoading] = useState(false);
   const [allRuns, setAllRuns] = useState<ResearchRun[]>([]);
+  // PROMPT 34 Stage 2 - won vehicles under the currently-selected brief.
+  const [wonVehicles, setWonVehicles] = useState<WonVehicle[]>([]);
+  const [viewingWonVehicle, setViewingWonVehicle] = useState<WonVehicle | null>(null);
+  const [wonVehiclesLoading, setWonVehiclesLoading] = useState(false);
 
   // New Client Form
   const [showNewClientForm, setShowNewClientForm] = useState(false);
@@ -565,6 +571,22 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const selectedBrief = selectedBriefId ? (briefs.find(b => b.id === selectedBriefId) || deletedBriefs.find(b => b.id === selectedBriefId)) : null;
   const val = (v: any) => (v === null || v === undefined || v === '') ? 'No preference' : v;
   const isSelectedBriefEditing = editingBriefId === selectedBriefId && selectedBriefId !== null;
+
+  const loadWonVehicles = async (briefId: string) => {
+    setWonVehiclesLoading(true);
+    try {
+      setWonVehicles(await listWonVehiclesForBrief(briefId));
+    } catch {
+      setWonVehicles([]);
+    } finally {
+      setWonVehiclesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedBriefId) void loadWonVehicles(selectedBriefId);
+    else setWonVehicles([]);
+  }, [selectedBriefId]);
 
   return (
     <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-8rem)]">
@@ -964,6 +986,34 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                   )}
                 </div>
               </div>
+
+              <div className="mt-6">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 border-b pb-2">Won Vehicles</h3>
+                <div className="space-y-3">
+                  {wonVehiclesLoading ? (
+                    <div className="text-gray-400 text-sm">Loading…</div>
+                  ) : wonVehicles.length === 0 ? (
+                    <div className="text-gray-500 text-sm">No vehicles won yet for this brief.</div>
+                  ) : (
+                    wonVehicles.map(wv => {
+                      const snap = wv.won_snapshot as any;
+                      return (
+                        <div
+                          key={wv.id}
+                          onClick={() => setViewingWonVehicle(wv)}
+                          className="flex justify-between items-center p-3 bg-emerald-50 hover:bg-white hover:border-emerald-400 border border-emerald-100 rounded-lg cursor-pointer transition-colors group"
+                        >
+                          <div>
+                            <div className="font-bold text-[#403f4c]">{snap?.year} {snap?.make} {snap?.model} {snap?.trim || ''}</div>
+                            <div className="text-xs text-gray-500 mt-1">Won {new Date(wv.promoted_at).toLocaleDateString()} · lot {snap?.lot_number || '—'}</div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-emerald-600 transition-colors" />
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         ) : editingClient ? (
@@ -1192,6 +1242,14 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
             </div>
           </div>
         </div>
+      )}
+
+      {viewingWonVehicle && (
+        <WonVehicleDetail
+          wonVehicle={viewingWonVehicle}
+          onClose={() => setViewingWonVehicle(null)}
+          onChanged={() => { if (selectedBriefId) void loadWonVehicles(selectedBriefId); }}
+        />
       )}
     </div>
   );

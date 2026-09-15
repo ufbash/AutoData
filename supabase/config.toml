@@ -15,3 +15,6 @@ verify_jwt = false
 
 [functions.intake-brief]
 verify_jwt = false
+
+[functions.won-vehicle-tracking]
+verify_jwt = false

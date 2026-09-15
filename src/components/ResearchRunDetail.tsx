@@ -32,6 +32,7 @@ import VehicleDetailModal from './VehicleDetailModal';
 import AuctionCountdown from './AuctionCountdown';
 import { ArrowLeft, Edit2, Check, ArrowUp, ArrowDown, Plus, Trash2, Loader2, Link as LinkIcon, Copy, RefreshCw, ImageIcon, GripVertical, AlertTriangle, X, Info, CheckCircle2, PhoneCall, DollarSign } from 'lucide-react';
 import ListingCostBreakdown from './ListingCostBreakdown';
+import { promoteListing } from '../services/wonVehicleService';
 
 interface ResearchRunDetailProps {
   runId: string;
@@ -62,6 +63,23 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   
   // PROMPT 33 Stage 3 - decoded VIN data for spec matching (trimMatches), keyed by VIN.
   const [decodedByVin, setDecodedByVin] = useState<Map<string, DecodedVehicle>>(new Map());
+
+  // PROMPT 34 Stage 2 - promotion to a won vehicle.
+  const [promoting, setPromoting] = useState(false);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
+
+  const handlePromote = async (listing: RunListing) => {
+    setPromoting(true);
+    setPromoteError(null);
+    try {
+      await promoteListing(listing.id);
+      await loadData();
+    } catch (e: any) {
+      setPromoteError(e?.message || 'Promotion failed.');
+    } finally {
+      setPromoting(false);
+    }
+  };
 
   // Checklist states
   const [warningsReviewed, setWarningsReviewed] = useState(false);
@@ -1018,6 +1036,25 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                 <div><span className="text-gray-400">Source:</span> {(approvedListing.approved_snapshot as any).source_platform || '—'}</div>
               </div>
             )}
+
+            {/* PROMPT 34 Stage 2 - promotion, superadmin only. The listing itself is never
+                touched beyond the won_vehicle_id/won_at marker set by the promotion RPC. */}
+            <div className="mt-3 pt-3 border-t border-gray-200/60">
+              {approvedListing.won_vehicle_id ? (
+                <div className="flex items-center gap-2 text-sm text-emerald-700 font-medium">
+                  <CheckCircle2 className="w-4 h-4" /> Won — promoted {approvedListing.won_at ? new Date(approvedListing.won_at).toLocaleString() : ''}
+                </div>
+              ) : role === 'superadmin' ? (
+                <button
+                  onClick={() => handlePromote(approvedListing)}
+                  disabled={promoting}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 text-white text-sm rounded-lg font-bold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {promoting ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Mark as Won
+                </button>
+              ) : null}
+              {promoteError && <div className="mt-2 text-sm text-[#ba3b46]">{promoteError}</div>}
+            </div>
           </div>
         )}
 

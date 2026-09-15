@@ -143,6 +143,10 @@ export interface RunListing {
   approved_via: 'client' | 'staff_relayed' | null;
   approved_by: string | null;
   approved_snapshot: Record<string, unknown> | null;
+  // PROMPT 34 Stage 2 - promotion marker. The listing itself is never deleted or moved; this is
+  // the only trace of promotion visible from the run's own side.
+  won_vehicle_id?: string | null;
+  won_at?: string | null;
 }
 
 export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
@@ -678,6 +682,8 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       approved_via,
       approved_by,
       approved_snapshot,
+      won_vehicle_id,
+      won_at,
       sightings (
         asset_id,
         source_platform,
@@ -755,6 +761,8 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       approved_via: row.approved_via ?? null,
       approved_by: row.approved_by ?? null,
       approved_snapshot: row.approved_snapshot ?? null,
+      won_vehicle_id: row.won_vehicle_id ?? null,
+      won_at: row.won_at ?? null,
       source_platform: sighting.source_platform || 'unknown',
       source_auction_platform: sighting.source_auction_platform ?? null,
       source_url: sighting.source_url || null,

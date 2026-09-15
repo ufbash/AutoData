@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { sendEmail } from "../_shared/email.ts";
 
 // CORS and token-format validation copied from public-run/index.ts - same shape, same
 // unauthenticated-but-unguessable-token pattern. No X-Research-Secret here: this is reached by
@@ -294,30 +295,25 @@ serve(async (req: Request) => {
             ? `Your submission to Caplimo: ${vehicleDesc}`
             : "Your submission to Caplimo";
 
-          const resendResponse = await fetch("https://api.resend.com/emails", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${resendApiKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              from: `Caplimo <${fromAddress}>`,
-              to: [clientRow.email],
-              reply_to: fromAddress,
-              subject,
-              html,
-              text,
-            }),
+          const result = await sendEmail({
+            supabase,
+            orgId: (brief as any).org_id ?? null,
+            purpose: 'brief_confirmation',
+            toEmail: clientRow.email,
+            subject,
+            html,
+            text,
+            relatedTable: 'client_briefs',
+            relatedId: brief.id,
           });
 
-          if (resendResponse.ok) {
+          if (result.ok) {
             await supabase
               .from("client_briefs")
               .update({ confirmation_sent_at: new Date().toISOString() })
               .eq("id", brief.id);
           } else {
-            const errText = await resendResponse.text();
-            console.error("intake-brief: confirmation email failed (Resend):", errText);
+            console.error("intake-brief: confirmation email failed:", result.errorText);
           }
         } else {
           console.error("intake-brief: confirmation email skipped - missing RESEND_API_KEY or client email");
