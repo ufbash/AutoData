@@ -1,10 +1,25 @@
 # HANDOFF.md — paste this first in a new chat
 
-**Last revised:** 15 September 2026 (full rewrite — Prompt 33 Stage 5 status refresh).
-The previous version was dated 9 September 2026 and described the state as of Prompt 23; ten
-prompts of real work (24–33) landed underneath it. Read the whole thing; do not assume it's a
-light edit of what you remember. **This document supersedes the 9 September version — it is not
-deleted, it is wrong to read as current.**
+**Last revised:** 15 September 2026 (full rewrite — Prompt 33 Stage 5 status refresh, corrected
+Prompt 34 Stage 0B).
+
+**Supersedes the version dated 9 September 2026 (Prompt 23).** That version is gone from this
+file's body, not from the project — recoverable via `git log` — but per project convention
+(`PROJECT_CHARTER.md` §6, `PLAN_TRACKER.md` §4.12) a superseded document states plainly, in
+itself, what it used to claim and what changed, so a reader never has to run `git log` just to
+know they're looking at stale context. **This matters more for this specific file than any
+other**: a stale `HANDOFF.md` is what caused the "Q1–Q3 already built" loss, a session spent
+rebuilding work that already existed because the handover it started from didn't say otherwise.
+
+**What the 9 September version claimed, in summary:** work had stopped at Prompt 21 (8 September)
+— auction-fee research and the bid-headroom module. It described the open items as the
+delete-confirmation UI, a sold-comps-brief warning, auction alerts, the IAAI capture source, and
+C2/C3/Phase D blocked on paperwork. It did not know about, and could not have known about: the
+`raw_payload` reader-bug audit and its writer-side fix, the cross-platform fingerprint
+canonicalizer and the two rehashes it required, `daily-sniper`'s retirement, the human-confirmed
+asset-merge system, or the NHTSA vehicle reference vocabulary — all of which are Prompts 24–33,
+covered in full below. **If you are holding a copy of the 9 September version, or anything
+derived from it, it is wrong to treat as current — read this one instead, in full.**
 
 You are continuing work on **AutoData**. Read this fully before responding.
 
