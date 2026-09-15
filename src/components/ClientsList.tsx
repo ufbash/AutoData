@@ -558,20 +558,10 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
     }
   };
 
-  if (loading || orgLoading) {
-    return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-[#a58039]" /></div>;
-  }
-
-  if (error) {
-    return <div className="p-6 text-red-600 bg-red-50 rounded-lg">{error}</div>;
-  }
-
-  // Also check deletedBriefs: a soft-deleted brief's runs must still be reachable from the
-  // deleted-items view, and this is the same lookup the brief-detail render below uses.
-  const selectedBrief = selectedBriefId ? (briefs.find(b => b.id === selectedBriefId) || deletedBriefs.find(b => b.id === selectedBriefId)) : null;
-  const val = (v: any) => (v === null || v === undefined || v === '') ? 'No preference' : v;
-  const isSelectedBriefEditing = editingBriefId === selectedBriefId && selectedBriefId !== null;
-
+  // PROMPT 34 Stage 2 - fixed a Rules-of-Hooks violation: this must run on every render,
+  // including the loading/error early returns below, or React sees a different hook count
+  // between renders and the whole page goes blank ("Rendered more hooks than during the
+  // previous render").
   const loadWonVehicles = async (briefId: string) => {
     setWonVehiclesLoading(true);
     try {
@@ -587,6 +577,20 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
     if (selectedBriefId) void loadWonVehicles(selectedBriefId);
     else setWonVehicles([]);
   }, [selectedBriefId]);
+
+  if (loading || orgLoading) {
+    return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-[#a58039]" /></div>;
+  }
+
+  if (error) {
+    return <div className="p-6 text-red-600 bg-red-50 rounded-lg">{error}</div>;
+  }
+
+  // Also check deletedBriefs: a soft-deleted brief's runs must still be reachable from the
+  // deleted-items view, and this is the same lookup the brief-detail render below uses.
+  const selectedBrief = selectedBriefId ? (briefs.find(b => b.id === selectedBriefId) || deletedBriefs.find(b => b.id === selectedBriefId)) : null;
+  const val = (v: any) => (v === null || v === undefined || v === '') ? 'No preference' : v;
+  const isSelectedBriefEditing = editingBriefId === selectedBriefId && selectedBriefId !== null;
 
   return (
     <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-8rem)]">
