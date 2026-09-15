@@ -12,6 +12,8 @@ import {
   getSignedImageUrls,
   softDeleteRun,
   listAuctionHistoryForAssets,
+  listVinDecodesForVins,
+  DecodedVehicle,
   recordStaffApproval,
   ResearchRun,
   RunListing,
@@ -58,6 +60,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
   const [storingImages, setStoringImages] = useState(false);
   const [signedThumbnails, setSignedThumbnails] = useState<Record<string, string>>({});
   
+  // PROMPT 33 Stage 3 - decoded VIN data for spec matching (trimMatches), keyed by VIN.
+  const [decodedByVin, setDecodedByVin] = useState<Map<string, DecodedVehicle>>(new Map());
+
   // Checklist states
   const [warningsReviewed, setWarningsReviewed] = useState(false);
   const [criticalOverrideReason, setCriticalOverrideReason] = useState('');
@@ -80,6 +85,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
 
       const assetIds = l.map(listing => listing.asset_id).filter((id): id is string => !!id);
       const historyByAsset = await listAuctionHistoryForAssets(assetIds);
+      const vins = l.map(listing => listing.vin).filter((v): v is string => !!v);
+      const decodedVinMap = await listVinDecodesForVins(vins);
+      setDecodedByVin(decodedVinMap);
       const flagsMap = new Map<string, AuctionHistoryFlags>();
       l.forEach(listing => {
         if (listing.asset_id) {
@@ -558,7 +566,8 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
           }
         }
         if (brief.trim != null && brief.trim !== '' && brief.trim.toLowerCase() !== 'either' && l.trim != null) {
-          if (!trimMatches(l.trim, brief.trim, brief.model)) {
+          const decoded = l.vin ? decodedByVin.get(l.vin) : undefined;
+          if (!trimMatches(l.trim, brief.trim, brief.model, decoded?.model, decoded?.trim)) {
             addSpecRule(specWarn, `trim differs (${l.trim} vs ${brief.trim} requested)`, l.id);
           }
         }

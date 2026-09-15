@@ -2,20 +2,99 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief, createBriefWithIntakeLink } from '../services/researchService';
 import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon } from 'lucide-react';
+import { listReferenceMakes, listReferenceModels, ReferenceMake, ReferenceModel } from '../services/vehicleReferenceService';
+
+// PROMPT 33 Stage 3 - make/model as vocabulary selections, with an explicit "not listed" free-text
+// fallback. A vocabulary that blocks a real car the client wants is worse than the free-text
+// status quo, so the fallback is always one click away, never hidden. make_is_vocabulary/
+// model_is_vocabulary record which path produced the stored value - not enforced, just recorded.
+const MakeModelField: React.FC<{
+  label: string;
+  value: string;
+  isVocabulary: boolean | null | undefined;
+  options: { id: string; name: string }[];
+  optionsLoading: boolean;
+  placeholder: string;
+  onChange: (value: string, isVocabulary: boolean) => void;
+}> = ({ label, value, isVocabulary, options, optionsLoading, placeholder, onChange }) => {
+  // Default to free text when editing a brief whose value isn't a recognised vocabulary
+  // selection (legacy data, or a value the vocabulary genuinely doesn't have) - never force an
+  // existing typed value to silently disappear behind a dropdown it doesn't match.
+  const [freeText, setFreeText] = useState<boolean>(isVocabulary === false || (!!value && isVocabulary == null));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="block text-xs font-medium text-gray-700">{label}</label>
+        <button
+          type="button"
+          onClick={() => setFreeText(!freeText)}
+          className="text-[11px] text-indigo-600 hover:underline"
+        >
+          {freeText ? 'Choose from list instead' : "Can't find it? Type it in"}
+        </button>
+      </div>
+      {freeText ? (
+        <input
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value, false)}
+          className="w-full px-3 py-2 text-sm border border-gray-300 rounded"
+          placeholder={placeholder}
+        />
+      ) : (
+        <select
+          value={value}
+          onChange={e => onChange(e.target.value, true)}
+          disabled={optionsLoading}
+          className="w-full px-3 py-2 text-sm border border-gray-300 rounded bg-white disabled:opacity-50"
+        >
+          <option value="">{optionsLoading ? 'Loading…' : `Select ${label.toLowerCase()}…`}</option>
+          {options.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+        </select>
+      )}
+    </div>
+  );
+};
 
 // --- Brief Form Component ---
-const BriefForm = ({ 
-  initialData = { quantity: 1 }, 
-  onSubmit, 
-  onCancel, 
-  isSubmitting 
-}: { 
-  initialData?: Partial<ClientBrief>, 
-  onSubmit: (data: Partial<ClientBrief>) => void, 
-  onCancel: () => void, 
-  isSubmitting: boolean 
+const BriefForm = ({
+  initialData = { quantity: 1 },
+  onSubmit,
+  onCancel,
+  isSubmitting
+}: {
+  initialData?: Partial<ClientBrief>,
+  onSubmit: (data: Partial<ClientBrief>) => void,
+  onCancel: () => void,
+  isSubmitting: boolean
 }) => {
   const [formData, setFormData] = useState<Partial<ClientBrief>>(initialData);
+  const [makes, setMakes] = useState<ReferenceMake[]>([]);
+  const [models, setModels] = useState<ReferenceModel[]>([]);
+  const [makesLoading, setMakesLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMakesLoading(true);
+    listReferenceMakes()
+      .then(result => { if (!cancelled) setMakes(result); })
+      .catch(() => { if (!cancelled) setMakes([]); })
+      .finally(() => { if (!cancelled) setMakesLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!formData.make) { setModels([]); return; }
+    setModelsLoading(true);
+    listReferenceModels(formData.make, formData.year_min ?? null, formData.year_max ?? null)
+      .then(result => { if (!cancelled) setModels(result); })
+      .catch(() => { if (!cancelled) setModels([]); })
+      .finally(() => { if (!cancelled) setModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, [formData.make, formData.year_min, formData.year_max]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,17 +107,27 @@ const BriefForm = ({
         <h4 className="font-bold text-gray-800">{initialData.id ? 'Edit Buying Brief' : 'Create Buying Brief'}</h4>
         <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>
       </div>
-      
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Make</label>
-          <input type="text" value={formData.make || ''} onChange={e => setFormData({...formData, make: e.target.value})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" placeholder="e.g. Toyota" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Model</label>
-          <input type="text" value={formData.model || ''} onChange={e => setFormData({...formData, model: e.target.value})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" placeholder="e.g. Camry" />
-        </div>
-        
+        <MakeModelField
+          label="Make"
+          value={formData.make || ''}
+          isVocabulary={formData.make_is_vocabulary}
+          options={makes}
+          optionsLoading={makesLoading}
+          placeholder="e.g. Toyota"
+          onChange={(value, isVocabulary) => setFormData({ ...formData, make: value, make_is_vocabulary: isVocabulary })}
+        />
+        <MakeModelField
+          label="Model"
+          value={formData.model || ''}
+          isVocabulary={formData.model_is_vocabulary}
+          options={models}
+          optionsLoading={modelsLoading}
+          placeholder="e.g. Camry"
+          onChange={(value, isVocabulary) => setFormData({ ...formData, model: value, model_is_vocabulary: isVocabulary })}
+        />
+
         <div>
           <label className="block text-xs font-medium text-gray-700 mb-1">Trim</label>
           <input type="text" value={formData.trim || ''} onChange={e => setFormData({...formData, trim: e.target.value})} className="w-full px-3 py-2 text-sm border border-gray-300 rounded" placeholder="e.g. SE, XLE" />

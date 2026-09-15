@@ -19,6 +19,8 @@ export interface ClientBrief {
   make?: string | null;
   model?: string | null;
   trim?: string | null;
+  make_is_vocabulary?: boolean | null;
+  model_is_vocabulary?: boolean | null;
   year_min?: number | null;
   year_max?: number | null;
   max_mileage?: number | null;
@@ -622,6 +624,40 @@ export const listAuctionHistoryForAssets = async (assetIds: string[]): Promise<M
   (data || []).forEach((row: AuctionHistoryRecord) => {
     if (!map.has(row.asset_id)) map.set(row.asset_id, []);
     map.get(row.asset_id)!.push(row);
+  });
+
+  return map;
+};
+
+export interface DecodedVehicle {
+  model: string | null;
+  trim: string | null;
+}
+
+// PROMPT 33 Stage 3 - decoded values for spec matching, batched the same way
+// listAuctionHistoryForAssets already is. Only successful decodes are returned - a failed decode
+// (malformed VIN) or one not yet in the cache is simply absent from the map, which is exactly
+// the "fall back to the existing vocabulary layer unchanged" case trimMatches expects.
+export const listVinDecodesForVins = async (vins: string[]): Promise<Map<string, DecodedVehicle>> => {
+  const map = new Map<string, DecodedVehicle>();
+  const uniqueVins = Array.from(new Set(vins.filter(Boolean)));
+  if (uniqueVins.length === 0) return map;
+
+  const { data, error } = await supabase
+    .from('vin_decodes')
+    .select('vin, decoded_data')
+    .in('vin', uniqueVins)
+    .eq('decode_status', 'success');
+
+  if (error) {
+    throw new Error(`Failed to list VIN decodes: ${error.message}`);
+  }
+
+  (data || []).forEach((row: { vin: string; decoded_data: Record<string, unknown> | null }) => {
+    map.set(row.vin, {
+      model: (row.decoded_data?.Model as string) || null,
+      trim: (row.decoded_data?.Trim as string) || null,
+    });
   });
 
   return map;

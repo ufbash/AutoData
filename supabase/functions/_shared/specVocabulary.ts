@@ -40,6 +40,61 @@ const TRANSMISSION_GROUPS: SynonymGroup[] = [
   ['manual'],
 ];
 
+// PROMPT 33 Stage 1 (vehicle reference vocabulary) - the family/badge bridge.
+//
+// This isn't a BMW-specific problem - it's the same taxonomy mismatch that produced Prompt 27's
+// four E350 false WARNs (E350/E250 vs E-Class), just visible again one level up. A client's brief
+// names a FAMILY ("5 Series", "E-Class"); an auction platform and NHTSA's own model catalog both
+// deal in BADGES ("535i", "E 250 Bluetec"). Those are two real levels of one taxonomy - pretending
+// there is only one is what each of these symptoms has been.
+//
+// NHTSA's badge-level models (vehicle_reference_models, seeded above) are correct AS BADGES - a
+// decoded VIN genuinely is a "535i", not a "5 Series". This table is the deliberate, curated
+// bridge: when a brief specifies a FAMILY, it must match any badge in that family; when a brief
+// specifies a badge directly ("535i"), it must NOT match a different badge in the same family
+// ("520d") - family membership only expands a family-level value, it never loosens an
+// already-specific one.
+//
+// Confirmed via one real VIN decode (WBA5B3C5XGD549035, Stage 2 pre-flight): DecodeVinValues'
+// `Series` field returned '5-series' for a decoded `Model` of '535i' - i.e. NHTSA's own decode
+// output already knows this distinction and could seed this table automatically once Stage 2's
+// decode cache has enough real coverage. Curated by hand for now, grounded in the real BMW badges
+// NHTSA returns for the exact years this project has actually captured (2012-2016, 2019, 2022,
+// 2024-2025) - not a general BMW taxonomy, only the families actually in production data (19
+// real "5 Series" assets, 1 "3 Series", 1 "4 Series"). A family with no curated members here
+// falls through to free text, same as `Avatr` - this project does not build a taxonomy for
+// manufacturers or families it has never traded.
+const MODEL_FAMILIES: Record<string, string[]> = {
+  '3 series': ['320i', '328d', '328i', '330e', '330i', '335', '335i', '335is', '340i', 'm3', 'm340i', 'activehybrid 3'],
+  '4 series': ['428i', '430i', '435i', '440i', 'm4', 'm440i'],
+  '5 series': ['528i', '528xi', '530e', '530i', '535d', '535i', '540d', '540i', '550e', '550i', 'm5', 'm550i', 'activehybrid 5'],
+};
+
+/** True if `familyValue` (e.g. a brief's "5 Series") is curated to include `badgeValue` (e.g. a
+ * decoded "535i"). Returns false for any family not explicitly curated above - never guesses. */
+export function familyIncludesBadge(familyValue: string, badgeValue: string): boolean {
+  const family = MODEL_FAMILIES[familyValue.trim().toLowerCase()];
+  if (!family) return false;
+  return family.includes(badgeValue.trim().toLowerCase());
+}
+
+// PROMPT 33 Stage 1 (vehicle reference vocabulary) - explicit make aliases, listed not guessed.
+// "ALFA" (3 real assets) does not exact-match NHTSA's official "ALFA ROMEO" - not a data gap
+// (NHTSA has the make, Make_ID 493, already seeded into vehicle_reference_makes), just an
+// informal abbreviation in a real capture. Deliberately an explicit map, not prefix/substring
+// matching: Bashir's own correction was that string-proximity matching is exactly how false
+// identity matches get made (the class this project's fingerprinting bugs already come from,
+// PLAN_TRACKER.md debt #46) - an alias here must be added by a human who looked at it, checkable
+// by eye, never inferred at runtime.
+const MAKE_ALIASES: Record<string, string> = {
+  'alfa': 'ALFA ROMEO',
+};
+
+export function resolveMakeAlias(raw: string): string {
+  const key = raw.trim().toLowerCase();
+  return MAKE_ALIASES[key] ?? raw;
+}
+
 function canonicalToken(raw: string, groups: SynonymGroup[]): string {
   const v = raw.trim().toLowerCase();
   for (const group of groups) {
@@ -113,7 +168,37 @@ function stripClassLetterPrefix(trim: string, classLetter: string | null): strin
  * qualifier, e.g. "4MATIC", still matches a brief with none) and is a complete no-op - byte
  * for byte the old behaviour - whenever `briefModel` doesn't resolve to a class letter at all.
  */
-export function trimMatches(listingTrim: string, briefTrim: string, briefModel?: string | null): boolean {
+// PROMPT 33 Stage 3 - decoded-value parameters are optional and additive. When the listing's own
+// VIN has been decoded (Stage 2) and vPIC returned a real Model/Trim (not blank - Stage 2's own
+// documented limitation, never assumed populated), decoded values are compared instead of the
+// platform's raw trim string: a decoded "535i" is a firmer fact than whatever a scraper happened
+// to capture. Whenever decoded data is absent for either side, this falls through to the exact
+// original raw-string comparison, unchanged - "extend the existing normaliser, do not build a
+// second one."
+export function trimMatches(
+  listingTrim: string,
+  briefTrim: string,
+  briefModel?: string | null,
+  decodedListingModel?: string | null,
+  decodedListingTrim?: string | null
+): boolean {
+  if (decodedListingModel) {
+    const briefModelValue = (briefModel || '').trim();
+    // A brief naming a curated family (e.g. "5 Series") matches any badge in that family -
+    // this is the family/badge bridge, not the class-letter one below.
+    if (briefModelValue && familyIncludesBadge(briefModelValue, decodedListingModel)) return true;
+
+    const briefTrimLower = briefTrim.trim().toLowerCase();
+    const decodedModelLower = decodedListingModel.trim().toLowerCase();
+    if (briefTrimLower && decodedModelLower.includes(briefTrimLower)) return true;
+    if (decodedListingTrim && briefTrimLower && decodedListingTrim.trim().toLowerCase().includes(briefTrimLower)) return true;
+
+    // Decoded data was available and none of the above matched - an explicit no-match on the
+    // firmer decoded fact, not a fall-through to the raw-string path (which could produce a
+    // false match the decode already ruled out, e.g. brief "535i" vs a decoded "520d").
+    return false;
+  }
+
   const classLetter = extractClassLetter(briefModel);
   const listing = stripClassLetterPrefix(listingTrim.trim(), classLetter).toLowerCase();
   const brief = stripClassLetterPrefix(briefTrim.trim(), classLetter).toLowerCase();
