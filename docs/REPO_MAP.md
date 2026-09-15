@@ -29,6 +29,8 @@ src/
   components/
     AddCapturesModal.tsx           — modal to search unattached sightings and attach to a run;
                                       contains its own eligibility-rule copy (isUnconfirmed etc.)
+    AssetMergeReview.tsx           — human-confirmed asset-merge review UI, superadmin only
+                                      (added 13 Sep 2026, Prompt 32 Stage 2, debt #46)
     AuctionCountdown.tsx           — renders live countdown from parseAuctionDate(); 1s tick
     BulkImport.tsx                 — paired-image upload → Gemini vision extraction → review → save
     CarForm.tsx                    — legacy single-sale entry form (sales/ledger, not client briefs)
@@ -50,6 +52,8 @@ src/
     AuthContext.tsx                — session/org/role context (superadmin/staff/client)
 
   services/
+    assetMergeService.ts           — listMergeCandidates/confirmMerge, calls asset-merge-candidates/
+                                      asset-merge-confirm (added 13 Sep 2026, Prompt 32 Stage 2)
     bidHeadroomService.ts          — auction fees/trucking/ocean/duty/headroom, single shared
                                       calculation module (added 8 Sep 2026)
     currencyService.ts             — exchange rate fetch/cache + USD conversion helpers
@@ -61,6 +65,8 @@ src/
                                       executeTrimCleanup are disabled/stubbed here
     supabaseClient.ts               — supabase-js client singleton; Node-compatible env fallback
     truckingRatesService.ts        — internal + estimator read views over trucking_rates (8 Sep 2026)
+    vehicleReferenceService.ts     — reads vehicle_reference_makes/models for brief-entry vocabulary
+                                      picker (added 15 Sep 2026, Prompt 33 Stage 3)
     yardMatchingService.ts         — platform-first sighting→yard matcher (added 8 Sep 2026)
 
   utils/
@@ -72,15 +78,33 @@ src/
 supabase/
   functions/
     app-ingest/index.ts            — CarForm/BulkImport ledger writes; JWT + superadmin
+    asset-merge-candidates/index.ts — read-only merge-candidate detection; JWT + superadmin
+                                      (added 13 Sep 2026, Prompt 32 Stage 2, debt #46)
+    asset-merge-confirm/index.ts   — the only path that actually calls merge_assets(); JWT +
+                                      superadmin (added 13 Sep 2026, Prompt 32 Stage 2)
     extract-vehicle-vision/index.ts — server-side Gemini vision extraction; JWT + superadmin
     intake-brief/index.ts          — client-facing intake form read/write, strict allow-list both
                                       directions, confirmation email (added 6 Sep 2026)
     list-active-runs/index.ts      — extension run pick-list, org-scoped (added 6 Sep 2026)
     monthly-backup/index.ts        — pg_cron-triggered CSV export via Resend; static x-backup-secret
     public-run/index.ts            — public share-token deliverable; strict field allow-list
-    research-capture/index.ts      — Chrome extension capture ingest; static x-research-secret
+    research-capture/index.ts      — Chrome extension capture ingest; static x-research-secret;
+                                      also runs Prompt 32 Stage 3's symmetric split-prevention probe
     store-images/index.ts          — server-side (Copart) image fetch/store; JWT required
     upload-images/index.ts         — extension-side (bid.cars) image byte upload; static secret
+    vehicle-reference-seed/index.ts — NHTSA vPIC makes/models seeder, re-runnable; JWT +
+                                      superadmin (added 14 Sep 2026, Prompt 33 Stage 1)
+    vin-decode/index.ts            — cached/async VIN decode via NHTSA vPIC; JWT + superadmin,
+                                      never called from the capture path (added 14 Sep 2026,
+                                      Prompt 33 Stage 2)
+    _shared/assetMergeConflicts.ts — pure do-not-merge/field-disagreement detection, proven
+                                      synthetically (Prompt 32 Stage 2)
+    _shared/specVocabulary.ts      — fuel/colour/transmission synonym groups, parsePreference(),
+                                      trimMatches(), MAKE_ALIASES/familyMatchesDecodedSeries (the
+                                      NHTSA family/badge bridge, Prompt 33 Stage 3)
+
+    daily-sniper/ — RETIRED 12 Sep 2026, Prompt 32 Stage 1. Source removed, undeployed. Do not
+    recreate without re-reading docs/SOLVED.md topic 31 first.
 
   migrations/
     001_create_sales.sql                  — legacy sales table (now deprecated/locked)
@@ -112,6 +136,23 @@ supabase/
     029_cost_rates.sql                      — cost_rates table (Phase C1)
     030_trucking_rates.sql                  — trucking_rates table (Phase C1b)
     031_auction_fee_brackets.sql            — auction_fee_brackets table (Phase C1c)
+    032_cost_document_extractions.sql       — cost_document_extractions table, cost-documents bucket
+    033_rate_table_currency.sql
+    034_org_settings.sql
+    035_cost_document_asset_pairing.sql     — asset_id/asset_paired_by/asset_paired_at (Prompt 29 Stage 6)
+    036_asset_merge.sql                     — merged_into_asset_id/merged_at/merged_by + merge_assets()
+                                              (Prompt 32 Stage 2, debt #46)
+    037_symmetric_asset_matching.sql        — assets.vinless_identity_hash (Prompt 32 Stage 3)
+    038_merge_sentinels_vinless_hash.sql    — merge_assets() also sentinels vinless_identity_hash
+    039_vehicle_reference.sql               — vehicle_reference_makes/models (Prompt 33 Stage 1)
+    040_vin_decode_cache.sql                — vin_decodes table (Prompt 33 Stage 2)
+    041_vehicle_reference_rls.sql           — authenticated-read RLS for the three tables above
+    042_brief_vocabulary_provenance.sql     — client_briefs.make_is_vocabulary/model_is_vocabulary
+                                              (Prompt 33 Stage 3)
+
+    Next free migration number: 043 — always re-verify via
+    `SELECT version FROM supabase_migrations.schema_migrations ORDER BY version DESC LIMIT 3;`
+    before creating a new one (AGENTS.md §4.2).
 ```
 (Migration 007 and 017 are absent from the tree — not further investigated, out of scope.)
 
@@ -423,6 +464,10 @@ spec-rule `if` blocks in §B.6 were miscounted as 8 when the line-by-line list t
 | `app-ingest` | not present in `config.toml` (defaults `true`) | Requires `Authorization: Bearer <jwt>`, verifies via `supabase.auth.getUser(jwt)` (`app-ingest/index.ts:40-64`) | Yes |
 | `extract-vehicle-vision` | not present in `config.toml` (defaults `true`) | Requires `Authorization` header, verifies via `supabase.auth.getUser(token)` (`extract-vehicle-vision/index.ts:20-38`) | Yes |
 | `store-images` | not present in `config.toml` (defaults `true`) | Requires `Authorization` header (`store-images/index.ts:39`) | Yes |
+| `asset-merge-candidates` | not present in `config.toml` (defaults `true`) | JWT + superadmin membership check | Yes |
+| `asset-merge-confirm` | not present in `config.toml` (defaults `true`) | JWT + superadmin membership check | Yes |
+| `vehicle-reference-seed` | not present in `config.toml` (defaults `true`) | JWT + superadmin membership check | Yes |
+| `vin-decode` | not present in `config.toml` (defaults `true`) | JWT + superadmin membership check | Yes |
 
 No row disagrees across all three columns (config value, AGENTS.md §4.3's documented
 requirement, and the function's own code) — AGENTS.md §4.3's list (`verify_jwt = false`
