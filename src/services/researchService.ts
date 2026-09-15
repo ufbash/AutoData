@@ -632,6 +632,7 @@ export const listAuctionHistoryForAssets = async (assetIds: string[]): Promise<M
 export interface DecodedVehicle {
   model: string | null;
   trim: string | null;
+  series: string | null;
 }
 
 // PROMPT 33 Stage 3 - decoded values for spec matching, batched the same way
@@ -657,6 +658,7 @@ export const listVinDecodesForVins = async (vins: string[]): Promise<Map<string,
     map.set(row.vin, {
       model: (row.decoded_data?.Model as string) || null,
       trim: (row.decoded_data?.Trim as string) || null,
+      series: (row.decoded_data?.Series as string) || null,
     });
   });
 

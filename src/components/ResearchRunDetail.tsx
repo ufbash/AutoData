@@ -567,7 +567,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
         }
         if (brief.trim != null && brief.trim !== '' && brief.trim.toLowerCase() !== 'either' && l.trim != null) {
           const decoded = l.vin ? decodedByVin.get(l.vin) : undefined;
-          if (!trimMatches(l.trim, brief.trim, brief.model, decoded?.model, decoded?.trim)) {
+          if (!trimMatches(l.trim, brief.trim, brief.model, decoded?.model, decoded?.trim, decoded?.series)) {
             addSpecRule(specWarn, `trim differs (${l.trim} vs ${brief.trim} requested)`, l.id);
           }
         }

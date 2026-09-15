@@ -78,6 +78,18 @@ export function familyIncludesBadge(familyValue: string, badgeValue: string): bo
   return family.includes(badgeValue.trim().toLowerCase());
 }
 
+const alnumOnly = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** True if `familyValue` (a brief's own value, e.g. "5 Series") names the same family as
+ * `decodedSeries` (vPIC's own `Series` field, e.g. "5-series") once punctuation/casing/spacing
+ * differences are normalised away. This is preferred over the hand-curated `MODEL_FAMILIES` table
+ * whenever a decode is available: vPIC's `Series` is NHTSA's own authoritative per-VIN answer,
+ * not a table a human has to remember to update when next year's badges ship. See
+ * `familyIncludesBadge` for the fallback used when a decode has no Series value at all. */
+export function familyMatchesDecodedSeries(familyValue: string, decodedSeries: string): boolean {
+  return alnumOnly(familyValue) === alnumOnly(decodedSeries);
+}
+
 // PROMPT 33 Stage 1 (vehicle reference vocabulary) - explicit make aliases, listed not guessed.
 // "ALFA" (3 real assets) does not exact-match NHTSA's official "ALFA ROMEO" - not a data gap
 // (NHTSA has the make, Make_ID 493, already seeded into vehicle_reference_makes), just an
@@ -180,13 +192,18 @@ export function trimMatches(
   briefTrim: string,
   briefModel?: string | null,
   decodedListingModel?: string | null,
-  decodedListingTrim?: string | null
+  decodedListingTrim?: string | null,
+  decodedListingSeries?: string | null
 ): boolean {
   if (decodedListingModel) {
     const briefModelValue = (briefModel || '').trim();
-    // A brief naming a curated family (e.g. "5 Series") matches any badge in that family -
-    // this is the family/badge bridge, not the class-letter one below.
-    if (briefModelValue && familyIncludesBadge(briefModelValue, decodedListingModel)) return true;
+    // Preference order, deliberate: vPIC's own decoded `Series` (authoritative per-VIN, updates
+    // itself as NHTSA's own data does) beats the hand-curated MODEL_FAMILIES table (a fallback
+    // for when a decode has no Series value, not the primary source of truth - a curated table
+    // nobody updates when next year's badges ship would otherwise become a fourth, silently
+    // stale normaliser).
+    if (briefModelValue && decodedListingSeries && familyMatchesDecodedSeries(briefModelValue, decodedListingSeries)) return true;
+    if (briefModelValue && !decodedListingSeries && familyIncludesBadge(briefModelValue, decodedListingModel)) return true;
 
     const briefTrimLower = briefTrim.trim().toLowerCase();
     const decodedModelLower = decodedListingModel.trim().toLowerCase();
