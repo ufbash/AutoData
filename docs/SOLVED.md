@@ -2056,3 +2056,22 @@ the trigger even as the service role; anon key gets `[]` on the issuance and ema
 both functions; the tracking payload for a vehicle with an invoice issued contains none of invoice/amount/price/cost/fee/document/recipient/email/estimate.
 **Not verified:** that the one test email reached an inbox (Resend accepted it; only Bashir can confirm receipt), and the link in that email resolves on
 `theautodata.com` only after the unpushed `/track` route is deployed.
+
+## 36. Recording the real winning bid - why not the snapshot, and why the fee needed the method too
+
+**Why a separate ledger.** The obvious place for the hammer price was `won_snapshot`, the record of the purchase. It is the wrong place: the snapshot is frozen at
+promotion to hold what the client *approved*, and the hammer price does not exist yet at that moment. Writing it in later would either break the freeze or leave a
+snapshot claiming something untrue at the time it was taken. The sighting is no better a source (`research-capture` updates it in place on re-capture, so its price
+can drift). So the figure is entered by a person, in its own append-only table, and shown beside the approved price with the difference.
+
+**Why bid method came with it.** Recording the bid alone would still have left the bid fee as a "$85-$95 depending on bid method (not yet known)" range, because the
+fee schedule prices a proxy bid and a live bid differently and the fee function averaged them. For a car already won, and a method staff know, that range is a guess
+dressed as a figure. An optional `bidMethod` on the shared fee function makes it a lookup. Proven against independent SQL on five cases (proxy/live at $1,700 and
+$5,000, and live at $1,650), and the no-method output was checked identical to before so the run-listing breakdown and headroom callers did not move.
+
+**One design consequence worth stating.** Voiding a replacement makes the earlier entry current again. That is deliberate (the earlier entry was superseded, not
+disproved), but it means "the current winning bid" is a query (latest non-voided), not a stored flag, and no code may cache it as one.
+
+**Process note.** The endpoint tests were interrupted when the browser's login session vanished after a dev-server restart. The database-level checks (guards, FKs,
+CHECKs in an uncommitted transaction, and the logged-out probes) and the independent SQL fee figures did not need a login and were run first; the authenticated
+endpoint and UI checks resumed once the session was restored. Nothing was worked around: a signed-in session is not something to mint.

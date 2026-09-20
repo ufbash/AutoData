@@ -771,3 +771,23 @@ only if it is on the `WON_NOTIFY_TEST_RECIPIENTS` secret allowlist; anything els
 on file, only on an explicit staff click, never automatic). The link base is server-side (`APP_BASE_URL`, default `https://theautodata.com`), never from the request.
 
 **Seam and FK list:** see §20 (documents and the `cost_document_extractions` seam) and §17 (`won_vehicles.asset_id` is in `merge_assets()`'s repoint list, migration 047).
+
+---
+
+## 22. The real winning bid (migration 049, debt #60)
+
+`won_vehicles.won_snapshot` freezes what the client **approved** (`display_price`, `is_bid`). The price the lot actually **hammered at** is a later fact only a
+person can supply, so it lives in its own append-only ledger and is **never written into the snapshot**.
+
+**`won_vehicle_winning_bids`:** `org_id`, `won_vehicle_id` (composite FK `(won_vehicle_id, org_id)`), `amount_usd numeric(14,2)` (CHECK `> 0` and `<= 1,000,000`),
+`bid_method` (`'proxy'`, `'live'`, or NULL = not known), `note`, `evidence_document_id` (optional; composite FK `(evidence_document_id, won_vehicle_id)` into
+`won_vehicle_documents`, so evidence must belong to the same vehicle), `recorded_by`, `recorded_at`, and `voided_at`/`voided_by`/`void_reason` (CHECK: void reason
+required). USD only: Copart, IAAI and bid.cars all bid in USD and the fee schedules are USD. Staff-entered, never derived from the sighting.
+
+**Append-only.** A trigger blocks any edit and any delete **even for the service role**; the only change is voiding a live row, and a voided row is frozen. The
+current winning bid is the **latest non-voided** entry, so voiding a replacement makes the earlier entry current again. RLS is select-only; the only writer is the
+`won-vehicle-winning-bid` Edge Function (`record`, needs a note when a live bid already exists; `void`, needs a reason).
+
+**Consumers.** The bought-car view shows it beside the approved price and prices auction fees at it. `getAuctionFeeComponent` gained an optional `bidMethod`:
+absent (every other caller, and a won vehicle with no method recorded) it is byte-identical to before, a range across proxy and live; given, only that method's
+bracket applies and the figure is exact. Not on the tracking page.

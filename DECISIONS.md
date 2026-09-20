@@ -568,6 +568,9 @@ stage's pre-flight. It is the same miss that produced Prompt 32.
 | 15.6 | An invoice issuance is **append-only**: voided with a reason, never edited or deleted; amounts are staff-entered, never derived | LOCKED |
 | 15.7 | A client notification is **manual, never automatic**, carries the tracking link only, and every attempt (sent or failed) is logged | LOCKED |
 | 15.8 | A test email can only reach the caller or an allowlisted address; a client's address is unreachable through `test` | LOCKED |
+| 15.9 | The **real winning bid is a separate, staff-entered, append-only record**, never written into `won_snapshot` and never derived from the sighting | LOCKED |
+| 15.10 | A winning-bid **replacement needs a note and keeps the earlier entry**; any entry is voided with a reason; nothing is edited or deleted | LOCKED |
+| 15.11 | Auction fees are priced at the **recorded winning bid** when one exists, and are **exact only when the bid method is recorded**; otherwise a range, as before | LOCKED |
 
 **Why 15.1, so it does not get "simplified" into an asset-level store later:** an asset is the physical car; a won vehicle is one client's
 purchase of it. The same asset legitimately appears in two clients' runs (and after Prompt 32's merges, more readily), and could be won for two
@@ -589,3 +592,12 @@ mistaken test cannot reach a real client.
 
 **Approach chosen for invoices (Bashir, 20 Sep 2026):** record issuance against an uploaded PDF now; generation from cost data is planned as part of a
 later CRM, once its inputs exist. Not a rejection of generation — a sequencing decision.
+
+**Why 15.9:** the snapshot is what the client approved; the hammer price is a different fact that arrives later. Folding it into the snapshot would either break the
+freeze (15.3) or make the snapshot say something that was not true at approval. The sighting is not a source either: `research-capture` updates it in place on re-capture.
+
+**Why 15.10:** a corrected figure must not erase the wrong one; "was it ever entered as X, by whom" has to stay answerable. Voiding a replacement restoring the
+earlier entry is intended: the earlier one was superseded, not disproved.
+
+**Why 15.11:** bid fees differ by method (a proxy bid and a live bid are priced differently). Showing a midpoint or a range for a bid that is already won and whose method
+staff know would be a guess dressed as a figure (`PROJECT_CHARTER.md` §5.1); with the method recorded the fee is a lookup.
