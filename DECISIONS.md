@@ -496,3 +496,33 @@ that already keeps `source`/`effective_from` human-set in the cost-rate extracti
 the same reason an FX rate is frozen at confirmation rather than recomputed later - a general
 house pattern, not a one-off rule for this one table. Applies to any future table with a
 similar "who confirmed this, when" pair of columns.
+
+---
+
+## 13. The make vocabulary is ranked by evidence, never curated by hand (Prompt 35 Stage 3)
+
+| # | Decision | Status |
+|---|---|---|
+| 13.1 | The make vocabulary is **ranked by evidence and never curated by hand**: no whitelist of "real" brands, no deleted rows, no hidden-and-unreachable makes | LOCKED |
+| 13.2 | Every make stays selectable: ranking decides what is *listed by default*; typeahead reaches all 406, and free text is always available | LOCKED |
+| 13.3 | A staff demotion is a reversible flag on the row, never a delete | LOCKED |
+| 13.4 | **No landed-cost total is shown until every component is real.** A component that abstains — or is available but partial — blocks the total and is named | LOCKED |
+
+**Why 13.1, so nobody later "cleans up" the list by deleting rows:** a hand-maintained brand list is
+unmaintainable (new makers appear, old ones matter again) and arbitrary (who decides "obscure"?), and
+`Avatr` already proved the vocabulary cannot be authoritative — a make missing from it is a brief that
+cannot be written. Ranking hides; it must never block. The failure to keep absent is a legitimate make a
+client could ask for becoming unreachable. A Nigerian importer may well ask for a Peugeot, a Renault or an
+Oldsmobile, which the evidence puts in tier 3 — one keystroke away, by design.
+
+**What the evidence can and cannot do** (measured, not assumed, 20 Sep 2026): the zero-models rule
+catches makes NHTSA has *ended* (Oldsmobile, Plymouth, Saturn, Pontiac, Saab) and makes with nothing at
+all (heavy-truck and bus makers), by the same computed evidence. It does **not** catch a make NHTSA never
+recorded an end date for — AC Propulsion returns its two models for every year 2010-2030, and Toyota also
+returns models for 2029. Do not "fix" that by hard-coding names; the escape hatch is the demote flag, which
+is a human decision on the row.
+
+**Why 13.4:** a landed total that silently omits duty looks complete, which is worse than no total
+(`PROJECT_CHARTER.md` §5.1). Duty is permanently unavailable until C2 unblocks, so today the bought-car view
+never shows a total. Real cases that would otherwise have looked complete: a clean-title fee returned
+`available` with its bid fee left out ($640), now flagged `partialReason`.

@@ -1963,3 +1963,38 @@ then VIN-less, and VIN-less then VIN-bearing) and the ambiguous-match abstention
 real cars sharing one VIN-less identity) with synthetic, self-cleaning rows run directly against
 the real `generate_fingerprint` RPC - not asserted, since none of these three cases had a live
 positive to test against by construction.
+
+## 33. The zero-models rule caught defunct and non-car makes by the same evidence - and could not catch the one the prompt named
+
+**The task.** Rank the 406 seeded NHTSA makes by evidence instead of curating a list: a make with no
+car/truck/MPV models across probed years is either defunct or not a car brand, computed rather than named.
+
+**First surprise: the rule had no evidence to run on.** Prompt 33 seeded models only for the (make, year)
+pairs already present in `assets`, so 2-7 makes had models in any given year. A zero-models rule over that
+would have flagged nearly everything as defunct because nobody had asked. The fix was a probe
+(`vehicle-reference-make-probe`) that asks NHTSA once per make and stores the answer; only then does
+"zero" mean anything.
+
+**Second surprise: names with a period fail deterministically.** 40 makes came back `probe_failed`
+("AZURE DYNAMIC INC.", "EFFICIENT DRIVETRAINS, INC."). Not transient: vPIC's path routing treats the
+trailing `.` as a file extension and 302s to a 404. The id-keyed endpoint (`GetModelsForMakeIdYear`)
+handles them. The same batch loop also had a starvation bug — ordering by name kept re-picking the same
+failing makes and starved never-probed ones; fixed by ordering never-probed first.
+
+**Third, the finding that matters: NHTSA's year filter cannot show a make is defunct.**
+AC Propulsion returned its two models (eBox, tZero) for every year 2010-2030. The obvious rescue — a
+"phantom future year" sentinel — fails too: Toyota, Honda and Ford also return models for 2029. vPIC treats
+a model as active from its first year until an end date is recorded. Pontiac does end correctly (7 models in
+2010, none from 2011), which is why real ended makes fall out.
+
+**What the rule actually did on all 406 makes:** 14 traded (tier 1), 317 current (tier 2), 75 other (tier
+3: 47 zero-models, 28 older-only). Caught by name, after the fact, to make the rule's real effect visible:
+*zero-models* — American Motors, Checker, Daewoo, Datsun, DeLorean, Geo, Lancia, Oldsmobile, Peugeot,
+Plymouth, Renault, Triumph, Yugo, plus Mitsubishi Fuso, Wausau Equipment; *older-only* — Hummer, Maybach,
+Mercury, Opel, Pontiac, Saab, Saturn, Suzuki, plus IC Bus, Orion Bus, Crane Carrier, Jerr-Dan. **Not
+caught:** AC Propulsion (tier 2, "recent"). It stays one Hide click away rather than being hidden by name.
+
+**Lesson.** Verify a rule against the real source before promising what it will catch — the master prompt's
+own verify step ("AC Propulsion lands in tier 3 by the zero-models rule") could not pass, and the honest
+output is the measurement, not a hard-coded exception. Also: a probe that shares a name-encoding assumption
+with the seed inherits its failure; key external lookups on the source's own id where one exists.

@@ -1,7 +1,7 @@
 # PLAN_TRACKER.md — Status of all work
 
 **Status:** The moving document. Status lives here and **nowhere else**.
-**Last revised:** 15 September 2026 (Prompt 33 Stage 5 — status refresh; also fixed a stale
+**Last revised:** 20 September 2026 (Prompt 35 — bought-car view, extension picker, make tiering; §4.22 and debts #60-#65 added. Earlier: 15 September 2026, Prompt 33 Stage 5 — status refresh; also fixed a stale
 debt #58 table row that a narrative log elsewhere in this file had already marked resolved, an
 instance of exactly the doc-drift pattern this file exists to prevent).
 **Companions:** `PROJECT_CHARTER.md` · `ARCHITECTURE.md` · `DECISIONS.md` · `SCHEMA.md` · `AGENTS.md` · `HANDOFF.md` (the current narrative account — read it alongside this file, not instead of it)
@@ -1415,6 +1415,66 @@ shape of bug (one concept, silently duplicated) recurring anywhere else.
 - **Stage 5 (Documents):** this section, `DECISIONS.md` §4.15 (the title-severity rule, with the
   asymmetry reasoning), and `docs/SOLVED.md` §30 (the cross-platform merge path's real gap).
 
+### 4.22 Prompt 35: the bought car, the extension picker, the make tiering — **DONE except as listed** (20 Sep 2026)
+
+Run before Prompt 34 Stages 4-6 (documents, invoice/notification, docs) were built — those are still
+**not done** (and Prompt 34 Stage 6's `SCHEMA.md`/`DECISIONS.md` entries for `won_vehicles`,
+migrations 043/044, are still owed). Stage 1 built everything except the documents section and left an
+explicit placeholder in its place.
+
+- **Stage 0 — E2E test data cleanup: DONE.** Soft-deleted (`deleted_at`/`deleted_by`, migration 023
+  pattern) the walkthrough's client, brief, run and promoted won vehicle. The real Yaris won vehicle
+  (`da661471…`, VIN `JTDBT923781219099`) untouched — note it is at `auction_paid`, not `won`: `ufbash`
+  advanced it on 16 Sep, a genuine step, so the prompt's "still `won`" premise was stale. **Not
+  cleaned:** the two dummy assets (`E2ETESTVIN0000001/2`), their sightings and listings — `assets`,
+  `sightings` and `research_run_listings` have no soft-delete column and adding one to `assets` means
+  filtering every asset read. Left in place, still `ACTIVE`, counted in Toyota's traded count. Decision
+  pending with Bashir.
+- **Stage 1 — bought-car thumbnail and detail: DONE, verified in browser.** Thumbnail in the brief from
+  *stored* images only (signed URLs; remote `image_urls` never rendered — `images.bid.cars` fails CORS);
+  placeholder when none. Detail sections: Identity, Purchase, Costs, Status, Documents (placeholder),
+  Provenance. Purchase reads `won_snapshot` only — proven by wrapping `fetch` to rewrite the
+  `sightings` response as a re-capture (price 999999, platform, title, location, lot, images all
+  changed): Purchase unchanged, gallery fell back to the placeholder. Auction fee matched an
+  independent SQL computation on all four cases (non-clean $802.50 / $1,272.50, clean $640 / $1,130);
+  trucking $400 matched SQL; schedule label ("Unsecured") matches `org_settings`. Duty abstains
+  visibly; **no landed total is shown while any component is unavailable or partial**. Provenance
+  link opens the source run, whose banner shows the matching staff-relayed approval.
+  **Stated limits:** (1) *the final winning bid is not recorded anywhere* — the snapshot holds only
+  the approved price, so fees are computed and labelled "at the approved price" (debt #60);
+  (2) the snapshot lacks title type, yard, auction platform and lot number, so cost inputs are read
+  from the source sighting, which `research-capture` updates in place on re-capture — labelled "as it
+  stands now" in the view, not frozen; (3) destination port/method is not stored on the won vehicle,
+  so trucking and shipping need it chosen in the view and the choice is not saved.
+- **Stage 2 — extension run picker, vehicle first: BUILT, deploy verified, extension NOT exercised.**
+  `vehicleHeadingFromBrief` moved from `ResearchRuns.tsx` to `supabase/functions/_shared/vehicleHeading.ts`
+  (one definition; the website imports it, `list-active-runs` calls it). New response fields
+  `vehicle_heading` and `brief_reference` (finished strings; the extension builds nothing). Auth is the
+  static `x-research-secret`, not a staff JWT — the master prompt's "staff-authenticated" was loose.
+  Over 38 real runs: 19 lead with the vehicle, 19 fall back to the run label, 0 blank. Deployed and
+  boots (401 without the secret). **Outstanding, needs Bashir's browser:** reload the extension at
+  `chrome://extensions` **and** hard-refresh, check the picker, the A3 session model (pick once,
+  persists across tabs, 10-minute idle expiry), and one Copart + one bid.cars capture.
+- **Stage 3 — make tiering by evidence: DONE, verified, with a finding that changes the outcome.**
+  Migration 045; `_shared/nhtsa.ts` (one NHTSA fetch, now shared by the seed, the on-demand and the
+  probe functions, with an id-keyed variant because names containing a period 302 to a 404);
+  `vehicle-reference-make-probe` (superadmin, resumable, never deletes); `tierMakes`, the one place the
+  rule lives; `MakeCombobox` typeahead with reversible Hide/Restore. All 406 makes probed.
+  Result: **14 traded / 317 current / 75 other** (47 zero-models, 28 older-only). **The zero-models rule
+  does not catch AC Propulsion** — NHTSA returns its two models for every year 2010-2030, and Toyota,
+  Honda and Ford also return models for 2029, so vPIC's year filter cannot show a make is defunct
+  unless NHTSA recorded an end date. The rule catches real ended makes (Oldsmobile, Plymouth, Saturn,
+  Pontiac, Saab, DeLorean, Yugo, Geo, AMC) and non-car makers (IC Bus, Orion Bus, Crane Carrier,
+  Jerr-Dan, Mitsubishi Fuso, Wausau) but leaves 317 makes in tier 2, so the default list is only
+  partly de-cluttered. AC Propulsion is one Hide click away; not hidden without Bashir's call.
+- **Stage 4 — documents:** this section, `SCHEMA.md` §18, `DECISIONS.md` §13, `docs/SOLVED.md` topic 33.
+
+**What remains of Phase D after this:** Prompt 34 Stage 4 (won-vehicle documents, private bucket,
+staff-only), Stage 5 (invoice + notification email through `_shared/email.ts`, test sends to Bashir
+only), Stage 6 (its docs); recording the real winning bid; persisting the destination port.
+
+---
+
 ---
 
 ## 5. Phase B — coverage
@@ -1738,3 +1798,9 @@ as evidence (public link renders the fix live).
 | 57 | `geminiService.ts`'s `normalizeHistoricalData` defaults an unknown trim to `'Base'` (found 12 Sep 2026, Prompt 30 Stage 3 grep audit, registered not fixed) | `"If a trim is unknown, use 'Base', but never put a trim level into the Model field."` — a default-on-ambiguity instruction, but for a non-monetary field (trim), not a price-corrupting one like the three currency guessers above (debts #44/#53/#56). Consistent with an existing, already-accepted convention elsewhere in the codebase (`BulkImport.tsx`'s own `trimRaw || 'Base'`) — a genuinely lower-stakes default than a guessed currency, since a wrong trim doesn't silently mis-price a vehicle the way a wrong currency does. Registered per Stage 3's "produce the list" requirement, not fixed - a different class of risk than the currency defaults this stage's own scope targeted. **Resolved 12 Sep 2026, Prompt 31 Stage 4:** the default removed - the prompt now instructs `null` when a trim is genuinely unstated, never a guessed `'Base'`, on the reasoning that "trim not stated" and "confirmed base trim" are different facts. Low-risk fix: `normalizeHistoricalData` is called only from `handleDataDetox` (`App.tsx:285`), which is itself disabled (debt #4 - "alert('Data Detox is disabled...')", never actually invokes the function) - genuinely dead code today, so this closes cleanly with nothing live to verify against, and is ready correct if Data Detox is ever re-enabled |
 | 58 | Two independently-maintained title-status classifiers exist and disagree on a real, documented value (found 12 Sep 2026, Prompt 30 Stage 4 normalizer audit, not fixed) | `bidHeadroomService.ts`'s `classifyTitleStatus` (binary `clean`\|`non_clean`\|`unknown`, deliberately conservative — `CLEAN_INDICATORS = /\bclean title\b\|\bclear\b/i`, abstains to `unknown` rather than guess, used only to pick the right `auction_fee_brackets` row) and `ResearchRunDetail.tsx`'s inline spec-match title logic (lines ~498-517, a 4-way clean/salvage/rebuilt/junk classifier with its own broader synonym list, including `'certificate of title'` as clean-equivalent, used to flag a brief's `titles_accepted` preference) are two separate, hand-written classifications of the same underlying fact from the same messy `title_type` text (`SCHEMA.md` §5's real observed values). **Confirmed disagreement**: `"Certificate of title (WV)"` — a real, documented live value — matches ResearchRunDetail's `'certificate of title'` token as clean-equivalent, but matches neither of `classifyTitleStatus`'s regexes, so `bidHeadroomService` would abstain (`unknown`) on the exact same listing. Not necessarily a bug in either direction — the two serve different purposes with deliberately different risk tolerances (a fee lookup that must never guess vs. a spec-match preference where a permissive match avoids a false alarm) — but a real divergence risk of the same shape Prompt 29 Stage 2 already found and fixed once for the sold-group definition. Not fixed here: unifying these needs a deliberate design decision about which tolerance wins where, not a quick patch, and this stage's own scope is the map, not the fix. **Resolved 12 Sep 2026, Prompt 31 Stage 3** (this row itself was missed at the time — found stale during Prompt 33 Stage 5's document refresh, itself an instance of the doc-drift this file warns about): unified into one classifier in `_shared/specVocabulary.ts` taking the severe reading (a bare "Certificate of Title" no longer counts as clean-equivalent). `bidHeadroomService.ts`'s binary contract preserved via a wrapper, verified byte-identical against all 88 real `title_type` values; `ResearchRunDetail.tsx`'s spec rule 5 now surfaces an unclassifiable title as its own "needs manual review" message rather than silently picking a side |
 | 59 | `daily-sniper`'s auth secret rotation is outstanding — owned by Bashir, not closeable by a coding session (found 12 Sep 2026, Prompt 31 Stage 2) | The hardcoded secret (in git history since `ccac489`, 21 Jun 2026) was moved to `Deno.env.get("SNIPER_SECRET")` (see debt #56), but the env var itself does not exist in the Supabase project yet — Bashir chose to deploy the code first and set the value himself right after, rotating to a new value rather than reusing the exposed one. **This debt closes only when Bashir confirms `SNIPER_SECRET` is set in the Supabase project's Edge Function secrets and the Shortcuts automation's `x-sniper-secret` header has been updated to match.** Until then, every real call to `daily-sniper` returns 401 — an accepted, deliberate gap, not a bug to fix in code. **Resolved 12 Sep 2026 — Bashir confirmed both done:** `SNIPER_SECRET` set in the Supabase project (confirmed present via `supabase secrets list`, digest only, value never seen by this session) and the Shortcuts automation's header updated to match. The old hardcoded value remains in git history permanently (rewriting history was never proposed or requested) but is now inert — a new secret superseded it, and the code path that once compared against the literal no longer exists. **Closed by removal, 12 Sep 2026, Prompt 32 Stage 1:** `daily-sniper` itself is retired — the rotated `SNIPER_SECRET` this debt tracked is now dead (Bashir may unset it whenever he likes; this session did not touch it), and the header-matching concern this debt existed to track no longer applies to anything |
+| 60 | The final winning bid is not recorded anywhere (found 20 Sep 2026, Prompt 35 Stage 1) | `won_vehicles.won_snapshot` freezes the *approved* price (`display_price`, `is_bid`), which is what the client approved, not what the lot hammered at. The bought-car view therefore prices auction fees "at the approved price" and says so; it cannot claim exactness. Fix: a staff-entered `winning_bid_usd` on `won_vehicles` (with who/when), consumed by the same `getAuctionFeeComponent`. Not built — out of Prompt 35's scope |
+| 61 | A bid.cars capture can carry `source_auction_platform = 'copart'` for an IAA lot (found 20 Sep 2026) | One real sighting — the Yaris — has `source_auction_platform: copart` with `location: "IAA Dallas/Ft Worth (TX)"`. All other 148 labelled bid.cars sightings have neither format. Pricing it under Copart's schedule would be a confident wrong number, so `getAuctionFeeComponent` now abstains when the location names an IAA yard. Root cause (the capture defaulting the platform label) not investigated — extension-side |
+| 62 | Clean-title / unsecured Copart bid-fee rows do not exist in `auction_fee_brackets` (found 20 Sep 2026) | Only `non_clean`/unsecured and `clean`/secured bid-fee rows exist. `getAuctionFeeComponent` returned `available` with the bid fee silently left out (e.g. $640 for a clean-title $1,700 lot). Now flagged: `CostComponent.partialReason` is set, the view shows PARTIAL, and a partial component blocks any landed total. Whether Copart charges no bid fee in that tier or the rows were never entered is unresolved — an invoice would settle it |
+| 63 | Eight inline copies of the brief-reference string (`year-year Make Model` with `Any` fallbacks) (found 20 Sep 2026) | `ClientsList.tsx` ×3, `ResearchRuns.tsx` ×2, `ResearchRunDetail.tsx`, `researchService.ts:250`, plus the new shared `briefReference()`. Only `ResearchRuns.tsx`'s run card was switched to the shared one. Same divergent-definition shape as debts #3/#58 |
+| 64 | `mercedes` is a real make name in traded data that is not an alias for `MERCEDES-BENZ` (found 20 Sep 2026) | Tier 1 keys on exact/alias match, so those rows do not count toward Mercedes-Benz (it still reaches tier 1 through other rows). Also unmatched: `avatr` (not in the vocabulary, by design free text), `i` (junk brief text), `range rover` (a Land Rover model). Alias additions are Bashir's call — added by a human who looked, never inferred |
+| 65 | The make tier-2 list is 317 of 406 makes; the year probe cannot narrow it (found 20 Sep 2026) | See §4.22 Stage 3. Options for Bashir: rank tier 2 by model breadth (a column for the model count), hide specific makes with the existing flag, or leave it — every make stays searchable either way |

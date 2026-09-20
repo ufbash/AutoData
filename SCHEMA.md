@@ -649,3 +649,36 @@ table above in the same change.
 proven with synthetic input) are read-only and never merge anything themselves. See
 `DECISIONS.md` for why a merge is always human-confirmed, never automatic, and `docs/SOLVED.md`
 topics 31-32 for the fuller narrative.
+
+---
+
+## 18. Make tiering evidence (migration 045, Prompt 35 Stage 3)
+
+`vehicle_reference_makes` (migration 039) gained seven columns. They hold **evidence and one human
+flag**; there is deliberately **no tier column** — the tier is derived on read (`tierMakes` in
+`src/services/vehicleReferenceService.ts`), so it cannot go stale.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `probed_at` | timestamptz, null | When `vehicle-reference-make-probe` last probed this make; null = never |
+| `probe_years_checked` | integer[], default `{}` | Model years asked of NHTSA (stops at the first hit) |
+| `car_model_years` | integer[], default `{}` | Probed years that returned ≥1 car/truck/MPV model |
+| `probe_failed` | boolean, default false | No hit **and** a fetch failed — inconclusive, never used as "zero models" evidence |
+| `demoted_at` / `demoted_by` / `demoted_reason` | timestamptz / uuid → `auth.users` / text | Staff demotion. Reversible; a demoted make stays searchable. Never a delete |
+
+**Derived tier, in order:** demoted → 3 · traded count > 0 → 1 · never probed → 3 · a hit within the
+last 3 model years → 2 · hits only older → 3 (`older_only`) · probe failed → 3 (`probe_inconclusive`) ·
+no hit at all → 3 (`zero_models`). "Traded" is read live from `traded_make_counts()` (assets with
+`merged_into_asset_id IS NULL` plus non-deleted briefs, `SECURITY INVOKER`, so RLS scopes it to the
+caller's org), mapped through `resolveMakeAlias` only.
+
+**Functions:** `traded_make_counts()` · `set_make_demoted(p_make_id, p_demoted, p_reason)` — `SECURITY
+DEFINER`, any signed-in staff member (the reference tables have no client write policy, migration 041,
+so this is the one narrow write path; it only sets or clears the flag).
+
+**Known limit of the evidence** (`DECISIONS.md` §13, `docs/SOLVED.md` topic 33): NHTSA's year filter
+treats a model as active from its first year until an end date is recorded, so a make with no recorded
+end (AC Propulsion) has models in every year. The probe uses `GetModelsForMakeIdYear` (id-keyed)
+because names containing a period 302 to a 404.
+
+**Not in this migration:** no won-vehicle tables (043/044 — documented with Prompt 34 Stage 6, still owed).
