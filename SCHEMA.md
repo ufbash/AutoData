@@ -798,8 +798,9 @@ bracket applies and the figure is exact. Not on the tracking page.
 
 **`won_vehicle_destinations`:** `org_id`, `won_vehicle_id` (composite FK `(won_vehicle_id, org_id)`), `destination_port`, `shipping_method` (`'container'` | `'roro'`),
 `note`, `set_by`, `set_at`, and `voided_at`/`voided_by`/`void_reason` (CHECK: reason required). Nothing else in the schema held a destination.
-`destination_port` is `trucking_rates.destination_port_normalized` **exactly as stored**, because that is the string the trucking lookup matches on. That column still carries
-vendor typos (PLAN_TRACKER debt #66); the raw vendor string stays in `trucking_rates.destination_port_raw` (§5.8).
+`destination_port` is `trucking_rates.destination_port_normalized` **exactly as stored**, because that is the string the trucking lookup matches on. That column carried
+vendor typos until 20 Sep 2026, when the four unambiguous ones were aliased and corrected (PLAN_TRACKER §4.28); the raw vendor string stays in `trucking_rates.destination_port_raw` (§5.8). A few
+names are deliberately left (`MIAMI PORT`, `GA-RINCON`, `DAVISVILLE`, regional labels) pending a human's call (debt #66).
 
 **Append-only.** A trigger blocks any edit and any delete **even for the service role**; the only change is voiding a live row. The current destination is the **latest
 non-voided** entry (voiding it makes the previous one current), so it is a query, never a stored flag. RLS is select-only; the only writer is `won-vehicle-destination`

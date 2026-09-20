@@ -2113,3 +2113,16 @@ mapped to IAAI with no observation, and now resolves to unknown, which abstains.
 
 **Honest limits.** IAAI has no stored fee schedule, so relabelled lots now abstain instead of showing a wrong Copart number - correct, but it looks like a regression until an IAAI invoice supplies the schedule. The ingest path (extension to
 `research-capture`) is not exercised live from a coding session. And the yard matcher still misses 3 IAAI lots on naming quirks (a leading "IAA ", hyphen vs space) - logged as debt #67, not widened here, because the matcher is strict on purpose.
+
+## 39. Fixing the port typos through the importer's own table - and a measurement that was quietly measuring a block
+
+**The fix.** The importer already carried a reviewed alias table with the rule "never silently fix a name that isn't in this table, since that would be guessing, not normalising". So the four typos went into that
+table, one at a time, after checking each: did the same yard already have a correct-port rate (it did not, so no duplicate), and does the yard's geography fit the target (Spartanburg/North Charleston SC to Baltimore,
+Boston-area MA to Providence, Seaford DE to Wilmington). The correction SQL is generated from the table itself, so the mapping exists once. Only the derived column moved; the vendor's raw string is preserved, and the
+generator is idempotent. Names that might be real places or a naming judgement (`GA-RINCON`, `DAVISVILLE`, `MIAMI PORT`, the regional labels) were left for a human, exactly as the importer's rule intends.
+
+**The near-miss worth recording.** While preparing the next item (measuring how many models each of the 330 "current" makes really has) a script reported that 292 of 330 makes had **zero** models in 2026. That contradicted
+the probe's own stored evidence (every one of those makes had a model hit in the last three years, and AC Propulsion had returned two 2026 models earlier the same day). The cause: a burst of parallel requests had tripped
+NHTSA's rate limit for this machine, every response was HTTP 403, and the script counted a failed request as "no models". Nothing was reported or stored from it, and the output was deleted, but it is the same shape as the
+silent-null bugs this project keeps unwinding: **a failed lookup and a genuine zero must never share a value.** The rerun with retries and a failure counter was cancelled once a single direct `curl` showed the block.
+The measurement is deferred (gentler pacing, or run server-side from the Supabase project where the production probe already runs without trouble).
