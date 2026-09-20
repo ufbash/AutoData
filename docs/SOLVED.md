@@ -1992,7 +1992,7 @@ a model as active from its first year until an end date is recorded. Pontiac doe
 *zero-models* — American Motors, Checker, Daewoo, Datsun, DeLorean, Geo, Lancia, Oldsmobile, Peugeot,
 Plymouth, Renault, Triumph, Yugo, plus Mitsubishi Fuso, Wausau Equipment; *older-only* — Hummer, Maybach,
 Mercury, Opel, Pontiac, Saab, Saturn, Suzuki, plus IC Bus, Orion Bus, Crane Carrier, Jerr-Dan. **Not
-caught:** AC Propulsion (tier 2, "recent"). It stays one Hide click away rather than being hidden by name.
+caught:** AC Propulsion (tier 2, "recent"). It was then hidden by Bashir's explicit decision (20 Sep 2026) through the demote flag, with the reason recorded on the row, not by any rule or hard-coded name.
 
 **Lesson.** Verify a rule against the real source before promising what it will catch — the master prompt's
 own verify step ("AC Propulsion lands in tier 3 by the zero-models rule") could not pass, and the honest

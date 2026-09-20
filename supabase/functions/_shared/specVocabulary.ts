@@ -100,6 +100,9 @@ export function familyMatchesDecodedSeries(familyValue: string, decodedSeries: s
 // by eye, never inferred at runtime.
 const MAKE_ALIASES: Record<string, string> = {
   'alfa': 'ALFA ROMEO',
+  // Prompt 35 - one real brief ("Mercedes" / "E Class") uses the short form; NHTSA's make is
+  // MERCEDES-BENZ. Added by Bashir's decision after looking at the row, 20 Sep 2026.
+  'mercedes': 'MERCEDES-BENZ',
 };
 
 export function resolveMakeAlias(raw: string): string {
