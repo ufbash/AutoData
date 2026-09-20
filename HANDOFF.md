@@ -332,14 +332,9 @@ handover.
 
 ## What's queued next
 
-**Prompt 34 — the won vehicle: promotion, lifecycle, documents.** Supersedes what would have been
-Prompt 33 Stage 4 (client document centralization), which was deliberately skipped this session
-because the grain changed: documents anchor to a **won vehicle** (a new, client-specific,
-first-class record under a brief), not to client/brief/asset directly — the same asset can appear
-in two clients' runs, and a document must never cross between them. Six stages: the won-vehicle
-record and promotion (adds, never moves, the source run listing), a status lifecycle with a
-tokenized client-facing tracking page (status only — no invoice, no documents, ever, per
-`PROJECT_CHARTER.md` §7), the document store itself, an invoice reflecting the disclosed-fee
-model, and a won-vehicle notification email reusing the existing mailer. Heavy pre-flight
-required — this is the first thing in the project touching real client confidentiality, and it
-starts fresh, not as the tail end of this session.
+**Prompt 34 (the won vehicle) — DONE, 20 Sep 2026; Prompt 35 also done.** See `PLAN_TRACKER.md` §4.22-§4.24 for the evidence. In short: a won vehicle is a
+client-specific record under a brief (never asset-specific), promoted exactly-once from an approved listing without moving it; a nine-stage lifecycle with
+superadmin-only corrections; a token tracking page that carries status only; a private, staff-only document store anchored to the won vehicle; an append-only invoice
+issuance record (uploaded PDFs for now, generation deferred to a CRM); and a manual won-notification email through the one shared mailer. Prompt 35 added the bought-car
+view (thumbnail, frozen purchase, per-component costs with no landed total until every component is real), the extension picker (vehicle first), and evidence-ranked make
+tiering. **Needs Bashir:** push so `/track/:token` exists on `theautodata.com`; confirm the test email arrived; decide whether to record the real winning bid (debt #60).

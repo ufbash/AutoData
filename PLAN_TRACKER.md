@@ -1512,6 +1512,32 @@ empty file, no token (401).
 the same service function the button calls, not a real dialog click. The 8 MB server rejection (413) was not sent. **Pasted-in
 "real document"** was a small generated PDF/PNG, not one of Caplimo's real invoices.
 
+### 4.24 Prompt 34 Stages 5-6: invoice issuance, the won notification, and closing Prompt 34 — **DONE** (20 Sep 2026)
+
+**Approach (Bashir's decision):** record issuance against an *uploaded* invoice PDF now; generating an invoice from cost data waits for a later CRM
+and for inputs that do not exist yet (winning bid, duty, freight rates, brokerage fee) — debt #60 and Phase C. Migration 048; Edge Functions
+`won-vehicle-invoices` and `won-vehicle-notify`; `WonVehicleInvoices.tsx`, `WonVehicleNotify.tsx`. Details in `SCHEMA.md` §21, `DECISIONS.md` §15, `docs/SOLVED.md` 35.
+
+Verified (deployed endpoints, two synthetic won vehicles, all soft-deleted afterwards; the real Yaris untouched):
+1. **Rendered content shown, then a single test send** to `ufbash@gmail.com` (Bashir's own address, confirmed first). Resend accepted it; `email_log` row `sent`.
+   Also proven first: a test aimed at a real client's address and at an unlisted address are refused, nothing sent, both logged.
+2. **A send failure is recorded and surfaced:** an invalid recipient → provider 422 → `email_log` `failed` with the error, returned to the caller.
+3. **The link resolves to the tracking page and nothing else:** the route rendered status only, no staff chrome, none of the invoice/amount words.
+4. **Invoice access is auth-gated:** anon key → `[]` on issuances and the email log, RLS denial on insert, `NoSuchKey` on the invoice file, 401 on both functions.
+Plus: issuance rejections, void rules and the append-only trigger (even as service role), and the composite FK against another vehicle's document.
+
+**Outstanding, needs Bashir:** confirm the test email arrived in `ufbash@gmail.com`; push and deploy so `/track/:token` exists on `theautodata.com` (the email links there);
+the file-picker upload path (the automation cannot drive a real file dialog).
+
+**Prompt 34 is complete.** Stage 0's two corrections are closed (models seed on demand for any make/year — `vehicle-reference-models-ondemand`, Prompt 34 Stage 0A;
+`HANDOFF.md` carries a dated supersession header, Stage 0B). Stages 1-3: §4.22's predecessor commit `4b2e2f7`. Stage 4: §4.23. Stages 5-6: this section.
+
+**Phase D — what exists now, what does not.** *Built:* the won-vehicle record and promotion, the nine-stage lifecycle with corrections, the tokenized status-only
+tracking page, the vehicle document store, invoice issuance recording, and the manual won-notification email. *Not built:* the authenticated **client portal**
+(Google auth, status timeline, documents for the client), a "request this vehicle" loop, invoice **generation**, recording the real winning bid, persisting the
+destination port, subdomain split, Chrome Web Store publish. **Access provisioning remains licence-gated** (`DECISIONS.md` 1.5, §2): no staff or client
+account was provisioned by any of this, and nothing here exposes an invoice or document to a client.
+
 ---
 
 ## 5. Phase B — coverage

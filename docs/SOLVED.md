@@ -2025,3 +2025,34 @@ anon key, got `NoSuchKey`, an empty bucket listing, an empty table read and an R
 **Lesson.** A standing obligation written in a document is not a control. The list only stays true if the next
 migration that adds an `asset_id` re-reads the function that consumes it; treat "which functions enumerate this
 table's siblings" as a pre-flight question for every new FK, not a recollection.
+
+## 35. Promotion adds and never moves - and what the Prompt 34 pre-flight found that would otherwise have shipped
+
+**The promotion model.** Winning a car does not relocate anything. A client approves a listing inside a research run; that listing, the sighting behind
+it and `approved_snapshot` are the evidence of what was shown and agreed. Promotion creates a **new** `won_vehicles` row under the brief, copies the
+approved snapshot into `won_snapshot` (frozen), and marks the source listing with `won_vehicle_id`/`won_at`. The listing is retained unchanged: rewriting
+or moving it would erase the account of what the client actually saw. Exactly-once is a **UNIQUE constraint** on `research_run_listing_id`, so a double
+click, a retry or a second staff member cannot create two won vehicles; it is proven at the database, not the app.
+
+**The state machine that was not the one.** The master prompt warned an existing 4-step status machine might be the foundation. The pre-flight found
+two candidates and neither fit: `asset_status_enum` is declared but dormant (only `ACTIVE` is ever written anywhere), and `research_run_status_enum` is
+live but is the research-run workflow, not shipping. Building on either would have bolted a shipping concept onto an unrelated lifecycle. The real
+nine-stage corridor was **asked for, not invented** (Bashir supplied it), because a lifecycle that does not match how Caplimo actually works produces
+status updates nobody trusts.
+
+**Two more pre-flight finds, both fixed rather than noted.** (1) "One approved listing per run" was enforced only in the app (check-then-update): now
+a partial unique index. (2) The "mailer" was never a shared module — `intake-brief` called Resend inline and recorded success but never failure. "Reuse the
+existing mailer" therefore meant *extracting* it (`_shared/email.ts`) and logging both outcomes to `email_log`; copying the pattern would have made a second
+mailer in substance.
+
+**Stage 5 lesson, the one that generalises.** The test-send guard ("only to the caller's own address") could not honour the address Bashir wanted. The tempting
+fix was to let a request name any recipient; the correct one was an explicit allowlist held in a secret, with refusal *before* any send and the refusal
+logged. Proven by aiming a test at a real client's address and at an unlisted staff address: both refused, nothing sent, both recorded.
+
+**Verified (Stage 5), synthetic vehicles only, real endpoints:** preview sends nothing (`email_log` stayed empty); an invalid recipient is rejected by the
+provider, recorded `failed` with the error and returned to the caller; issuance rejects a wrong-type document, another vehicle's document, zero amount, bad
+currency/channel, blank recipient and a future date; void needs a reason and cannot repeat; edit, hard delete and rewriting a voided row are all refused by
+the trigger even as the service role; anon key gets `[]` on the issuance and email tables, an RLS denial on insert, `NoSuchKey` on the invoice file, and 401 on
+both functions; the tracking payload for a vehicle with an invoice issued contains none of invoice/amount/price/cost/fee/document/recipient/email/estimate.
+**Not verified:** that the one test email reached an inbox (Resend accepted it; only Bashir can confirm receipt), and the link in that email resolves on
+`theautodata.com` only after the unpushed `/track` route is deployed.

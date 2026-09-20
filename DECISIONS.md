@@ -553,3 +553,39 @@ client's file). One invoice can legitimately be both; that is why the seam exist
 
 **Why 14.6:** Prompt 34 Stage 2 created `won_vehicles.asset_id` and it was never added, found only in this
 stage's pre-flight. It is the same miss that produced Prompt 32.
+
+---
+
+## 15. The won vehicle (Prompt 34)
+
+| # | Decision | Status |
+|---|---|---|
+| 15.1 | Documents, invoices, status and notifications anchor to the **won vehicle, never the asset** | LOCKED |
+| 15.2 | **Promotion adds; it never moves.** The source listing stays in its run, marked won and linked | LOCKED |
+| 15.3 | The won vehicle's `won_snapshot` is **frozen at promotion** and never recomputed | LOCKED |
+| 15.4 | The **tracking token carries status only** — never an invoice, cost, fee, document or estimate | LOCKED |
+| 15.5 | Status moves **forward exactly one step**; a correction is superadmin-only, needs a reason, and is a new row — history is never edited | LOCKED |
+| 15.6 | An invoice issuance is **append-only**: voided with a reason, never edited or deleted; amounts are staff-entered, never derived | LOCKED |
+| 15.7 | A client notification is **manual, never automatic**, carries the tracking link only, and every attempt (sent or failed) is logged | LOCKED |
+| 15.8 | A test email can only reach the caller or an allowlisted address; a client's address is unreachable through `test` | LOCKED |
+
+**Why 15.1, so it does not get "simplified" into an asset-level store later:** an asset is the physical car; a won vehicle is one client's
+purchase of it. The same asset legitimately appears in two clients' runs (and after Prompt 32's merges, more readily), and could be won for two
+clients. An invoice carries one client's name and amounts. An asset-level store would show client A's paperwork against client B's record — a
+confidentiality failure, not a bug. Proven with two won vehicles on **one shared asset**: neither listed the other's document (docs/SOLVED.md 34).
+
+**Why 15.2:** the run is the complete account of what was offered and what the client approved (`approved_snapshot`, the approval trail). Moving or
+rewriting the listing to reflect the win would destroy that account. Promotion is an addition with a link back.
+
+**Why 15.4:** `PROJECT_CHARTER.md` §7 makes the tracking page the one thing shareable without login, so it must carry the least. Also §5.1: no
+confident date the system cannot support, so no arrival estimate.
+
+**Why 15.6:** "an invoice nobody can prove was sent is not evidence." Editing an issuance would let the record say something that was not true when it
+was sent; a void plus a new row preserves both. The trigger enforces it against the service role too, since the Edge Function is the only writer
+and a future bug there must not be able to rewrite evidence.
+
+**Why 15.7/15.8:** a real email is an irreversible external side effect. Manual send means a person confirms the recipient; the allowlist means even a
+mistaken test cannot reach a real client.
+
+**Approach chosen for invoices (Bashir, 20 Sep 2026):** record issuance against an uploaded PDF now; generation from cost data is planned as part of a
+later CRM, once its inputs exist. Not a rejection of generation — a sequencing decision.

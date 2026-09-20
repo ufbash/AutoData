@@ -729,3 +729,45 @@ download).
 
 **Stated limits.** A signed download URL is valid 5 minutes and is a bearer link for that window. Uploads are
 base64 through the function (8 MB cap). Files are not virus-scanned.
+
+---
+
+## 21. The won vehicle, its status history, invoice issuance, and the email log (migrations 043/044/048, Prompt 34)
+
+**`won_vehicles` (043)** — a client-specific record under a **brief**, alongside research runs rather than inside one.
+`org_id`, `client_id`, `brief_id`, `asset_id`, `research_run_listing_id` (**UNIQUE** — the exactly-once promotion guarantee is a
+constraint, not an application check), `run_id`, `won_snapshot jsonb NOT NULL` (frozen at promotion; never recomputed — proven to hold
+when the source sighting and `approved_snapshot` are mutated afterwards), `promoted_by`/`promoted_at`, `share_token` (UNIQUE) /
+`share_enabled` (revocation = flip `share_enabled`, leave the token in place), `deleted_at`/`deleted_by`, and (047) `UNIQUE (id, org_id)` for composite FKs.
+It is **never asset-specific**: the same asset can appear in two clients' runs, so everything (status, documents, invoices, notifications)
+hangs off the won vehicle. `research_run_listings` gains `won_vehicle_id`/`won_at`; the listing is **never moved, deleted or rewritten**.
+Also (043): `UNIQUE INDEX idx_research_run_listings_one_approved_per_run` — the one-approved-listing-per-run rule was previously app-level only.
+
+**`won_vehicle_status_history` (043)** — one row per transition (`won_vehicle_id`, `status`, `changed_by`, `changed_at`,
+`is_correction`, `correction_reason`). The current status is the latest row; nothing is edited or deleted. Nine stages, a Postgres enum:
+`won → auction_paid → title_received → picked_up → at_origin_port → sailed → arrived → customs_cleared → delivered` (Bashir's real
+corridor, not invented). `advance_won_vehicle_status()` (any staff) accepts **exactly current+1**; `correct_won_vehicle_status()`
+(superadmin only, via `won-vehicle-status`) can move to any stage, **requires a reason** (CHECK: reason present iff `is_correction`), and is a new row.
+`promote_listing_to_won_vehicle()` is the only promotion path (locks the listing, refuses unapproved / already-promoted).
+
+**Tracking page** — `won-vehicle-tracking` (`verify_jwt = false`, token-gated like `public-run`) returns a hand-built allow-list:
+`current_status`, `current_status_label`, and a `ladder` of `{status, label, reached, at}`. No invoice, cost, fee, document, recipient or
+estimate field exists in it (raw response read field by field, including for a vehicle with an invoice issued). No arrival-date estimate is
+shown by design (`PROJECT_CHARTER.md` §5.1). Serves nothing for a soft-deleted vehicle or a revoked token.
+
+**`won_vehicle_invoice_issuances` (048)** — records that an invoice was **issued**. An invoice is a PDF uploaded to the vehicle's document
+store (§20, type `invoice`); this row says which document, `amount numeric(14,2)` + `currency` (USD/NGN/EUR/GBP; **staff-entered, never
+derived**), `channel` (email/whatsapp/imessage/other), `recipient`, `issued_at`, `issued_by`, `recorded_at`, `invoice_number`, `notes`.
+Composite FKs `(won_vehicle_id, org_id)` and `(document_id, won_vehicle_id)` make a cross-vehicle or cross-org reference impossible at the
+database. **Append-only:** a trigger blocks any edit and any delete **even for the service role**; the only permitted change is voiding a
+live issuance with a non-blank `void_reason` (CHECK), and a voided one is frozen. A correction is a new issuance. RLS select-only; the only
+writer is `won-vehicle-invoices`. Generating an invoice from cost data is **not built** — its inputs (winning bid, duty, freight rates, a
+brokerage-fee definition) do not exist yet; the table does not prevent it.
+
+**`email_log` (044)** — the shared send log: `purpose`, `recipient_email`, `subject`, `related_table`/`related_id`, `status` (`sent`|`failed`),
+`error_text`. Written by `_shared/email.ts` — the one mailer — for both `intake-brief`'s confirmation and the won-vehicle notification, so a failure
+is recorded, not swallowed. `won-vehicle-notify` modes: `preview` (renders, sends nothing), `test` (to the caller's own address, or a `testRecipient`
+only if it is on the `WON_NOTIFY_TEST_RECIPIENTS` secret allowlist; anything else is refused *before* any send and logged), `send` (client's address
+on file, only on an explicit staff click, never automatic). The link base is server-side (`APP_BASE_URL`, default `https://theautodata.com`), never from the request.
+
+**Seam and FK list:** see §20 (documents and the `cost_document_extractions` seam) and §17 (`won_vehicles.asset_id` is in `merge_assets()`'s repoint list, migration 047).
