@@ -106,7 +106,8 @@ function parseIaaiLocation(location: string): { stateAbbr: string; city: string 
 
 // The auction platform a sighting should be matched against is not always source_platform.
 // bid.cars is a resale aggregator, not a yard network - a bidcars sighting's real platform
-// is source_auction_platform (copart/iaai), set by the extension from the lot number prefix.
+// is source_auction_platform (copart/iaai), derived server-side by research-capture from the lot
+// prefix in the captured page text (_shared/bidcarsLot.ts, debt #61 - the extension no longer classifies).
 // A direct copart/iaai capture already carries the real platform in source_platform. Anything
 // else (manual, or a bidcars row with no resolved source_auction_platform) has no yard
 // network to match against at all.

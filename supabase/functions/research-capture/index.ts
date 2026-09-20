@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { canonicalizeForFingerprint } from "../_shared/specVocabulary.ts";
+import { auctionHouseFromBidcarsSnapshot } from "../_shared/bidcarsLot.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -385,6 +386,18 @@ serve(async (req: Request) => {
       image_urls: payload.image_urls ?? [],
       ...cf,
     };
+    // DEBT #61 - for a bid.cars capture the real auction house is derived HERE, from the lot prefix in
+    // the captured page text, by the one shared definition (_shared/bidcarsLot.ts). Whatever the
+    // extension sent as source_auction_platform is NOT trusted: an older extension mapped prefix 0 to
+    // copart (backwards), and a stale copy in someone's browser must not be able to reintroduce that.
+    // The value the extension sent stays untouched in raw_payload (spread from cf above, per
+    // PROJECT_CHARTER.md section 5.8); the derivation is stamped beside it.
+    let sourceAuctionPlatform: string | null = cf.source_auction_platform ?? null;
+    if (payload.source_platform === 'bidcars') {
+      const derived = auctionHouseFromBidcarsSnapshot(payload.raw_dom_snapshot);
+      sourceAuctionPlatform = derived.house;
+      rawPayloadToSave.source_auction_platform_derivation = { lot_prefix: derived.prefix, house: derived.house };
+    }
     if (conversionFailed) {
       rawPayloadToSave.price_usd_conversion_failed = true;
       rawPayloadToSave.attempted_currency = listedCurrency;
@@ -432,7 +445,7 @@ serve(async (req: Request) => {
         estimated_cost_low_usd: cf.estimated_cost_low_usd ?? null,
         estimated_cost_high_usd: cf.estimated_cost_high_usd ?? null,
         seller_type: cf.seller_type ?? null,
-        source_auction_platform: cf.source_auction_platform ?? null,
+        source_auction_platform: sourceAuctionPlatform,
         sale_confirmed: cf.sale_confirmed ?? null,
         auction_appearance_count: cf.auction_appearance_count ?? null
     };

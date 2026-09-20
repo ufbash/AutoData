@@ -234,19 +234,16 @@ function captureCurrentLot() {
     }
     const normalized = normalizeMakeModel(make, model);
 
-    // Lot + Source Auction Platform
+    // Lot number. DEBT #61: this used to also classify the auction house from the lot's numeric
+    // prefix (0/1 -> copart, 2 -> iaai), which had the 0 case backwards and labelled every IAAI lot
+    // as Copart. The server (research-capture, via _shared/bidcarsLot.ts) is now the one place that
+    // derives it, from the raw page text in raw_dom_snapshot, so this extension sends none.
     let lot_number = null;
-    let source_auction_platform = null;
+    const source_auction_platform = null;
     const rawLot = extractBidcarsField(fullText, 'Lot');
     if (rawLot) {
         const parts = rawLot.split('-');
-        if (parts.length > 1) {
-            lot_number = parts[1].trim();
-            if (parts[0].trim() === '1' || parts[0].trim() === '0') source_auction_platform = 'copart';
-            else if (parts[0].trim() === '2') source_auction_platform = 'iaai';
-        } else {
-            lot_number = rawLot;
-        }
+        lot_number = parts.length > 1 ? parts[1].trim() : rawLot;
     }
 
     // Mileage

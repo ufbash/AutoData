@@ -252,10 +252,12 @@ export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<Co
   if (platform !== 'copart') {
     return unavailable(`no stored fee schedule for platform "${platform}" yet`, 'only Copart fee schedules are confirmed and stored (PROMPT_21 Phase 2) - no IAAI invoice exists to cross-check its published tables against');
   }
-  // PROMPT 35 - a bid.cars capture defaults source_auction_platform to 'copart'; one real lot
-  // (the Yaris) is labelled copart while its yard reads "IAA Dallas/Ft Worth (TX)". Pricing that
-  // under Copart's schedule would be a confident wrong number, so a location that names IAA
-  // contradicts the platform label and the fee abstains rather than picking a side.
+  // PROMPT 35, cause fixed by debt #61 - the extension used to label every prefix-0 bid.cars lot
+  // 'copart' although prefix 0 is IAAI, so an IAA yard could arrive labelled Copart. Capture now
+  // derives the house server-side from the lot prefix and old rows were relabelled, so this should
+  // not fire; it stays as a cheap consistency check because pricing an IAAI car under Copart's
+  // schedule is a confident wrong number - a location that names IAA contradicts a 'copart' label
+  // and the fee abstains rather than picking a side.
   if (/^\s*IAAI?\b/i.test(input.sighting.location ?? '')) {
     return unavailable('platform label contradicts the yard', `source_auction_platform="${input.sighting.source_auction_platform}" but location="${input.sighting.location}" names an IAA yard - IAAI has no stored fee schedule, so no fee is quoted rather than pricing under Copart's`);
   }
