@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { vehicleHeadingFromBrief, briefReference } from "../_shared/vehicleHeading.ts";
 
 // Auth and CORS copied verbatim from research-capture/index.ts - same static-secret
 // mechanism, same header shape. Do not diverge; a mismatched CORS header set here would
@@ -44,7 +45,7 @@ serve(async (req: Request) => {
     // so it must not return runs beyond the org the secret implies.
     const { data, error } = await supabase
       .from('research_runs')
-      .select('id, client_name, run_type, created_at, client:clients(full_name)')
+      .select('id, client_name, run_type, created_at, client:clients(full_name), client_brief:client_briefs(year_min, year_max, make, model)')
       .eq('org_id', defaultOrgId)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
@@ -55,11 +56,17 @@ serve(async (req: Request) => {
     // Flatten: `name` is the run's own display label (stored, confusingly, in the
     // client_name column); `client_name` here is the actual linked client's name, from
     // the clients relation - two different things, both useful for picking a run.
+    // PROMPT 35 - `vehicle_heading` and `brief_reference` are finished strings from the shared
+    // vehicleHeading module (the website's own definition), so the extension never rebuilds them.
+    // Both are null for a run with no brief; vehicle_heading is also null for a brief with no
+    // year/make/model - the extension falls back to `name` in that case, as the website does.
     const runs = (data || []).map((row: any) => ({
       id: row.id,
       name: row.client_name,
       run_type: row.run_type,
       client_name: row.client?.full_name ?? null,
+      vehicle_heading: vehicleHeadingFromBrief(row.client_brief),
+      brief_reference: row.client_brief ? briefReference(row.client_brief) : null,
       created_at: row.created_at,
     }));
 

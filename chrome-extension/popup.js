@@ -34,6 +34,17 @@ function showPickerView() {
     loadRunPicker();
 }
 
+// PROMPT 35 - vehicle first, as on the website's run cards. The heading and brief reference are
+// finished strings from list-active-runs (built by the shared vehicleHeading module); nothing
+// here builds a vehicle description. A run with no brief (or a brief with no year/make/model)
+// falls back to the run's own label, then the client's name - never blank.
+function runLines(run) {
+    const primary = run.vehicle_heading || run.name || run.client_name || 'Untitled run';
+    const who = run.client_name ? `For ${run.client_name}` : 'No client';
+    const secondary = run.brief_reference ? `${who} · Brief: ${run.brief_reference}` : who;
+    return { primary, secondary };
+}
+
 function renderRunList(query) {
     const listEl = document.getElementById('run_list');
     const noResultsEl = document.getElementById('no_results');
@@ -43,7 +54,9 @@ function renderRunList(query) {
     const visibleRuns = q
         ? allRuns.filter(r =>
             (r.client_name || '').toLowerCase().includes(q) ||
-            (r.name || '').toLowerCase().includes(q))
+            (r.name || '').toLowerCase().includes(q) ||
+            (r.vehicle_heading || '').toLowerCase().includes(q) ||
+            (r.brief_reference || '').toLowerCase().includes(q))
         : allRuns;
 
     noResultsEl.style.display = (q && visibleRuns.length === 0) ? 'block' : 'none';
@@ -60,14 +73,15 @@ function renderRunList(query) {
         runsOfType.forEach(run => {
             const card = document.createElement('div');
             card.className = 'run-card';
+            const lines = runLines(run);
             card.innerHTML = `
                 <div class="run-card-main">
-                    <div class="run-card-client">${escapeHtml(run.client_name || 'No client')}</div>
-                    <div class="run-card-label">${escapeHtml(run.name)}</div>
+                    <div class="run-card-client">${escapeHtml(lines.primary)}</div>
+                    <div class="run-card-label">${escapeHtml(lines.secondary)}</div>
                 </div>
                 <div class="run-card-date">${relativeDate(run.created_at)}</div>
             `;
-            card.addEventListener('click', () => selectRunAndCapture(run.id, run.client_name || 'No client', run.name, run.run_type));
+            card.addEventListener('click', () => selectRunAndCapture(run.id, lines.primary, lines.secondary, run.run_type));
             listEl.appendChild(card);
         });
     });

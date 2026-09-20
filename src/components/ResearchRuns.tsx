@@ -2,31 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { listRuns, createRun, listDeletedRuns, restoreRun, listClients, listClientBriefs, findRunIdsByVin, ResearchRun, Client, ClientBrief } from '../services/researchService';
 import { Plus, Users, Loader2, Search, Calendar, ChevronRight, Car, CheckCircle2 } from 'lucide-react';
+import { vehicleHeadingFromBrief, briefReference } from '../../supabase/functions/_shared/vehicleHeading.ts';
 
-// PROMPT 23 (run display & search) Phase 2 - the vehicle-first heading. Built only from
-// client_brief.year_min/year_max/make/model (mirrors the exact year-range/make/model shape
-// already used in the brief-reference subtext below - no trim, matching that existing
-// convention). Real data confirmed this must survive: a brief where every one of these is
-// null (9 real briefs, checked live), and a brief where make/model/trim literally contain
-// "I"/"Don't"/"Know" (a real client typo, not a hypothetical edge case). Returns null - never
-// an empty string - when there is nothing to build from, so the caller's fallback to
-// run.client_name is an explicit branch, not something that happens to work because "" is
-// falsy.
-function vehicleHeadingFromBrief(brief: ClientBrief | null | undefined): string | null {
-  if (!brief) return null;
-  const parts: string[] = [];
-  if (brief.year_min != null || brief.year_max != null) {
-    if (brief.year_min != null && brief.year_max != null) {
-      parts.push(brief.year_min === brief.year_max ? `${brief.year_min}` : `${brief.year_min}-${brief.year_max}`);
-    } else {
-      parts.push(`${brief.year_min ?? brief.year_max}`);
-    }
-  }
-  if (brief.make) parts.push(brief.make);
-  if (brief.model) parts.push(brief.model);
-  const text = parts.join(' ').trim();
-  return text || null;
-}
+// PROMPT 35 - vehicleHeadingFromBrief / briefReference now live in the shared module so the
+// extension's run picker gets the same strings (one definition, not two).
 
 // PROMPT 23 (run display & search) Phase 3 - query classification, checked in this order per
 // spec: VIN-shaped (exact, 17 chars, real VIN charset - excludes I/O/Q, same as every other
@@ -621,7 +600,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
                             onClick={(e) => { e.stopPropagation(); onOpenClient?.(run.client!.id, run.client_brief!.id); }}
                             className="font-bold text-[#a58039] hover:underline"
                           >
-                            {run.client_brief.year_min || 'Any'}-{run.client_brief.year_max || 'Any'} {run.client_brief.make || 'Any Make'} {run.client_brief.model || 'Any Model'}
+                            {briefReference(run.client_brief)}
                           </button>
                         </>
                       )}
