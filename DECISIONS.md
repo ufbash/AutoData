@@ -609,3 +609,21 @@ picker saved nothing, so trucking and shipping went back to "not calculable" eve
 
 **Why 15.13:** a free-typed port could never match a rate and would look like a real destination that simply had no quote. Requiring an exact match to a quotable value keeps a destination
 meaningful; abstaining without one is `PROJECT_CHARTER.md` §5.1. (The rate data's own typos are a known gap, debt #66, mitigated by ranking options by rate count, not by curation.)
+
+---
+
+## 16. Which auction house a bid.cars lot belongs to (debt #61)
+
+| # | Decision | Status |
+|---|---|---|
+| 16.1 | The auction house of a bid.cars lot is **derived server-side, in one shared module**, from the raw lot prefix; the extension does not classify | LOCKED |
+| 16.2 | The mapping contains **only prefixes the data proves** (`1` copart, `0` iaai); an unobserved prefix resolves to null and downstream **abstains** | LOCKED |
+| 16.3 | The value the extension sent is **never overwritten**; corrections and derivations are stamped beside it | LOCKED |
+| 16.4 | A corrective backfill uses the **same module** as ingest, is **dry-run by default**, and is idempotent | LOCKED |
+
+**Why 16.1:** the extension had this wrong for months and a fix in the extension only helps browsers that have reloaded it. Deriving at ingest from the raw page text makes the server the authority, so a stale extension cannot
+reintroduce the bug; and it leaves one definition instead of two that can drift (the class of problem this project keeps unwinding).
+
+**Why 16.2:** the old code mapped `2` to IAAI with no observation behind it. A guessed label is worse than none: a null abstains visibly, a wrong label prices an IAAI car under Copart's schedule and quotes a Copart yard's trucking.
+
+**Why 16.4:** correcting history with a second copy of the mapping in SQL would recreate the divergence. Dry run first means the change was seen and matched to independent measurements before any row was written.

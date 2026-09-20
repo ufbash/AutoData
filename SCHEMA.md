@@ -809,3 +809,20 @@ non-voided** entry (voiding it makes the previous one current), so it is a query
 
 **Consumers.** `WonVehicleCosts` computes trucking (`getInlandTruckingComponent`) and shipping (`getOceanFreightComponent`) from the saved destination; with none saved they abstain
 rather than assume a port. Not on the tracking page.
+
+---
+
+## 24. `sightings.source_auction_platform` — how it is derived (debt #61, no migration)
+
+For a **bid.cars** capture (`source_platform = 'bidcars'`) the real auction house is **derived server-side** by `research-capture` from the numeric prefix of bid.cars' own "Lot" field in the captured page
+text (`raw_dom_snapshot`, e.g. `Lot\n0-45905795`), using the one definition in `supabase/functions/_shared/bidcarsLot.ts`: **prefix `1` → `copart`, prefix `0` → `iaai`, anything else → `NULL`**. The mapping is
+evidence, not a guess (the measurements are in that file's header and `docs/SOLVED.md` 38). A `NULL` means "not resolvable" and downstream fee/yard logic abstains. For direct Copart/IAAI captures the column is
+not used (`source_platform` already names the house). The Chrome extension **no longer classifies** and sends `null`; `research-capture` ignores any value it does send.
+
+**Provenance, never overwritten (§5.8):** the value the extension originally sent stays in `raw_payload.source_auction_platform` as captured. Alongside it `raw_payload.source_auction_platform_derivation
+{ lot_prefix, house }` records what the server derived at ingest, and a row corrected by the backfill carries `raw_payload.platform_relabel { from, to, basis, at, by }`.
+
+**Backfill:** `sightings-platform-relabel` (superadmin; `dry_run` is the default, `apply` writes) re-derives every bid.cars row from its stored snapshot and changes it only when the derived house is known and differs;
+idempotent. Applied 20 Sep 2026: 62 rows (50 `copart`→`iaai`, 12 `NULL`→`iaai`); 100 already-correct Copart rows and 7 rows with no Lot line untouched.
+
+**Readers** (both take the column as truth): `yardMatchingService.resolveEffectivePlatform` and `bidHeadroomService.resolveEffectivePlatform` (two separate copies of the resolver — an older, unaddressed divergence).

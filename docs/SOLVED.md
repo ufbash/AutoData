@@ -2093,3 +2093,23 @@ stored, debt #35) instead of "no destination selected".
 
 **A false alarm worth recording.** One guard test read "BUG: allowed" for editing the shipping method. The test had set `roro` on a row that was already `roro` - a no-op the trigger correctly does not
 treat as a change. Re-run with a genuine change (and note, and `set_at`), all were refused. Check that a failing test actually attempted the thing it claims before treating it as a defect.
+
+## 38. The mislabel was not one lot, and the mapping was backwards - found by asking the data instead of the debt entry
+
+**The debt as filed** said one bid.cars sighting (the Yaris) was labelled `copart` while its yard read "IAA Dallas/Ft Worth", and proposed abstaining on that contradiction, which was done. Root-causing it meant reading
+where the label comes from: the extension derived it from the numeric prefix of bid.cars' Lot field (`0`/`1` → copart, `2` → iaai). The Yaris's raw text said `Lot 0-45905795`, so this was not an odd lot - it was what
+prefix `0` produces.
+
+**Two independent checks, both against the project's own data, before touching anything.** (1) Yard-name evidence: for each prefix, count locations whose city exists only in Copart's yard list versus only in IAAI's. Prefix `1`: 49 Copart-only,
+0 IAAI-only. Prefix `0`: 0 Copart-only, 18 IAAI-only (Akron-Canton, Bridgeport, Englishtown, Kansas City East, Metro DC ...). City membership alone was inconclusive because both companies have yards in most cities; it was the
+*exclusive* cities that decided it. (2) The page's own sales-history table, stored as `auction_history.auction_platform`: IAAI on all 41 prefix-`0` assets, Copart on the 71 prefix-`1` assets that have any. Two unrelated sources agreeing is
+what turned "looks backwards" into "is backwards".
+
+**Scope found:** 50 IAAI lots labelled Copart, 12 unlabelled - 62, not 1. The consequence was worse than a wrong label: 24 of them "matched" a Copart yard and quoted Copart trucking rates for an IAAI car, silently.
+
+**Design lesson:** the first instinct was to correct the extension's mapping. But an extension fix only reaches browsers that have reloaded it, and a mapping written again in SQL for the backfill would be a second copy. So the derivation
+moved to the server, once, from the raw page text every capture already carries; the extension stopped classifying; and the backfill imports the same module. The mapping also shrank to what the data proves - prefix `2` had been
+mapped to IAAI with no observation, and now resolves to unknown, which abstains.
+
+**Honest limits.** IAAI has no stored fee schedule, so relabelled lots now abstain instead of showing a wrong Copart number - correct, but it looks like a regression until an IAAI invoice supplies the schedule. The ingest path (extension to
+`research-capture`) is not exercised live from a coding session. And the yard matcher still misses 3 IAAI lots on naming quirks (a leading "IAA ", hyphen vs space) - logged as debt #67, not widened here, because the matcher is strict on purpose.
