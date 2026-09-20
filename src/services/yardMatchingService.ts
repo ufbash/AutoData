@@ -67,8 +67,17 @@ function normalizeStateName(name: string): string {
 // "South", "2") into their base name. "South Boston" and "Boston" are different places;
 // "Mobile" and "Mobile South" are different yards. Stripping those would manufacture false
 // matches, which is a worse failure than an honest non-match.
+//
+// A hyphen is punctuation, folded to a space on BOTH sides (debt #67): bid.cars writes "Chicago-North"
+// and "Houston-South" where the vendor's IAAI list has "Chicago North" and "Houston South" (the same
+// list writes "Chicago-West" and "Houston-North" hyphenated, so the vendor is inconsistent with itself).
+// Measured on all 202 real sightings against every active yard: 0 pairs of distinct yards collapse into
+// one name, all 175 existing matches keep the identical yard, and exactly 2 previously unmatched lots
+// now match (Chicago-North, Houston-South). Deliberately NOT done: stripping a leading vendor code
+// ("IAA Dallas/Ft Worth", "ACE - Perris") or bridging different names ("Minneapolis South" vs
+// "Minneapolis/St. Paul") - those are decisions about what a name means, not punctuation.
 function normalizeCity(city: string): string {
-  return city.trim().toUpperCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+  return city.trim().toUpperCase().replace(/[.,]/g, '').replace(/-/g, ' ').replace(/\s+/g, ' ');
 }
 
 // Copart: "AZ - TUCSON", "GA - ATLANTA SOUTH", "Offsite" (no location), "ON - COOKSTOWN"
