@@ -1998,3 +1998,30 @@ caught:** AC Propulsion (tier 2, "recent"). It was then hidden by Bashir's expli
 own verify step ("AC Propulsion lands in tier 3 by the zero-models rule") could not pass, and the honest
 output is the measurement, not a hard-coded exception. Also: a probe that shares a name-encoding assumption
 with the seed inherits its failure; key external lookups on the source's own id where one exists.
+
+## 34. A table added after the merge system existed was never joined to it - found by reading the merge function, not by a test failing
+
+**The miss.** Prompt 32 built `merge_assets()` and wrote a standing obligation into `SCHEMA.md` §17: any new
+table with an `asset_id` FK must be added to its repoint list. Prompt 34 Stage 2 then created
+`won_vehicles.asset_id` and did not. Nothing failed: no test exercises a merge over a won vehicle, and a merge
+would have succeeded, left the won vehicle pointing at a retired asset, and reported success.
+
+**How it surfaced.** Stage 4's pre-flight item was "the asset merge FK repoint list", and the honest check is to read
+the function's actual `UPDATE` statements rather than trust the doc. `pg_get_functiondef('merge_assets')` listed three
+repoints; `won_vehicles` was not one of them.
+
+**The fix, and its proof.** One added `UPDATE` inside the existing function (sentinel logic untouched). Proven in a
+transaction that was never committed: two won vehicles on one orphan asset both moved to the survivor,
+`won_snapshot` and `promoted_by`/`promoted_at` byte-identical, documents unaffected, and a follow-up query confirmed
+nothing persisted.
+
+**Isolation, proven not asserted.** The specific failure to keep absent was a document readable without
+authentication or visible against the wrong vehicle. Only one org exists, so "a different org's role" was built inside
+an uncommitted transaction: a real user with no membership and a staff member of a freshly-created second org each saw
+0 documents, 0 storage objects and 0 won vehicles, while a staff member of the vehicle's org saw all of them (the
+positive control that proves the policy is not just returning nothing). The strongest logged-out caller, the public
+anon key, got `NoSuchKey`, an empty bucket listing, an empty table read and an RLS violation on insert.
+
+**Lesson.** A standing obligation written in a document is not a control. The list only stays true if the next
+migration that adds an `asset_id` re-reads the function that consumes it; treat "which functions enumerate this
+table's siblings" as a pre-flight question for every new FK, not a recollection.

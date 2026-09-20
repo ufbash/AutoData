@@ -1473,11 +1473,44 @@ explicit placeholder in its place.
   partly de-cluttered. AC Propulsion was **hidden by Bashir's decision on 20 Sep 2026** (demote flag, reason recorded; still found by search, reversible).
 - **Stage 4 — documents:** this section, `SCHEMA.md` §18, `DECISIONS.md` §13, `docs/SOLVED.md` topic 33.
 
-**What remains of Phase D after this:** Prompt 34 Stage 4 (won-vehicle documents, private bucket,
-staff-only), Stage 5 (invoice + notification email through `_shared/email.ts`, test sends to Bashir
+**What remains of Phase D after this:** (Prompt 34 Stage 4, won-vehicle documents, was built 20 Sep 2026 — §4.23), Stage 5 (invoice + notification email through `_shared/email.ts`, test sends to Bashir
 only), Stage 6 (its docs); recording the real winning bid; persisting the destination port.
 
 ---
+
+### 4.23 Prompt 34 Stage 4: documents anchored to the won vehicle — **DONE** (20 Sep 2026)
+
+Stages 5 (invoice + notification) and 6 (Prompt 34's own docs: `SCHEMA.md` for migrations 043/044, `DECISIONS.md`,
+`docs/SOLVED.md`) are **still not built**. This stage's own docs are `SCHEMA.md` §17/§20, `DECISIONS.md` §14,
+`docs/SOLVED.md` topic 34.
+
+Migration 047: `won_vehicle_documents`, the private `won-vehicle-documents` bucket, `won_vehicles UNIQUE (id, org_id)`,
+and a `merge_assets()` fix. Edge Function `won-vehicle-documents` (upload, soft-delete). UI: the Documents section of
+the won-vehicle view (upload, type filter, download, inline-confirmed remove, read-only asset-paired rate documents).
+
+**Pre-flight finding, fixed:** `merge_assets()` never repointed `won_vehicles.asset_id` (Prompt 34 Stage 2 missed the
+standing FK-list obligation). Fixed and proven in a rolled-back transaction: 2 vehicles repointed, snapshot and
+`promoted_by`/`promoted_at` byte-identical, documents untouched.
+
+Verified (against the deployed endpoint, with two synthetic won vehicles on the **same** asset — not the real Yaris;
+all synthetic rows soft-deleted, the two test files retained):
+1. Upload a PDF and a PNG → stored, listed, downloaded (bytes and content type match).
+2. **Neither vehicle lists the other's document, both directions.**
+3. **Cross-org isolation proven:** a real user with no membership, and a staff member of a different org, see 0
+   documents / 0 storage objects / 0 won vehicles; staff of this org see 2/2; direct INSERT denied by RLS, DELETE and
+   UPDATE affect 0 rows; a document filed under another org is refused by the composite FK.
+4. **Unauthenticated access fails** (anon key, the strongest logged-out caller): private object path → HTTP 400
+   `NoSuchKey`, public path → `NoSuchBucket`, bucket list → `[]`, signed-URL creation → 400, table read → `[]`,
+   insert → 401 RLS violation.
+5. Soft delete (through the UI's inline confirm) hides it from the list; the row keeps `deleted_at`/`deleted_by`; the file
+   is still in storage and still downloads for staff.
+6. Type recorded (CHECK'd) and filterable: A's invoice appears under Invoice only, B's bill of lading under Bill of lading only.
+Server rejections proven: wrong MIME, unknown type, soft-deleted vehicle, unknown vehicle (same 404 as "not yours"),
+empty file, no token (401).
+
+**Not exercised:** the browser's file-picker (`<input type=file>`) cannot be driven by the automation, so uploads went through
+the same service function the button calls, not a real dialog click. The 8 MB server rejection (413) was not sent. **Pasted-in
+"real document"** was a small generated PDF/PNG, not one of Caplimo's real invoices.
 
 ---
 

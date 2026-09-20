@@ -526,3 +526,30 @@ is a human decision on the row.
 (`PROJECT_CHARTER.md` §5.1). Duty is permanently unavailable until C2 unblocks, so today the bought-car view
 never shows a total. Real cases that would otherwise have looked complete: a clean-title fee returned
 `available` with its bid fee left out ($640), now flagged `partialReason`.
+
+---
+
+## 14. Won-vehicle documents (Prompt 34 Stage 4)
+
+| # | Decision | Status |
+|---|---|---|
+| 14.1 | A won-vehicle document anchors to the **won vehicle**, never the asset: `won_vehicle_documents` has no `asset_id` | LOCKED |
+| 14.2 | Documents are **staff-only, behind auth, always**. They never appear on the tracking page or behind any share token | LOCKED |
+| 14.3 | The **only writer** is the `won-vehicle-documents` Edge Function; no client role has an INSERT/UPDATE/DELETE policy on the table or the bucket | LOCKED |
+| 14.4 | Documents are **soft-deleted only; the stored file is always retained** | LOCKED |
+| 14.5 | `won_vehicle_documents` and `cost_document_extractions` are **not merged**; the seam is the existing asset pairing, read not copied | LOCKED |
+| 14.6 | Any table with an `asset_id` FK must be added to `merge_assets()` in the same change | LOCKED (standing obligation, restated) |
+
+**Why 14.1:** a won vehicle is client-specific. The same physical car can be won for two clients, and an
+invoice carries one client's name and amounts. Anchoring to the asset would show it against the other client's
+record. This was proven with two won vehicles on one shared asset.
+
+**Why 14.3:** with no write policy, a hard delete is impossible from the app, and a staff member's browser
+session cannot rewrite a document's type or path. The function reads the org off the vehicle row (never the
+request) and answers "not found" identically for a missing vehicle and one in another org.
+
+**Why 14.5:** different lifecycles (a review gate vs. a record), different consumers (rate tables vs. a
+client's file). One invoice can legitimately be both; that is why the seam exists, not a merge.
+
+**Why 14.6:** Prompt 34 Stage 2 created `won_vehicles.asset_id` and it was never added, found only in this
+stage's pre-flight. It is the same miss that produced Prompt 32.

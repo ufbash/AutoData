@@ -637,6 +637,7 @@ one, per the standing obligation below:**
 | `sightings` | `asset_id` | |
 | `auction_history` | `asset_id` | |
 | `cost_document_extractions` | `asset_id` | Found during Prompt 32 Stage 2 pre-flight - Prompt 29 only knew about the first two. `asset_paired_by`/`asset_paired_at` on this table are provenance (who paired this document, when) and are deliberately NOT touched by a merge - only the FK moves. |
+| `won_vehicles` | `asset_id` | **Added 20 Sep 2026 (migration 047)** - Prompt 34 Stage 2 created this FK but never joined it to `merge_assets()`, found in Prompt 34 Stage 4 pre-flight. Only the pointer moves: `won_snapshot`, `promoted_by`, `promoted_at` are provenance and stay exactly as recorded (proven in a rolled-back transaction: 2 vehicles repointed, snapshot and provenance byte-identical). `won_vehicle_documents` has no `asset_id` (it anchors to the won vehicle), so needs no entry. |
 
 **Standing obligation for whoever adds a fourth:** a table with an `asset_id` FK that
 `merge_assets()` doesn't know about is a half-merge waiting to happen - it will silently orphan
@@ -693,3 +694,38 @@ Distinct from the merge sentinel (`merged_into_asset_id`, §17), which means "me
 Filtered by: `listAvailableSightings` (inner join on `assets`), `findRunIdsByVin`, `searchAssets`,
 `traded_make_counts()`, `asset-merge-candidates`. **Not** filtered: `research-capture` fingerprint lookups
 (see `PLAN_TRACKER.md` §4.22) and `getAssetById` (it displays an already-linked asset).
+
+---
+
+## 20. Won-vehicle documents (migration 047, Prompt 34 Stage 4)
+
+**Anchor: the won vehicle, not the asset.** `won_vehicle_documents` has **no `asset_id`**. A won vehicle
+is client-specific; the same physical car won for two clients must never show one client's invoice against
+the other's record. Proven with two won vehicles on the *same* asset: neither listed the other's document.
+
+| Column | Meaning |
+|---|---|
+| `org_id`, `won_vehicle_id` | Composite FK `(won_vehicle_id, org_id)` → `won_vehicles (id, org_id)` (new `UNIQUE (id, org_id)` on `won_vehicles`): a document cannot be filed under an org other than its vehicle's, enforced by the database |
+| `document_type` | `invoice`, `receipt`, `shipping_document`, `bill_of_lading`, `title`, `assessment_notice`, `other` (CHECK). An assessment notice and a bill of lading are not interchangeable |
+| `storage_path`, `original_filename`, `mime_type`, `size_bytes` | Path is `<org_id>/<won_vehicle_id>/<uuid>/<filename>` in the private `won-vehicle-documents` bucket |
+| `uploaded_by`, `uploaded_at` | Who and when |
+| `deleted_at`, `deleted_by` | Soft delete (migration 023's pair, CHECK'd together). The stored file is always retained |
+
+**Access.** RLS is `SELECT` only (§12's pattern). There is **no INSERT/UPDATE/DELETE policy for any client
+role**, on the table or on the bucket: the only writer is the `won-vehicle-documents` Edge Function (service
+role; JWT + membership of the *vehicle's* org, the org is never taken from the request; upload and soft-delete
+only). Bucket: private, 10 MB / PDF-PNG-JPEG-WebP as defence in depth behind the function's 8 MB cap; staff
+`SELECT` scoped on the path's first folder (org) or superadmin. Never reachable through a share token
+(`PROJECT_CHARTER.md` §7); `won-vehicle-tracking`'s allow-list has no document field.
+
+**The seam with `cost_document_extractions` (stated, not fused).** That table stages documents for *rate
+extraction* behind a human review gate; this one stores documents for *a client's vehicle*. One real invoice can
+legitimately be both. They are separate tables with separate lifecycles and consumers. A document already paired
+to an asset through `cost_document_extractions.asset_id` (Prompt 29 Stage 6, §15) is *read* through that
+existing pairing, shown read-only and labelled "paired to the car, not to this client's purchase"; no second
+link is stored on either table. Caveat: if the same asset ever backs two won vehicles, those paired rate
+documents appear under both (they are Caplimo's cost documents, not client paperwork, and are superadmin-only to
+download).
+
+**Stated limits.** A signed download URL is valid 5 minutes and is a bearer link for that window. Uploads are
+base64 through the function (8 MB cap). Files are not virus-scanned.
