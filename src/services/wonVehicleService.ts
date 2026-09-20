@@ -148,3 +148,105 @@ export const revokeTrackingLink = async (wonVehicleId: string): Promise<WonVehic
   if (error) throw new Error(`Failed to revoke tracking link: ${error.message}`);
   return data;
 };
+
+// PROMPT 35 Stage 1 - everything the bought-car view needs that is NOT in the frozen snapshot.
+// Purchase figures (price, currency, is_bid, source platform, VIN/make/model/year) come ONLY
+// from won_vehicles.won_snapshot and are never read from here. This context exists for three
+// different jobs: images (evidence, not a figure), cost INPUTS (yard/title/platform, which the
+// snapshot does not carry and which the cost functions require), and provenance links.
+//
+// Known limit, stated rather than hidden: research-capture updates a sighting in place on
+// re-capture, so title_type/location here can drift after approval. The snapshot is what stays
+// frozen; these inputs are "as currently captured" and are labelled that way in the view.
+export interface WonVehicleContext {
+  listing: {
+    id: string;
+    approved_at: string | null;
+    approved_via: string | null;
+    sighting_id: string | null;
+  } | null;
+  sighting: {
+    id: string;
+    lot_number: string | null;
+    title_type: string | null;
+    location: string | null;
+    source_platform: string;
+    source_auction_platform: string | null;
+    stored_image_urls: string[] | null;
+    image_store_status: string | null;
+  } | null;
+  run: { id: string; client_name: string; run_type: string; created_at: string } | null;
+}
+
+export const getWonVehicleContext = async (wv: WonVehicle): Promise<WonVehicleContext> => {
+  const { data: listing, error: lErr } = await supabase
+    .from('research_run_listings')
+    .select('id, approved_at, approved_via, sighting_id')
+    .eq('id', wv.research_run_listing_id)
+    .maybeSingle();
+  if (lErr) throw new Error(`Failed to load source listing: ${lErr.message}`);
+
+  let sighting: WonVehicleContext['sighting'] = null;
+  if (listing?.sighting_id) {
+    const { data, error } = await supabase
+      .from('sightings')
+      .select('id, lot_number, title_type, location, source_platform, source_auction_platform, stored_image_urls, image_store_status')
+      .eq('id', listing.sighting_id)
+      .maybeSingle();
+    if (error) throw new Error(`Failed to load source sighting: ${error.message}`);
+    sighting = data as WonVehicleContext['sighting'];
+  }
+
+  const { data: run, error: rErr } = await supabase
+    .from('research_runs')
+    .select('id, client_name, run_type, created_at')
+    .eq('id', wv.run_id)
+    .maybeSingle();
+  if (rErr) throw new Error(`Failed to load source run: ${rErr.message}`);
+
+  return { listing: listing ?? null, sighting, run: run ?? null };
+};
+
+// Only stored images (private bucket, signed URL) are ever rendered. Remote image_urls are not
+// used as a fallback: images.bid.cars fails CORS (docs/SOLVED.md) and hotlinked URLs expire, so
+// a "fallback" there is a broken image waiting to happen. No stored image -> null -> placeholder.
+export const signedImagePaths = async (paths: string[]): Promise<Record<string, string>> => {
+  if (paths.length === 0) return {};
+  const { data, error } = await supabase.storage.from('vehicle-images').createSignedUrls(paths, 3600);
+  if (error) return {};
+  const map: Record<string, string> = {};
+  (data || []).forEach(d => { if (!d.error && d.signedUrl && d.path) map[d.path] = d.signedUrl; });
+  return map;
+};
+
+export const getWonVehicleThumbnails = async (wvs: WonVehicle[]): Promise<Record<string, string | null>> => {
+  const result: Record<string, string | null> = {};
+  wvs.forEach(w => { result[w.id] = null; });
+  if (wvs.length === 0) return result;
+
+  const { data: listings } = await supabase
+    .from('research_run_listings')
+    .select('id, sighting_id')
+    .in('id', wvs.map(w => w.research_run_listing_id));
+  const sightingIds = (listings || []).map(l => l.sighting_id).filter(Boolean) as string[];
+  if (sightingIds.length === 0) return result;
+
+  const { data: sightings } = await supabase
+    .from('sightings')
+    .select('id, stored_image_urls')
+    .in('id', sightingIds);
+  const firstPathBySighting = new Map<string, string>();
+  (sightings || []).forEach((s: any) => {
+    const p = Array.isArray(s.stored_image_urls) ? s.stored_image_urls[0] : null;
+    if (p) firstPathBySighting.set(s.id, p);
+  });
+  const signed = await signedImagePaths(Array.from(new Set(firstPathBySighting.values())));
+
+  const sightingByListing = new Map((listings || []).map(l => [l.id, l.sighting_id as string | null]));
+  wvs.forEach(w => {
+    const sid = sightingByListing.get(w.research_run_listing_id);
+    const path = sid ? firstPathBySighting.get(sid) : undefined;
+    result[w.id] = path ? (signed[path] ?? null) : null;
+  });
+  return result;
+};

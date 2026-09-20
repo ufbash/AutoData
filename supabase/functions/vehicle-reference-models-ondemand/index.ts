@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { fetchModelsForMakeYear } from "../_shared/nhtsa.ts";
 
 // PROMPT 34 Stage 0A - fixes Prompt 33's wrong population. vehicle_reference_models was seeded
 // only for (make, year) pairs already present in `assets` - the right population for VERIFYING
@@ -17,14 +18,6 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-const VPIC_BASE = "https://vpic.nhtsa.dot.gov/api/vehicles";
-const VEHICLE_TYPES = ["car", "truck", "multipurpose passenger vehicle (mpv)"];
-
-interface NhtsaModelResult {
-  Model_ID: number;
-  Model_Name: string;
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -98,23 +91,12 @@ serve(async (req: Request) => {
     }
 
     // Vehicle-type-filtered, merged across types, deduped by Model_ID - the exact Prompt 33
-    // Stage 1 fix (raw GetModelsForMakeYear leaks motorcycles/ATVs, badly for Honda/BMW).
-    const dedup = new Map<number, string>();
-    let fetchFailed = false;
-    let fetchError: string | null = null;
-    for (const vt of VEHICLE_TYPES) {
-      try {
-        const res = await fetch(`${VPIC_BASE}/GetModelsForMakeYear/make/${encodeURIComponent(make)}/modelyear/${year}/vehicletype/${encodeURIComponent(vt)}?format=json`);
-        if (!res.ok) { fetchFailed = true; fetchError = `HTTP ${res.status}`; continue; }
-        const data = await res.json();
-        for (const r of (data.Results ?? []) as NhtsaModelResult[]) {
-          dedup.set(r.Model_ID, r.Model_Name);
-        }
-      } catch (e) {
-        fetchFailed = true;
-        fetchError = (e as Error).message;
-      }
-    }
+    // Stage 1 fix, now shared via _shared/nhtsa.ts (Prompt 35). A partial failure still returns
+    // whatever the other types found, as before.
+    const fetched = await fetchModelsForMakeYear(make, year);
+    const dedup = fetched.models;
+    const fetchFailed = fetched.failed;
+    const fetchError = fetched.error;
 
     if (dedup.size === 0) {
       // Either a real NHTSA gap (the 1974 VW case - vPIC has nothing for this make/year) or a

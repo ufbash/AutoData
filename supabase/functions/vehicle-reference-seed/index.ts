@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { VPIC_BASE, VEHICLE_TYPES, fetchModelsForMakeYear } from "../_shared/nhtsa.ts";
 
 // PROMPT 33 Stage 1 - the vehicle reference database's seeder. Deliberately its own callable
 // operation (re-runnable, admin-triggered), not a migration side effect - a migration runs once
@@ -15,8 +16,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const VPIC_BASE = "https://vpic.nhtsa.dot.gov/api/vehicles";
-
 // PROMPT 33 Stage 1 pre-flight - GetAllMakes returns 12,363 rows, dominated by custom/trailer/
 // equipment manufacturers with no passenger relevance (e.g. "#1 ALPINE CUSTOMS", "102 IRONWORKS,
 // INC."). Filtered to the union of NHTSA's own "Passenger Car" / "Truck" / "Multipurpose
@@ -24,19 +23,11 @@ const VPIC_BASE = "https://vpic.nhtsa.dot.gov/api/vehicles";
 // overlap) - reversible (just re-run against GetAllMakes with a different/no filter) and stated
 // here rather than silently applied. A missing make is a worse failure than an extra one, so this
 // errs toward the wider of NHTSA's own categories rather than a hand-picked list.
-const VEHICLE_TYPES = ["car", "truck", "multipurpose passenger vehicle (mpv)"];
-
 interface NhtsaMakeResult {
   MakeId: number;
   MakeName: string;
 }
 
-interface NhtsaModelResult {
-  Make_ID: number;
-  Make_Name: string;
-  Model_ID: number;
-  Model_Name: string;
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -141,14 +132,12 @@ serve(async (req: Request) => {
         // (confirmed live: Mercedes-Benz Sprinter appeared 4 times for one 2019 query) - not a
         // one-off quirk, so deduping by Model_ID belongs in the seeder permanently, not as a
         // one-time cleanup step.
-        const dedup = new Map<number, string>();
-        for (const vt of VEHICLE_TYPES) {
-          const res = await fetch(`${VPIC_BASE}/GetModelsForMakeYear/make/${encodeURIComponent(make)}/modelyear/${year}/vehicletype/${encodeURIComponent(vt)}?format=json`);
-          if (!res.ok) throw new Error(`NHTSA GetModelsForMakeYear(${make}, ${year}, ${vt}) failed: HTTP ${res.status}`);
-          const data = await res.json();
-          const results = (data.Results ?? []) as NhtsaModelResult[];
-          for (const r of results) dedup.set(r.Model_ID, r.Model_Name);
-        }
+        // PROMPT 35 - the vehicle-type-scoped, Model_ID-deduped fetch now lives in
+        // _shared/nhtsa.ts (one definition shared with the on-demand and probe functions). The
+        // seeder keeps its fail-loud behaviour: any failed vehicle-type call aborts the run.
+        const fetched = await fetchModelsForMakeYear(make, year);
+        if (fetched.failed) throw new Error(`NHTSA GetModelsForMakeYear(${make}, ${year}) failed: ${fetched.error}`);
+        const dedup = fetched.models;
 
         const rows = Array.from(dedup.entries()).map(([nhtsa_model_id, name]) => ({
           make_id: refMake.id,

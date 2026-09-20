@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief, createBriefWithIntakeLink } from '../services/researchService';
-import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon } from 'lucide-react';
-import { listReferenceMakes, listReferenceModels, ReferenceMake, ReferenceModel } from '../services/vehicleReferenceService';
-import { listWonVehiclesForBrief, WonVehicle } from '../services/wonVehicleService';
+import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon, ImageOff } from 'lucide-react';
+import { listTieredMakes, listReferenceModels, TieredMake, ReferenceModel } from '../services/vehicleReferenceService';
+import MakeCombobox from './MakeCombobox';
+import { listWonVehiclesForBrief, getWonVehicleThumbnails, WonVehicle } from '../services/wonVehicleService';
 import WonVehicleDetail from './WonVehicleDetail';
 
 // PROMPT 33 Stage 3 - make/model as vocabulary selections, with an explicit "not listed" free-text
@@ -72,18 +73,22 @@ const BriefForm = ({
   isSubmitting: boolean
 }) => {
   const [formData, setFormData] = useState<Partial<ClientBrief>>(initialData);
-  const [makes, setMakes] = useState<ReferenceMake[]>([]);
+  const [makes, setMakes] = useState<TieredMake[]>([]);
   const [models, setModels] = useState<ReferenceModel[]>([]);
   const [makesLoading, setMakesLoading] = useState(true);
   const [modelsLoading, setModelsLoading] = useState(false);
 
+  const loadMakes = (isCancelled: () => boolean = () => false) => {
+    setMakesLoading(true);
+    listTieredMakes()
+      .then(result => { if (!isCancelled()) setMakes(result); })
+      .catch(() => { if (!isCancelled()) setMakes([]); })
+      .finally(() => { if (!isCancelled()) setMakesLoading(false); });
+  };
+
   useEffect(() => {
     let cancelled = false;
-    setMakesLoading(true);
-    listReferenceMakes()
-      .then(result => { if (!cancelled) setMakes(result); })
-      .catch(() => { if (!cancelled) setMakes([]); })
-      .finally(() => { if (!cancelled) setMakesLoading(false); });
+    loadMakes(() => cancelled);
     return () => { cancelled = true; };
   }, []);
 
@@ -111,14 +116,13 @@ const BriefForm = ({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <MakeModelField
-          label="Make"
+        <MakeCombobox
           value={formData.make || ''}
           isVocabulary={formData.make_is_vocabulary}
-          options={makes}
-          optionsLoading={makesLoading}
-          placeholder="e.g. Toyota"
+          makes={makes}
+          loading={makesLoading}
           onChange={(value, isVocabulary) => setFormData({ ...formData, make: value, make_is_vocabulary: isVocabulary })}
+          onMakesChanged={() => loadMakes()}
         />
         <MakeModelField
           label="Model"
@@ -322,6 +326,8 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const [wonVehicles, setWonVehicles] = useState<WonVehicle[]>([]);
   const [viewingWonVehicle, setViewingWonVehicle] = useState<WonVehicle | null>(null);
   const [wonVehiclesLoading, setWonVehiclesLoading] = useState(false);
+  const [wonThumbs, setWonThumbs] = useState<Record<string, string | null>>({});
+  const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set());
 
   // New Client Form
   const [showNewClientForm, setShowNewClientForm] = useState(false);
@@ -565,7 +571,9 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const loadWonVehicles = async (briefId: string) => {
     setWonVehiclesLoading(true);
     try {
-      setWonVehicles(await listWonVehiclesForBrief(briefId));
+      const list = await listWonVehiclesForBrief(briefId);
+      setWonVehicles(list);
+      getWonVehicleThumbnails(list).then(setWonThumbs).catch(() => setWonThumbs({}));
     } catch {
       setWonVehicles([]);
     } finally {
@@ -1005,11 +1013,25 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                         <div
                           key={wv.id}
                           onClick={() => setViewingWonVehicle(wv)}
-                          className="flex justify-between items-center p-3 bg-emerald-50 hover:bg-white hover:border-emerald-400 border border-emerald-100 rounded-lg cursor-pointer transition-colors group"
+                          className="flex items-center gap-4 p-3 bg-emerald-50 hover:bg-white hover:border-emerald-400 border border-emerald-100 rounded-lg cursor-pointer transition-colors group"
                         >
-                          <div>
+                          <div className="w-24 h-16 flex-shrink-0 rounded overflow-hidden bg-gray-200" data-testid="won-thumb">
+                            {wonThumbs[wv.id] && !brokenThumbs.has(wv.id) ? (
+                              <img
+                                src={wonThumbs[wv.id]!}
+                                alt=""
+                                className="w-full h-full object-cover"
+                                onError={() => setBrokenThumbs(prev => new Set(prev).add(wv.id))}
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-gray-400" data-testid="won-thumb-placeholder">
+                                <ImageOff className="w-5 h-5" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1">
                             <div className="font-bold text-[#403f4c]">{snap?.year} {snap?.make} {snap?.model} {snap?.trim || ''}</div>
-                            <div className="text-xs text-gray-500 mt-1">Won {new Date(wv.promoted_at).toLocaleDateString()} · lot {snap?.lot_number || '—'}</div>
+                            <div className="text-xs text-gray-500 mt-1">Won {new Date(wv.promoted_at).toLocaleDateString()} · {snap?.source_platform || ''}</div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-emerald-600 transition-colors" />
                         </div>
@@ -1251,6 +1273,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
       {viewingWonVehicle && (
         <WonVehicleDetail
           wonVehicle={viewingWonVehicle}
+          onOpenRun={onOpenRun}
           onClose={() => setViewingWonVehicle(null)}
           onChanged={() => { if (selectedBriefId) void loadWonVehicles(selectedBriefId); }}
         />

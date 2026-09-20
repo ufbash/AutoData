@@ -25,6 +25,10 @@ export interface CostComponent {
   status: ComponentStatus;
   amountUsd: number | null;
   reason: string | null; // populated only when unavailable
+  // PROMPT 35 - set when the component is 'available' but a sub-part has no stored schedule and
+  // was left out of amountUsd (e.g. the bid fee for clean-title/unsecured, which has no rows).
+  // A partial figure must never feed a landed total as though it were complete.
+  partialReason?: string;
   detail: string; // human-readable explanation of what this figure is / came from
   sourceRows: { label: string; source: string; effectiveFrom: string }[]; // dated provenance
 }
@@ -217,6 +221,7 @@ function auctionFeeComponentFromRows(
     status: 'available',
     amountUsd: Math.round(total * 100) / 100,
     reason: null,
+    partialReason: bidFeeLow === null ? 'no bid-fee schedule is stored for this title status / payment tier, so the bid fee is not included in this figure' : undefined,
     detail: `Buyer fee $${buyerFeeAmount.toFixed(2)} + bid fee ${bidFeeNote} + flat fees $${rows.flatFeeTotal.toFixed(2)} (Environmental/Gate/Title Pickup), at price $${priceUsd}`,
     sourceRows,
   };
@@ -229,6 +234,13 @@ export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<Co
   }
   if (platform !== 'copart') {
     return unavailable(`no stored fee schedule for platform "${platform}" yet`, 'only Copart fee schedules are confirmed and stored (PROMPT_21 Phase 2) - no IAAI invoice exists to cross-check its published tables against');
+  }
+  // PROMPT 35 - a bid.cars capture defaults source_auction_platform to 'copart'; one real lot
+  // (the Yaris) is labelled copart while its yard reads "IAA Dallas/Ft Worth (TX)". Pricing that
+  // under Copart's schedule would be a confident wrong number, so a location that names IAA
+  // contradicts the platform label and the fee abstains rather than picking a side.
+  if (/^\s*IAAI?\b/i.test(input.sighting.location ?? '')) {
+    return unavailable('platform label contradicts the yard', `source_auction_platform="${input.sighting.source_auction_platform}" but location="${input.sighting.location}" names an IAA yard - IAAI has no stored fee schedule, so no fee is quoted rather than pricing under Copart's`);
   }
 
   const titleStatus = classifyTitleStatus(input.titleType);
