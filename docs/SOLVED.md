@@ -2126,3 +2126,28 @@ the probe's own stored evidence (every one of those makes had a model hit in the
 NHTSA's rate limit for this machine, every response was HTTP 403, and the script counted a failed request as "no models". Nothing was reported or stored from it, and the output was deleted, but it is the same shape as the
 silent-null bugs this project keeps unwinding: **a failed lookup and a genuine zero must never share a value.** The rerun with retries and a failure counter was cancelled once a single direct `curl` showed the block.
 The measurement is deferred (gentler pacing, or run server-side from the Supabase project where the production probe already runs without trouble).
+
+## 40. Model breadth cannot narrow the makes list - measured server-side, after the local measurement turned out to be measuring a block
+
+**The question.** Tier 2 ("current") holds 330 of 406 makes, so the default make picker is still long. The suggestion on the table was to rank or threshold by how many models each make has in the current model year, on the
+theory that real consumer brands have many models and custom builders have one or two.
+
+**How it was measured, and why it took two attempts.** The first run (locally) hit NHTSA's rate limit; every call returned 403 and the script counted a failed request as "zero models" (docs/SOLVED.md 39). The rerun executed
+server-side from the Supabase project, where the production probe already runs without trouble, in a throwaway superadmin-only function that wrote nothing, paced sequentially at ~4 requests/second, reported a failed lookup as
+`null` (never 0), and aborted on any 403/429. Result: 330 makes, **0 failures, 0 unknowns, never blocked**; the function was then deleted (it returns 404). Sanity checks held: Toyota 24, BMW 32, Ford 20, Mercedes-Benz 19
+(counts merge NHTSA's car, truck and MPV types, the same population as the model seed).
+
+**Distribution.** 0 models: 8 · 1: 121 · 2: 54 · 3-4: 62 · 5-9: 50 · 10+: 35.
+
+**Why it does not work.** Breadth measures how much a manufacturer submitted to NHTSA, not whether it is a car brand a client could want.
+- Legitimate brands score LOW: `FIAT` 1, `JAGUAR` 1, `FISKER` 1, `INEOS` 1, `ZEEKR` 1, `DODGE` 2, `INFINITI` 2, `LOTUS` 2, `LUCID` 2, `BUGATTI` 2, `KOENIGSEGG` 2, `PAGANI` 2, `LAMBORGHINI` 3, `BENTLEY` 3,
+  `MINI` 3, `MITSUBISHI` 3, `POLESTAR` 3, `CHRYSLER` 3, `BUICK` 4, `MASERATI` 4, `ROLLS-ROYCE` 4, `RIVIAN` 4.
+- Heavy-truck and fire-apparatus makers score HIGH: `FREIGHTLINER` 35, `KENWORTH` 29, `INTERNATIONAL` 26, `PETERBILT` 17, `OSHKOSH` 15, `PIERCE MANUFACTURING` 14, `NATIONAL OILWELL VARCO` 14, `ARMBRUSTER STAGEWAY` 16.
+- Junk sits across the range: `ZZKNOWN` 1, `ELGIN SWEEPER CO` 1, `MCNEILUS` 1, but also `KANDI` 11 and `UKEYCHEYMA` 10.
+A threshold (say "3 or more") would keep ~147 makes and hide Fiat, Jaguar, Dodge, Infiniti and Lotus while keeping Freightliner and Kenworth. As a sort key it would put Freightliner above Toyota. Ranking must never block a legitimate make
+(`DECISIONS.md` 13); breadth would do exactly that, so it is rejected.
+
+**What might discriminate (untested).** Whether a make has any `car`/`multipurpose passenger vehicle` model at all versus `truck` only - the probe merges the three types, so the split was never recorded. Cheap to test the same way,
+but it is a hypothesis: NHTSA's "truck" type includes pickups, so RAM and Ford would need care. The already-sanctioned manual route is the reversible demote flag, used deliberately on clearly non-car makers.
+
+**Lesson.** A plausible-sounding proxy (breadth) was cheap to state and cheap to disprove, and the disproof only counted because the measurement itself was made trustworthy first.
