@@ -2151,3 +2151,19 @@ A threshold (say "3 or more") would keep ~147 makes and hide Fiat, Jaguar, Dodge
 but it is a hypothesis: NHTSA's "truck" type includes pickups, so RAM and Ford would need care. The already-sanctioned manual route is the reversible demote flag, used deliberately on clearly non-car makers.
 
 **Lesson.** A plausible-sounding proxy (breadth) was cheap to state and cheap to disprove, and the disproof only counted because the measurement itself was made trustworthy first.
+
+## 41. Checking a real IAAI invoice against published fees - what could and could not be verified
+
+**The question.** Is the $645 fee line on the first IAAI purchase invoice (Yaris, $1,700 bid, $2,345 total) accurate?
+
+**What was available.** IAA publishes its fee tables as images (SVG) behind bot protection, so the primary source could not be read; a direct download was blocked and no attempt was made to get around the block. The flat per-unit fees are stated in text
+on IAA's own pages (service $105, environmental $15, title-handling $20, effective 1 Jul 2026). The Standard-schedule bracket tables were taken from one broker's reproduction dated 1 Jul 2026. Two other sources were rejected on inspection: one was
+IAA's UK schedule in pounds, another used stale flat fees from before the July 2026 change. Third-party fee calculators disagreed with each other and with IAA (one showed a flat "10%, min $150, max $500" that contradicts IAA's tiered table), so none was used.
+
+**The result.** At $1,700 the Standard schedule gives $485 + $85 proxy + $140 flat = $710 ($720 live); the invoice charged $645, which is lower, so the invoice is not an overcharge. The difference fits a High-Volume buyer schedule, and the
+arithmetic implies a $420 buyer fee - but that is an inference. The invoice itemises nothing, and the High-Volume bracket table was not obtainable from a source worth trusting. The honest status is "plausible and cheaper than Standard; unconfirmed".
+
+**Two useful by-products.** (1) The invoice's Branch column ("Dallas/Ft Worth") is a primary-source confirmation of a yard name the matcher could not previously resolve. (2) The invoice's buyer is an intermediary company account (not Caplimo's own name), which
+matters for the `member_account` a future IAAI schedule must be stored under, exactly as White Nexus did for Copart.
+
+**Lesson.** When the authoritative table cannot be read, say which parts were verified, which were inferred, and what single document would settle it, rather than picking the source that happens to produce a tidy match.
