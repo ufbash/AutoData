@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient';
 import { matchSightingToYard } from './yardMatchingService';
+import { listActiveYardKeys } from './truckingRatesService';
 import type { YardKey, SightingForMatching } from './yardMatchingService';
 // PROMPT 29 Stage 4 - PaymentTier's single definition lives in orgSettingsService.ts, the
 // module that owns reading/writing it as configuration. Imported, not redefined.
@@ -289,14 +290,10 @@ export async function getInlandTruckingComponent(input: InlandTruckingInput): Pr
     return unavailable('no destination port/method selected for this run', '');
   }
 
-  const { data: yards, error: yardsError } = await supabase
-    .from('trucking_rates')
-    .select('auction_platform, yard_state, yard_city, yard_street')
-    .eq('org_id', input.orgId)
-    .is('effective_to', null);
-  if (yardsError) throw new Error(`Failed to load yards: ${yardsError.message}`);
+  // Complete, paginated yard list (debt #68) - a bare select silently returns only the first 1,000 rows.
+  const yards = await listActiveYardKeys(input.orgId);
 
-  const matchResult = matchSightingToYard(input.sighting, (yards || []) as YardKey[]);
+  const matchResult = matchSightingToYard(input.sighting, yards);
   if (matchResult.status !== 'matched' || !matchResult.matchedYard) {
     return unavailable(`trucking not quotable: ${matchResult.status}`, matchResult.reason);
   }

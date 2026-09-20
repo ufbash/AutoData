@@ -172,6 +172,16 @@ export function matchSightingToYard(sighting: SightingForMatching, yards: YardKe
   }
 
   const parsed = parseLocationForPlatform(sighting, effectivePlatform);
+  // Debt #67: bid.cars writes an IAAI branch as "IAA Dallas/Ft Worth (TX)"; IAA's own buyer invoice
+  // names that branch "Dallas/Ft Worth" (Branch column, Yaris invoice, 14 Sep 2026), and the vendor
+  // sheet has the yard as "Dallas/Ft Worth". So for the IAAI network - and only there - a leading
+  // "IAA " / "IAAI " company code is not part of the branch name. Not applied to Copart (its yards
+  // are named differently) and deliberately not extended to other vendor codes such as "ACE - " (no
+  // evidence yet). Measured: no IAAI yard itself begins with "IAA", so nothing can collide.
+  if (parsed && effectivePlatform === 'iaai') {
+    const stripped = parsed.city.replace(/^IAAI?\s+/i, '').trim();
+    if (stripped) parsed.city = stripped;
+  }
   if (!parsed) {
     return {
       status: 'unmatched',

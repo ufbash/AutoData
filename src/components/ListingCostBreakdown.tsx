@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RunListing } from '../services/researchService';
-import { listPortsForYard, PortSummary } from '../services/truckingRatesService';
+import { listPortsForYard, listActiveYardKeys, PortSummary } from '../services/truckingRatesService';
 import { computeBidHeadroom, getFeeBracketBoundaries, BidHeadroomResult, CostComponent, FeeBoundaries } from '../services/bidHeadroomService';
 import { getPaymentTier, PaymentTier, DEFAULT_PAYMENT_TIER } from '../services/orgSettingsService';
 import { Loader2, Info } from 'lucide-react';
@@ -134,12 +134,9 @@ const ListingCostBreakdown: React.FC<ListingCostBreakdownProps> = ({ orgId, list
         // matcher itself (inside computeBidHeadroom) is what actually enforces platform-first,
         // exact-match rules. This is just populating a picker.
         const { matchSightingToYard } = await import('../services/yardMatchingService');
-        const { data: yardRows } = await (await import('../services/supabaseClient')).supabase
-          .from('trucking_rates')
-          .select('auction_platform, yard_state, yard_city, yard_street')
-          .eq('org_id', orgId)
-          .is('effective_to', null);
-        const match = matchSightingToYard(sighting, yardRows || []);
+        // Complete, paginated yard list (debt #68) - a bare select returns only the first 1,000 rows.
+        const yardRows = await listActiveYardKeys(orgId);
+        const match = matchSightingToYard(sighting, yardRows);
         if (cancelled) return;
         if (match.status === 'matched' && match.matchedYard) {
           const p = await listPortsForYard(orgId, match.effectivePlatform!, match.matchedYard.yard_state, match.matchedYard.yard_city);

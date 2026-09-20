@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import type { YardKey } from './yardMatchingService';
 
 // PROMPT 20 Phase 4 - two reads over one ledger, never a second table.
 // Deliberately not wired into research runs or the public share page yet - that is a
@@ -32,21 +33,79 @@ export interface PortSummary {
   shipping_method: 'container' | 'roro';
 }
 
-export const searchTruckingYards = async (orgId: string, query: string): Promise<YardSummary[]> => {
-  let q = supabase
-    .from('trucking_rates')
-    .select('auction_platform, yard_state, yard_city')
-    .eq('org_id', orgId);
+// DEBT #68 - PostgREST caps every response at 1,000 rows (the project's max-rows), and a client-side
+// .limit(2000) does not lift it. trucking_rates holds ~1,740 active rows, so every unpaginated yard
+// read was silently returning the first 1,000 in arbitrary order: the yard matcher saw only ~57% of
+// yards (738 of 742 Copart rows but 262 of 588 IAAI, and no Manheim or ADESA at all), and a yard that
+// fell in the missing part read as "no yard found" - indistinguishable from a real absence. Anything
+// that needs the whole table must page it, in a stable order.
+const PAGE_SIZE = 1000;
 
-  if (query.trim()) {
-    q = q.or(`yard_city.ilike.%${query.trim()}%,yard_state.ilike.%${query.trim()}%`);
+async function fetchAllPages<T>(
+  build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await build(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    all.push(...(data || []));
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
+/** Every distinct active yard (platform + state + city + street) for the org - the complete list the
+ * yard matcher must see. Never call the table with a bare select for this. */
+export const listActiveYardKeys = async (orgId: string): Promise<YardKey[]> => {
+  let rows: YardKey[];
+  try {
+    rows = await fetchAllPages<YardKey>((from, to) =>
+      supabase
+        .from('trucking_rates')
+        .select('auction_platform, yard_state, yard_city, yard_street')
+        .eq('org_id', orgId)
+        .is('effective_to', null)
+        .order('id')
+        .range(from, to)
+    );
+  } catch (e: any) {
+    throw new Error(`Failed to load yards: ${e?.message}`);
+  }
+  // Completeness check: paging must have returned EVERY active row. If the server-side count disagrees
+  // (a changed row cap, a concurrent import) fail loudly instead of matching against a partial list -
+  // a partial list reads as "no yard found", which is indistinguishable from a genuine absence.
+  const { count, error: countError } = await supabase
+    .from('trucking_rates')
+    .select('id', { count: 'exact', head: true })
+    .eq('org_id', orgId)
+    .is('effective_to', null);
+  if (countError) throw new Error(`Failed to verify the yard list: ${countError.message}`);
+  if (count !== null && rows.length !== count) {
+    throw new Error(`Yard list incomplete: loaded ${rows.length} of ${count} active rate rows`);
   }
 
-  const { data, error } = await q.limit(2000);
-  if (error) throw new Error(`Failed to search yards: ${error.message}`);
+  const seen = new Map<string, YardKey>();
+  for (const r of rows) seen.set(`${r.auction_platform}|${r.yard_state}|${r.yard_city}|${r.yard_street ?? ''}`, r);
+  return Array.from(seen.values());
+};
+export const searchTruckingYards = async (orgId: string, query: string): Promise<YardSummary[]> => {
+  const term = query.trim();
+  let data: YardSummary[];
+  try {
+    data = await fetchAllPages<YardSummary>((from, to) => {
+      let q = supabase
+        .from('trucking_rates')
+        .select('auction_platform, yard_state, yard_city')
+        .eq('org_id', orgId);
+      if (term) q = q.or(`yard_city.ilike.%${term}%,yard_state.ilike.%${term}%`);
+      return q.order('id').range(from, to);
+    });
+  } catch (e: any) {
+    throw new Error(`Failed to search yards: ${e?.message}`);
+  }
 
   const seen = new Map<string, YardSummary>();
-  (data || []).forEach(row => {
+  data.forEach(row => {
     const key = `${row.auction_platform}|${row.yard_state}|${row.yard_city}`;
     if (!seen.has(key)) seen.set(key, row);
   });

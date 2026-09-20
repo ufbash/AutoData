@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { supabase } from '../services/supabaseClient';
 import {
   CostComponent, DEFAULT_MEMBER_ACCOUNT,
   getAuctionFeeComponent, getInlandTruckingComponent, getOceanFreightComponent, getDutyComponent,
 } from '../services/bidHeadroomService';
-import { matchSightingToYard, MatchResult, YardKey } from '../services/yardMatchingService';
-import { listPortsForYard, PortSummary } from '../services/truckingRatesService';
+import { matchSightingToYard, MatchResult } from '../services/yardMatchingService';
+import { listPortsForYard, listActiveYardKeys, PortSummary } from '../services/truckingRatesService';
 import { getPaymentTier, PaymentTier, DEFAULT_PAYMENT_TIER } from '../services/orgSettingsService';
 import type { WonVehicle, WonVehicleContext, WonVehicleDestination } from '../services/wonVehicleService';
 import WonVehicleDestinationPanel from './WonVehicleDestination';
@@ -89,12 +88,9 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
           setMatch(null);
           return;
         }
-        const { data: yards } = await supabase
-          .from('trucking_rates')
-          .select('auction_platform, yard_state, yard_city, yard_street')
-          .eq('org_id', wonVehicle.org_id)
-          .is('effective_to', null);
-        const m = matchSightingToYard(sightingForCosts, (yards || []) as YardKey[]);
+        // Complete, paginated yard list (debt #68) - a bare select returns only the first 1,000 rows.
+        const yards = await listActiveYardKeys(wonVehicle.org_id);
+        const m = matchSightingToYard(sightingForCosts, yards);
         if (cancelled) return;
         setMatch(m);
         if (m.status === 'matched' && m.matchedYard) {
