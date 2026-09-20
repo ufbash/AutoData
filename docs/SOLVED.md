@@ -2075,3 +2075,21 @@ disproved), but it means "the current winning bid" is a query (latest non-voided
 **Process note.** The endpoint tests were interrupted when the browser's login session vanished after a dev-server restart. The database-level checks (guards, FKs,
 CHECKs in an uncommitted transaction, and the logged-out probes) and the independent SQL fee figures did not need a login and were run first; the authenticated
 endpoint and UI checks resumed once the session was restored. Nothing was worked around: a signed-in session is not something to mint.
+
+## 37. Persisting the destination: why the option list had to show its evidence
+
+**The starting point.** The bought-car view made staff pick a port every time it opened and saved nothing, so trucking and shipping fell back to "not calculable" on every reopen.
+The obvious fix - two columns on `won_vehicles` - would have overwritten history, and a destination is exactly the kind of thing that changes and drives a cost.
+
+**The finding that shaped the picker.** The destination has to be a value the trucking lookup can match, i.e. `trucking_rates.destination_port_normalized`. Reading the actual values
+showed that column is not fully normalized: `BATIMORE`, `PROVDIENCE`, `WILLMINGTON`, `MD-BALTIMORE`, `GA-RINCON`, and `MIAMI` beside `MIAMI PORT`. A plain "distinct ports" dropdown would have
+offered the typos as equals of the real ports. Fixing the importer is a decision about the canonical set (and touches raw-at-capture data), so it was logged (debt #66) rather than done here;
+the picker instead shows how many rates back each option, sorted most-evidenced first with the current yard's quotable ports marked. The real ports lead and the typo variants are visibly the
+one-rate entries at the bottom - the same "rank by evidence, never curate by hand" rule as the make vocabulary (`DECISIONS.md` §13).
+
+**Proven, including the abstention.** Trenton to Baltimore/container $400, New Jersey/container $275, Newark/roro $350, each matching SQL; Savannah/container, a real port that Trenton does not
+quote, abstained with "no current rate for this yard/port/method" - the case that would otherwise look like a bug in the lookup. Shipping now abstains for the real reason (no ocean-freight rate
+stored, debt #35) instead of "no destination selected".
+
+**A false alarm worth recording.** One guard test read "BUG: allowed" for editing the shipping method. The test had set `roro` on a row that was already `roro` - a no-op the trigger correctly does not
+treat as a change. Re-run with a genuine change (and note, and `set_at`), all were refused. Check that a failing test actually attempted the thing it claims before treating it as a defect.

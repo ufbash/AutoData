@@ -571,6 +571,8 @@ stage's pre-flight. It is the same miss that produced Prompt 32.
 | 15.9 | The **real winning bid is a separate, staff-entered, append-only record**, never written into `won_snapshot` and never derived from the sighting | LOCKED |
 | 15.10 | A winning-bid **replacement needs a note and keeps the earlier entry**; any entry is voided with a reason; nothing is edited or deleted | LOCKED |
 | 15.11 | Auction fees are priced at the **recorded winning bid** when one exists, and are **exact only when the bid method is recorded**; otherwise a range, as before | LOCKED |
+| 15.12 | A won vehicle's **destination is a saved, append-only history**, not an overwritten column and not a per-visit picker | LOCKED |
+| 15.13 | A destination must be one the **current rates can quote**; trucking and shipping **abstain** when none is saved rather than assuming a port | LOCKED |
 
 **Why 15.1, so it does not get "simplified" into an asset-level store later:** an asset is the physical car; a won vehicle is one client's
 purchase of it. The same asset legitimately appears in two clients' runs (and after Prompt 32's merges, more readily), and could be won for two
@@ -601,3 +603,9 @@ earlier entry is intended: the earlier one was superseded, not disproved.
 
 **Why 15.11:** bid fees differ by method (a proxy bid and a live bid are priced differently). Showing a midpoint or a range for a bid that is already won and whose method
 staff know would be a guess dressed as a figure (`PROJECT_CHARTER.md` §5.1); with the method recorded the fee is a lookup.
+
+**Why 15.12:** a destination legitimately changes (a client reroutes) and drives a cost, so "which port was chosen, by whom, and what it was before" has to stay answerable. The previous
+picker saved nothing, so trucking and shipping went back to "not calculable" every time the view was reopened.
+
+**Why 15.13:** a free-typed port could never match a rate and would look like a real destination that simply had no quote. Requiring an exact match to a quotable value keeps a destination
+meaningful; abstaining without one is `PROJECT_CHARTER.md` §5.1. (The rate data's own typos are a known gap, debt #66, mitigated by ranking options by rate count, not by curation.)

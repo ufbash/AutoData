@@ -791,3 +791,21 @@ current winning bid is the **latest non-voided** entry, so voiding a replacement
 **Consumers.** The bought-car view shows it beside the approved price and prices auction fees at it. `getAuctionFeeComponent` gained an optional `bidMethod`:
 absent (every other caller, and a won vehicle with no method recorded) it is byte-identical to before, a range across proxy and live; given, only that method's
 bracket applies and the figure is exact. Not on the tracking page.
+
+---
+
+## 23. The won vehicle's destination (migration 050)
+
+**`won_vehicle_destinations`:** `org_id`, `won_vehicle_id` (composite FK `(won_vehicle_id, org_id)`), `destination_port`, `shipping_method` (`'container'` | `'roro'`),
+`note`, `set_by`, `set_at`, and `voided_at`/`voided_by`/`void_reason` (CHECK: reason required). Nothing else in the schema held a destination.
+`destination_port` is `trucking_rates.destination_port_normalized` **exactly as stored**, because that is the string the trucking lookup matches on. That column still carries
+vendor typos (PLAN_TRACKER debt #66); the raw vendor string stays in `trucking_rates.destination_port_raw` (§5.8).
+
+**Append-only.** A trigger blocks any edit and any delete **even for the service role**; the only change is voiding a live row. The current destination is the **latest
+non-voided** entry (voiding it makes the previous one current), so it is a query, never a stored flag. RLS is select-only; the only writer is `won-vehicle-destination`
+(`set`, which requires the port+method to be quotable by an active `trucking_rates` row of the caller's org; `void`, which requires a reason).
+
+**`destination_options()`** (`SECURITY INVOKER`, so the caller's own RLS scopes it): every active `(port, method)` with `rate_count` and `yard_count`, most-evidenced first.
+
+**Consumers.** `WonVehicleCosts` computes trucking (`getInlandTruckingComponent`) and shipping (`getOceanFreightComponent`) from the saved destination; with none saved they abstain
+rather than assume a port. Not on the tracking page.

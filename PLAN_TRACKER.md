@@ -1448,8 +1448,8 @@ explicit placeholder in its place.
   the approved price, so fees were computed and labelled "at the approved price" (debt #60, **resolved the same day**, §4.25);
   (2) the snapshot lacks title type, yard, auction platform and lot number, so cost inputs are read
   from the source sighting, which `research-capture` updates in place on re-capture — labelled "as it
-  stands now" in the view, not frozen; (3) destination port/method is not stored on the won vehicle,
-  so trucking and shipping need it chosen in the view and the choice is not saved.
+  stands now" in the view, not frozen; (3) destination port/method was not stored on the won vehicle,
+  so trucking and shipping needed it chosen in the view and the choice was not saved (**resolved the same day**, §4.26).
 - **Stage 2 — extension run picker, vehicle first: BUILT, deploy verified, extension NOT exercised.**
   `vehicleHeadingFromBrief` moved from `ResearchRuns.tsx` to `supabase/functions/_shared/vehicleHeading.ts`
   (one definition; the website imports it, `list-active-runs` calls it). New response fields
@@ -1474,7 +1474,7 @@ explicit placeholder in its place.
 - **Stage 4 — documents:** this section, `SCHEMA.md` §18, `DECISIONS.md` §13, `docs/SOLVED.md` topic 33.
 
 **What remains of Phase D after this:** (Prompt 34 Stage 4, won-vehicle documents, was built 20 Sep 2026 — §4.23), Stage 5 (invoice + notification email through `_shared/email.ts`, test sends to Bashir
-only), Stage 6 (its docs); persisting the destination port. (Recording the real winning bid was built later the same day: §4.25.)
+only), Stage 6 (its docs); (Recording the real winning bid and persisting the destination port were built later the same day: §4.25, §4.26.)
 
 ---
 
@@ -1563,6 +1563,33 @@ Verified against the deployed endpoint with two synthetic won vehicles (all soft
 **Not done / limits.** The real Yaris has no winning bid recorded — the figure must come from Bashir (ideally with the uploaded invoice/receipt linked as evidence).
 USD only (all three platforms bid in USD). The destination port is still not stored on the won vehicle. A recorded bid is not cross-checked against the
 sighting's price (which can drift on re-capture) — by design, since the recorded figure exists precisely because the sighting is not reliable for this.
+
+### 4.26 Destination port persisted on the won vehicle — **DONE** (20 Sep 2026)
+
+Migration 050 (`won_vehicle_destinations`, `destination_options()`), Edge Function `won-vehicle-destination`, `WonVehicleDestination.tsx`; `WonVehicleCosts.tsx` now
+reads the saved destination instead of a transient picker that saved nothing. Details in `SCHEMA.md` §23 and `DECISIONS.md` §15.12-15.13.
+
+**Pre-flight:** nothing else held a destination (no column on `client_briefs`, `research_runs` or the intake form), so the won vehicle is its first home. The rate data
+carries vendor typos in `destination_port_normalized` (debt #66), so options are ranked by rate count. No `ocean_freight` rates exist (debt #35), so Shipping still abstains
+for every vehicle — but now for the honest reason ("no ocean freight rate stored for NEWARK/roro") rather than "no destination selected".
+
+**What it does.** Staff save a port + shipping method per won vehicle; it is an append-only history (who, when, optional note), the current destination is the latest
+non-voided entry, "Clear" needs a reason, no edit and no delete even for the service role. The port must be one the current rates can quote (exact match on the stored string),
+so a free-typed value can never become a destination. Trucking and shipping compute from it; the options are ranked by evidence with this yard's quotable ports marked.
+
+Verified against the deployed endpoint with two synthetic Copart-Trenton won vehicles (soft-deleted after; destinations voided and retained; the real Yaris untouched):
+- Trucking vs independent SQL, exact: Baltimore container **$400**, New Jersey container **$275**, Newark roro **$350**; **Savannah container** (not quoted from Trenton)
+  abstains with "no current rate for this yard/port/method" rather than guessing.
+- Rejected: an unknown port, a bad method, a lower-cased port (must match exactly), an empty port, an unknown vehicle, a soft-deleted vehicle, voiding without a reason, voiding twice.
+- History: four saves kept in order; voiding the latest made the previous one current again; the other vehicle saw none of them.
+- Database guards (uncommitted transaction, nothing persisted): edit port/method/note/`set_at`, hard delete (as service role), rewrite a voided row, blank void reason, the method
+  and blank-port CHECKs, wrong org for the vehicle — all refused. (One row first read "allowed" because my test set `roro` on a row already `roro`; a real change is refused.)
+- Logged out: `[]` on read, RLS denial on insert, 401 on the function.
+- UI: the saved destination survives a full reload with no picker click; saving from the panel flipped Trucking from "not calculable" to $400; options list this yard's ports first
+  and the typo variants (1 rate each) last.
+
+**Not done.** The real Yaris has no destination saved — that choice is Bashir's. Its yard is unmatched (an IAA yard labelled Copart), so trucking would abstain for it regardless
+(debt #61); shipping would resolve once ocean-freight rates exist. The destination is not on the tracking page (status only, `PROJECT_CHARTER.md` §7).
 
 ---
 
@@ -1893,3 +1920,4 @@ as evidence (public link renders the fix live).
 | 63 | Eight inline copies of the brief-reference string (`year-year Make Model` with `Any` fallbacks) (found 20 Sep 2026) | `ClientsList.tsx` ×3, `ResearchRuns.tsx` ×2, `ResearchRunDetail.tsx`, `researchService.ts:250`, plus the new shared `briefReference()`. Only `ResearchRuns.tsx`'s run card was switched to the shared one. Same divergent-definition shape as debts #3/#58 |
 | 64 | `mercedes` is a real make name in traded data that is not an alias for `MERCEDES-BENZ` (found 20 Sep 2026) | Tier 1 keys on exact/alias match, so those rows do not count toward Mercedes-Benz (it still reaches tier 1 through other rows). Also unmatched: `avatr` (not in the vocabulary, by design free text), `i` (junk brief text), `range rover` (a Land Rover model). Alias additions are Bashir's call — added by a human who looked, never inferred. **`mercedes` → `MERCEDES-BENZ` added 20 Sep 2026 (Bashir's call, after looking at the one row: a brief "Mercedes / E Class"); Mercedes-Benz's traded count went 31 → 32.** `avatr`, `i` and `range rover` deliberately still unaliased |
 | 65 | The make tier-2 list is 317 of 406 makes; the year probe cannot narrow it (found 20 Sep 2026) | See §4.22 Stage 3. Options for Bashir: rank tier 2 by model breadth (a column for the model count), hide specific makes with the existing flag, or leave it — every make stays searchable either way |
+| 66 | `trucking_rates.destination_port_normalized` still carries vendor typos (found 20 Sep 2026) | `BATIMORE` (2 rates), `PROVDIENCE` (3), `WILLMINGTON` (1), `MD-BALTIMORE` (1), `GA-RINCON` (1), and `MIAMI` beside `MIAMI PORT` are stored as "normalized" values alongside the correct `BALTIMORE`, `PROVIDENCE`, `WILMINGTON`. A destination saved as a typo variant would match only those few rates. Not corrected: `destination_port_raw` preserves what the vendor sent (§5.8) and fixing the importer's normalisation needs a decision about the canonical set. Mitigation shipped: `destination_options()` reports a rate count so the real ports lead and typo variants are visibly minor |
