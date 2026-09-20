@@ -8,7 +8,8 @@ import {
 import { matchSightingToYard, MatchResult, YardKey } from '../services/yardMatchingService';
 import { listPortsForYard, PortSummary } from '../services/truckingRatesService';
 import { getPaymentTier, PaymentTier, DEFAULT_PAYMENT_TIER } from '../services/orgSettingsService';
-import type { WonVehicle, WonVehicleContext } from '../services/wonVehicleService';
+import type { WonVehicle, WonVehicleContext, WonVehicleDestination } from '../services/wonVehicleService';
+import WonVehicleDestinationPanel from './WonVehicleDestination';
 
 // PROMPT 35 Stage 1 - per-component cost view for a bought car. Every figure comes from the
 // shared bidHeadroomService functions the run breakdown already uses; this file owns no fee
@@ -42,20 +43,20 @@ const Row: React.FC<{ label: string; component: CostComponent; note?: string }> 
   </div>
 );
 
-const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleContext; winningBidUsd: number | null; winningBidMethod: 'proxy' | 'live' | null; winningBidKey: string }> = ({ wonVehicle, context, winningBidUsd, winningBidMethod, winningBidKey }) => {
+const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleContext; winningBidUsd: number | null; winningBidMethod: 'proxy' | 'live' | null; winningBidKey: string; destination: WonVehicleDestination | null; destinations: WonVehicleDestination[]; onDestinationChanged: () => void }> = ({ wonVehicle, context, winningBidUsd, winningBidMethod, winningBidKey, destination, destinations, onDestinationChanged }) => {
   const snapshot = wonVehicle.won_snapshot as any;
   const sighting = context.sighting;
   const [tier, setTier] = useState<PaymentTier>(DEFAULT_PAYMENT_TIER);
   const [match, setMatch] = useState<MatchResult | null>(null);
   const [ports, setPorts] = useState<PortSummary[]>([]);
-  const [portKey, setPortKey] = useState('');
   const [fees, setFees] = useState<CostComponent | null>(null);
   const [trucking, setTrucking] = useState<CostComponent | null>(null);
   const [shipping, setShipping] = useState<CostComponent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const selectedPort = ports.find(p => `${p.destination_port_normalized}|${p.shipping_method}` === portKey) || null;
+  // Ports THIS yard can quote - only an annotation on the destination options; the destination itself is the saved one.
+  const quotedFromYard = new Set(ports.map(p => `${p.destination_port_normalized}|${p.shipping_method}`));
 
   const sightingForCosts = sighting ? {
     id: sighting.id,
@@ -125,10 +126,10 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
             bidMethod: winningBidUsd !== null ? winningBidMethod : null,
           }),
           getInlandTruckingComponent({
-            sighting: sightingForCosts, destinationPortNormalized: selectedPort?.destination_port_normalized ?? null,
-            shippingMethod: selectedPort?.shipping_method ?? null, orgId: wonVehicle.org_id,
+            sighting: sightingForCosts, destinationPortNormalized: destination?.destination_port ?? null,
+            shippingMethod: destination?.shipping_method ?? null, orgId: wonVehicle.org_id,
           }),
-          getOceanFreightComponent(wonVehicle.org_id, selectedPort?.shipping_method ?? null, selectedPort?.destination_port_normalized ?? null),
+          getOceanFreightComponent(wonVehicle.org_id, destination?.shipping_method ?? null, destination?.destination_port ?? null),
         ]);
         if (cancelled) return;
         setFees(f); setTrucking(tr); setShipping(sh);
@@ -138,7 +139,7 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, tier, portKey, wonVehicle.id, winningBidKey]);
+  }, [loading, tier, destination?.id, wonVehicle.id, winningBidKey]);
 
   if (!sighting) {
     return <div className="text-xs text-gray-500">The source listing's capture is no longer available, so cost inputs (yard, title, platform) cannot be resolved.</div>;
@@ -166,26 +167,12 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
 
       <Row label="Auction fees" component={fees ?? { status: 'unavailable', amountUsd: null, reason: 'computing…', detail: '', sourceRows: [] }} />
 
-      <div className="py-2 border-b border-gray-100">
-        <div className="text-xs font-bold text-gray-600 mb-1">Destination (needed for trucking and shipping)</div>
-        {match && (
-          <div className="text-[10px] text-gray-500 mb-1">
-            Yard match: <strong>{match.status}</strong> — {match.reason}
-          </div>
-        )}
-        {ports.length > 0 ? (
-          <select value={portKey} onChange={e => setPortKey(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1">
-            <option value="">Choose destination port / method…</option>
-            {ports.map(p => {
-              const k = `${p.destination_port_normalized}|${p.shipping_method}`;
-              return <option key={k} value={k}>{p.destination_port_normalized} ({p.shipping_method})</option>;
-            })}
-          </select>
-        ) : (
-          <div className="text-[10px] text-gray-400">No quotable ports for this yard.</div>
-        )}
-        <div className="text-[10px] text-gray-400 mt-1">The destination is not stored on the won vehicle yet, so this choice is not saved.</div>
-      </div>
+      {match && (
+        <div className="text-[10px] text-gray-500 py-1">
+          Yard match: <strong>{match.status}</strong> — {match.reason}
+        </div>
+      )}
+      <WonVehicleDestinationPanel wonVehicle={wonVehicle} destinations={destinations} quotedFromYard={quotedFromYard} onChanged={onDestinationChanged} />
 
       <Row label="Trucking" component={trucking ?? { status: 'unavailable', amountUsd: null, reason: 'computing…', detail: '', sourceRows: [] }} />
       <Row label="Shipping" component={shipping ?? { status: 'unavailable', amountUsd: null, reason: 'computing…', detail: '', sourceRows: [] }} />

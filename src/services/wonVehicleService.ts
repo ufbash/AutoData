@@ -549,3 +549,63 @@ export const voidWinningBid = async (bidId: string, reason: string): Promise<voi
   const { ok, data } = await callFunction('won-vehicle-winning-bid', { mode: 'void', bidId, reason });
   if (!ok || data.error) throw new Error(data.error || 'Could not void the winning bid');
 };
+
+// --- Destination port, persisted on the won vehicle ---
+//
+// Append-only history (who chose which port, when); the current destination is the latest
+// non-voided entry. destination_port is trucking_rates.destination_port_normalized exactly as
+// stored - the string the trucking lookup matches on. Writes go through won-vehicle-destination.
+
+export type ShippingMethod = 'container' | 'roro';
+
+export interface WonVehicleDestination {
+  id: string;
+  won_vehicle_id: string;
+  destination_port: string;
+  shipping_method: ShippingMethod;
+  note: string | null;
+  set_by: string;
+  set_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+export const listDestinations = async (wonVehicleId: string): Promise<WonVehicleDestination[]> => {
+  const { data, error } = await supabase
+    .from('won_vehicle_destinations')
+    .select('*')
+    .eq('won_vehicle_id', wonVehicleId)
+    .order('set_at', { ascending: false });
+  if (error) throw new Error(`Failed to load destinations: ${error.message}`);
+  return (data || []) as WonVehicleDestination[];
+};
+
+/** Rows must be newest first, as listDestinations returns them. */
+export const currentDestination = (rows: WonVehicleDestination[]): WonVehicleDestination | null =>
+  rows.find(r => !r.voided_at) ?? null;
+
+export interface DestinationOption {
+  destination_port: string;
+  shipping_method: ShippingMethod;
+  rate_count: number;
+  yard_count: number;
+}
+
+export const listDestinationOptions = async (): Promise<DestinationOption[]> => {
+  const { data, error } = await supabase.rpc('destination_options');
+  if (error) throw new Error(`Failed to load destinations: ${error.message}`);
+  return ((data || []) as any[]).map(r => ({ ...r, rate_count: Number(r.rate_count), yard_count: Number(r.yard_count) }));
+};
+
+export const setDestination = async (input: {
+  wonVehicleId: string; port: string; method: ShippingMethod; note?: string;
+}): Promise<WonVehicleDestination> => {
+  const { ok, data } = await callFunction('won-vehicle-destination', { mode: 'set', ...input });
+  if (!ok || data.error) throw new Error(data.error || 'Could not save the destination');
+  return data.destination;
+};
+
+export const voidDestination = async (destinationId: string, reason: string): Promise<void> => {
+  const { ok, data } = await callFunction('won-vehicle-destination', { mode: 'void', destinationId, reason });
+  if (!ok || data.error) throw new Error(data.error || 'Could not void the destination');
+};

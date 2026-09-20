@@ -4,7 +4,7 @@ import {
   WonVehicle, WonVehicleStatusHistoryRow, WonVehicleStatus, WonVehicleContext,
   STATUS_SEQUENCE, STATUS_LABELS,
   listStatusHistory, advanceStatus, correctStatus, generateTrackingLink, revokeTrackingLink,
-  getWonVehicleContext, signedImagePaths, listWinningBids, currentWinningBid, WinningBid,
+  getWonVehicleContext, signedImagePaths, listWinningBids, currentWinningBid, WinningBid, listDestinations, currentDestination, WonVehicleDestination,
 } from '../services/wonVehicleService';
 import WonVehicleCosts from './WonVehicleCosts';
 import WonVehicleDocuments from './WonVehicleDocuments';
@@ -50,6 +50,9 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
   const [winningBids, setWinningBids] = useState<WinningBid[]>([]);
   const loadWinningBids = () => listWinningBids(wonVehicle.id).then(setWinningBids).catch(e => setError(e?.message || 'Failed to load the winning bid.'));
   useEffect(() => { void loadWinningBids(); }, [wonVehicle.id]);
+  const [destinations, setDestinations] = useState<WonVehicleDestination[]>([]);
+  const loadDestinations = () => listDestinations(wonVehicle.id).then(setDestinations).catch(e => setError(e?.message || 'Failed to load the destination.'));
+  useEffect(() => { void loadDestinations(); }, [wonVehicle.id]);
   const [images, setImages] = useState<string[]>([]);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
 
@@ -226,7 +229,7 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
 
               <div>
                 <SectionTitle>Costs</SectionTitle>
-                {context ? <WonVehicleCosts wonVehicle={wonVehicle} context={context} winningBidUsd={currentWinningBid(winningBids)?.amount_usd ?? null} winningBidMethod={currentWinningBid(winningBids)?.bid_method ?? null} winningBidKey={currentWinningBid(winningBids)?.id ?? 'none'} /> : <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>}
+                {context ? <WonVehicleCosts wonVehicle={wonVehicle} context={context} winningBidUsd={currentWinningBid(winningBids)?.amount_usd ?? null} winningBidMethod={currentWinningBid(winningBids)?.bid_method ?? null} winningBidKey={currentWinningBid(winningBids)?.id ?? 'none'} destination={currentDestination(destinations)} destinations={destinations} onDestinationChanged={() => void loadDestinations()} /> : <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>}
               </div>
 
               <div>
