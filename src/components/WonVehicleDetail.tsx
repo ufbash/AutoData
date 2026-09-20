@@ -8,6 +8,8 @@ import {
 } from '../services/wonVehicleService';
 import WonVehicleCosts from './WonVehicleCosts';
 import WonVehicleDocuments from './WonVehicleDocuments';
+import WonVehicleInvoices from './WonVehicleInvoices';
+import WonVehicleNotify from './WonVehicleNotify';
 import { X, Loader2, CheckCircle2, Circle, ExternalLink, Copy, AlertTriangle, ImageOff } from 'lucide-react';
 
 // PROMPT 34 Stage 3 - the staff-side status ladder and correction UI. Forward advance is any
@@ -296,6 +298,11 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
               </div>
 
               <div>
+                <SectionTitle>Invoice</SectionTitle>
+                <WonVehicleInvoices wonVehicle={wonVehicle} />
+              </div>
+
+              <div>
                 <SectionTitle>Provenance</SectionTitle>
                 <div className="text-xs space-y-1 text-gray-600" data-testid="provenance">
                   <div>
@@ -332,6 +339,10 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
                 ) : (
                   <button onClick={handleGenerateLink} disabled={busy} className="px-3 py-2 bg-[#403f4c] text-white rounded font-bold text-sm disabled:opacity-50">Generate tracking link</button>
                 )}
+              </div>
+
+              <div>
+                <WonVehicleNotify wonVehicle={wonVehicle} refreshKey={trackingUrl ?? 'none'} />
               </div>
             </>
           )}

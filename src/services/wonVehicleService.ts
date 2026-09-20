@@ -372,3 +372,134 @@ export const listAssetPairedCostDocuments = async (assetId: string): Promise<Pai
   if (error) throw new Error(`Failed to list paired cost documents: ${error.message}`);
   return (data || []) as PairedCostDocument[];
 };
+
+// --- PROMPT 34 Stage 5 - invoice issuance record and the "won" notification ---
+//
+// An invoice is a PDF uploaded to the vehicle's document store (type 'invoice'); an issuance
+// records that it was issued. Amount and currency are staff-entered, never derived. Both are behind
+// auth and never appear on the tracking page. Reads go through RLS; writes through Edge Functions.
+
+export type InvoiceChannel = 'email' | 'whatsapp' | 'imessage' | 'other';
+export type InvoiceCurrency = 'USD' | 'NGN' | 'EUR' | 'GBP';
+
+export const INVOICE_CHANNELS: { value: InvoiceChannel; label: string }[] = [
+  { value: 'email', label: 'Email' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'imessage', label: 'iMessage' },
+  { value: 'other', label: 'Other' },
+];
+export const INVOICE_CURRENCIES: InvoiceCurrency[] = ['USD', 'NGN', 'EUR', 'GBP'];
+
+export interface InvoiceIssuance {
+  id: string;
+  won_vehicle_id: string;
+  document_id: string;
+  invoice_number: string | null;
+  amount: number;
+  currency: InvoiceCurrency;
+  channel: InvoiceChannel;
+  recipient: string;
+  issued_at: string;
+  issued_by: string;
+  recorded_at: string;
+  notes: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+export const listInvoiceIssuances = async (wonVehicleId: string): Promise<InvoiceIssuance[]> => {
+  const { data, error } = await supabase
+    .from('won_vehicle_invoice_issuances')
+    .select('*')
+    .eq('won_vehicle_id', wonVehicleId)
+    .order('issued_at', { ascending: false });
+  if (error) throw new Error(`Failed to list invoice issuances: ${error.message}`);
+  return (data || []) as InvoiceIssuance[];
+};
+
+export interface IssueInvoiceInput {
+  wonVehicleId: string;
+  documentId: string;
+  invoiceNumber?: string;
+  amount: number;
+  currency: InvoiceCurrency;
+  channel: InvoiceChannel;
+  recipient: string;
+  issuedAt?: string;
+  notes?: string;
+}
+
+const callFunction = async (name: string, body: unknown): Promise<any> => {
+  const token = await getAuthToken();
+  const res = await fetch(`${projectUrl()}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  return { ok: res.ok, status: res.status, data };
+};
+
+export const issueInvoice = async (input: IssueInvoiceInput): Promise<InvoiceIssuance> => {
+  const { ok, data } = await callFunction('won-vehicle-invoices', { mode: 'issue', ...input });
+  if (!ok || data.error) throw new Error(data.error || 'Could not record the issuance');
+  return data.issuance;
+};
+
+export const voidInvoiceIssuance = async (issuanceId: string, reason: string): Promise<void> => {
+  const { ok, data } = await callFunction('won-vehicle-invoices', { mode: 'void', issuanceId, reason });
+  if (!ok || data.error) throw new Error(data.error || 'Could not void the issuance');
+};
+
+export interface NotificationPreview {
+  to: string | null;
+  subject: string;
+  text: string;
+  trackingUrl: string | null;
+  problems: string[];
+}
+
+export const previewNotification = async (wonVehicleId: string): Promise<NotificationPreview> => {
+  const { ok, data } = await callFunction('won-vehicle-notify', { mode: 'preview', wonVehicleId });
+  if (!ok || data.error) throw new Error(data.error || 'Could not render the notification');
+  return data;
+};
+
+export interface NotificationSendResult { sent: boolean; to: string | null; error?: string }
+
+export const sendNotification = async (
+  wonVehicleId: string,
+  mode: 'test' | 'send',
+  testRecipient?: string
+): Promise<NotificationSendResult> => {
+  const { data } = await callFunction('won-vehicle-notify', { mode, wonVehicleId, ...(testRecipient ? { testRecipient } : {}) });
+  // A failed send is a normal, reported outcome (already recorded in email_log), not a thrown error.
+  return { sent: data.sent === true, to: data.to ?? null, error: data.error };
+};
+
+export interface NotificationLogRow {
+  id: string;
+  purpose: string;
+  recipient_email: string;
+  status: 'sent' | 'failed';
+  error_text: string | null;
+  created_at: string;
+}
+
+export const listNotificationLog = async (wonVehicleId: string): Promise<NotificationLogRow[]> => {
+  const { data, error } = await supabase
+    .from('email_log')
+    .select('id, purpose, recipient_email, status, error_text, created_at')
+    .eq('related_table', 'won_vehicles')
+    .eq('related_id', wonVehicleId)
+    .order('created_at', { ascending: false })
+    .limit(10);
+  if (error) throw new Error(`Failed to load the notification log: ${error.message}`);
+  return (data || []) as NotificationLogRow[];
+};
+
+export const getClientContact = async (clientId: string): Promise<{ full_name: string; email: string | null } | null> => {
+  const { data, error } = await supabase.from('clients').select('full_name, email').eq('id', clientId).maybeSingle();
+  if (error) throw new Error(`Failed to load the client: ${error.message}`);
+  return data;
+};
