@@ -118,6 +118,9 @@ export interface AuctionFeeInput {
   orgId: string;
   memberAccount?: string; // defaults to the confirmed default account below
   paymentTier?: PaymentTier; // PROMPT 29 Stage 4 - defaults to DEFAULT_PAYMENT_TIER below
+  // How the winning bid was placed, when known (a won vehicle's recorded bid method). Absent for
+  // every listing that has not been won - the fee then stays a range across both methods.
+  bidMethod?: 'proxy' | 'live' | null;
 }
 
 // CORRECTED (see PLAN_TRACKER.md debt) - the default is Caplimo's OWN Copart account, not
@@ -186,7 +189,8 @@ function auctionFeeComponentFromRows(
   memberAccount: string,
   titleStatus: 'clean' | 'non_clean',
   rows: AuctionFeeRows,
-  paymentTier: PaymentTier
+  paymentTier: PaymentTier,
+  bidMethod: 'proxy' | 'live' | null = null
 ): CostComponent {
   const buyerBracket = findBracket(rows.buyerFeeRows, priceUsd);
   if (!buyerBracket) {
@@ -199,8 +203,19 @@ function auctionFeeComponentFromRows(
   // Bid method (proxy vs. live) for a future bid on an active listing is genuinely unknown
   // ahead of time - shown as a range with both real figures, never collapsed into one guessed
   // number (PROJECT_CHARTER.md S5.1: show the underlying figures).
-  const bidFeeLow = proxyBracket && liveBracket ? Math.min(feeForBracket(proxyBracket, priceUsd), feeForBracket(liveBracket, priceUsd)) : null;
-  const bidFeeHigh = proxyBracket && liveBracket ? Math.max(feeForBracket(proxyBracket, priceUsd), feeForBracket(liveBracket, priceUsd)) : null;
+  //
+  // PROMPT 35 follow-up (debt #60): for a WON vehicle, staff can record how the winning bid was
+  // placed. When bidMethod is given, only that method's bracket applies and the figure is exact,
+  // not a range; when it is absent (every other caller, and a won vehicle with no method recorded)
+  // this is unchanged.
+  const methodKnown = bidMethod === 'proxy' || bidMethod === 'live';
+  const knownBracket = bidMethod === 'proxy' ? proxyBracket : bidMethod === 'live' ? liveBracket : null;
+  const bidFeeLow = methodKnown
+    ? (knownBracket ? feeForBracket(knownBracket, priceUsd) : null)
+    : (proxyBracket && liveBracket ? Math.min(feeForBracket(proxyBracket, priceUsd), feeForBracket(liveBracket, priceUsd)) : null);
+  const bidFeeHigh = methodKnown
+    ? bidFeeLow
+    : (proxyBracket && liveBracket ? Math.max(feeForBracket(proxyBracket, priceUsd), feeForBracket(liveBracket, priceUsd)) : null);
 
   const buyerFeeAmount = feeForBracket(buyerBracket, priceUsd);
   const bidFeeMid = bidFeeLow !== null && bidFeeHigh !== null ? (bidFeeLow + bidFeeHigh) / 2 : 0;
@@ -210,11 +225,13 @@ function auctionFeeComponentFromRows(
     { label: `Buyer fee (${memberAccount}, ${titleStatus}, ${paymentTier})`, source: buyerBracket.source, effectiveFrom: buyerBracket.effective_from },
     ...rows.flatFees.map(f => ({ label: f.label, source: f.source, effectiveFrom: f.effective_from })),
   ];
-  if (proxyBracket) sourceRows.push({ label: 'Bid fee (proxy)', source: proxyBracket.source, effectiveFrom: proxyBracket.effective_from });
-  if (liveBracket) sourceRows.push({ label: 'Bid fee (live)', source: liveBracket.source, effectiveFrom: liveBracket.effective_from });
+  if (proxyBracket && bidMethod !== 'live') sourceRows.push({ label: 'Bid fee (proxy)', source: proxyBracket.source, effectiveFrom: proxyBracket.effective_from });
+  if (liveBracket && bidMethod !== 'proxy') sourceRows.push({ label: 'Bid fee (live)', source: liveBracket.source, effectiveFrom: liveBracket.effective_from });
 
   const bidFeeNote = bidFeeLow !== null && bidFeeHigh !== null
-    ? (bidFeeLow === bidFeeHigh ? `$${bidFeeLow.toFixed(2)}` : `$${bidFeeLow.toFixed(2)}-$${bidFeeHigh.toFixed(2)} depending on bid method (not yet known)`)
+    ? (methodKnown
+      ? `$${bidFeeLow.toFixed(2)} (${bidMethod} bid)`
+      : (bidFeeLow === bidFeeHigh ? `$${bidFeeLow.toFixed(2)}` : `$${bidFeeLow.toFixed(2)}-$${bidFeeHigh.toFixed(2)} depending on bid method (not yet known)`))
     : 'not available';
 
   return {
@@ -255,7 +272,7 @@ export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<Co
   const memberAccount = input.memberAccount || DEFAULT_MEMBER_ACCOUNT;
   const paymentTier = input.paymentTier ?? DEFAULT_PAYMENT_TIER;
   const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus, paymentTier);
-  return auctionFeeComponentFromRows(input.referencePriceUsd, memberAccount, titleStatus, rows, paymentTier);
+  return auctionFeeComponentFromRows(input.referencePriceUsd, memberAccount, titleStatus, rows, paymentTier, input.bidMethod ?? null);
 }
 
 export interface InlandTruckingInput {

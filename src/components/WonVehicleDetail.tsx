@@ -4,12 +4,13 @@ import {
   WonVehicle, WonVehicleStatusHistoryRow, WonVehicleStatus, WonVehicleContext,
   STATUS_SEQUENCE, STATUS_LABELS,
   listStatusHistory, advanceStatus, correctStatus, generateTrackingLink, revokeTrackingLink,
-  getWonVehicleContext, signedImagePaths,
+  getWonVehicleContext, signedImagePaths, listWinningBids, currentWinningBid, WinningBid,
 } from '../services/wonVehicleService';
 import WonVehicleCosts from './WonVehicleCosts';
 import WonVehicleDocuments from './WonVehicleDocuments';
 import WonVehicleInvoices from './WonVehicleInvoices';
 import WonVehicleNotify from './WonVehicleNotify';
+import WonVehicleWinningBid from './WonVehicleWinningBid';
 import { X, Loader2, CheckCircle2, Circle, ExternalLink, Copy, AlertTriangle, ImageOff } from 'lucide-react';
 
 // PROMPT 34 Stage 3 - the staff-side status ladder and correction UI. Forward advance is any
@@ -46,6 +47,9 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
   const [correctionReason, setCorrectionReason] = useState('');
   const [trackingUrl, setTrackingUrl] = useState<string | null>(null);
   const [context, setContext] = useState<WonVehicleContext | null>(null);
+  const [winningBids, setWinningBids] = useState<WinningBid[]>([]);
+  const loadWinningBids = () => listWinningBids(wonVehicle.id).then(setWinningBids).catch(e => setError(e?.message || 'Failed to load the winning bid.'));
+  useEffect(() => { void loadWinningBids(); }, [wonVehicle.id]);
   const [images, setImages] = useState<string[]>([]);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
 
@@ -215,13 +219,14 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
                   <Field label="Sale date" value={snapshot?.sale_date} />
                 </div>
                 <p className="text-[10px] text-gray-400 mt-2">
-                  Frozen at approval — these figures do not change if the listing is re-captured. The final winning bid is not recorded on the won vehicle.
+                  Frozen at approval — these figures do not change if the listing is re-captured. The winning bid below is a separate entry, made by staff after the auction.
                 </p>
+                <WonVehicleWinningBid wonVehicle={wonVehicle} bids={winningBids} onChanged={() => void loadWinningBids()} />
               </div>
 
               <div>
                 <SectionTitle>Costs</SectionTitle>
-                {context ? <WonVehicleCosts wonVehicle={wonVehicle} context={context} /> : <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>}
+                {context ? <WonVehicleCosts wonVehicle={wonVehicle} context={context} winningBidUsd={currentWinningBid(winningBids)?.amount_usd ?? null} winningBidMethod={currentWinningBid(winningBids)?.bid_method ?? null} winningBidKey={currentWinningBid(winningBids)?.id ?? 'none'} /> : <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>}
               </div>
 
               <div>

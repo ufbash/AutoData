@@ -42,7 +42,7 @@ const Row: React.FC<{ label: string; component: CostComponent; note?: string }> 
   </div>
 );
 
-const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleContext }> = ({ wonVehicle, context }) => {
+const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleContext; winningBidUsd: number | null; winningBidMethod: 'proxy' | 'live' | null; winningBidKey: string }> = ({ wonVehicle, context, winningBidUsd, winningBidMethod, winningBidKey }) => {
   const snapshot = wonVehicle.won_snapshot as any;
   const sighting = context.sighting;
   const [tier, setTier] = useState<PaymentTier>(DEFAULT_PAYMENT_TIER);
@@ -67,7 +67,10 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
   // Price basis: the FROZEN approved price. Non-USD prices are not converted here - the snapshot
   // does not carry a frozen USD figure for them, and re-deriving one from today's FX rate would
   // undo the freeze.
-  const priceUsd: number | null = snapshot?.listed_currency === 'USD' && typeof snapshot?.display_price === 'number' ? snapshot.display_price : null;
+  // Debt #60: once staff have recorded the real winning bid, fees are computed at THAT; until then
+  // at the frozen approved price, and the label says which.
+  const approvedPriceUsd: number | null = snapshot?.listed_currency === 'USD' && typeof snapshot?.display_price === 'number' ? snapshot.display_price : null;
+  const priceUsd: number | null = winningBidUsd ?? approvedPriceUsd;
   const priceUnavailableDetail = snapshot?.listed_currency && snapshot.listed_currency !== 'USD'
     ? `approved price is in ${snapshot.listed_currency}; the snapshot holds no frozen USD figure, so none is derived from today's rate`
     : 'the frozen snapshot holds no approved price';
@@ -118,6 +121,8 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
           getAuctionFeeComponent({
             sighting: sightingForCosts, titleType: sighting!.title_type, referencePriceUsd: priceUsd,
             referencePriceUnavailableDetail: priceUnavailableDetail, orgId: wonVehicle.org_id, paymentTier: tier,
+            // Only meaningful with a recorded winning bid; the approved-price fallback stays a range.
+            bidMethod: winningBidUsd !== null ? winningBidMethod : null,
           }),
           getInlandTruckingComponent({
             sighting: sightingForCosts, destinationPortNormalized: selectedPort?.destination_port_normalized ?? null,
@@ -133,7 +138,7 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, tier, portKey, wonVehicle.id]);
+  }, [loading, tier, portKey, wonVehicle.id, winningBidKey]);
 
   if (!sighting) {
     return <div className="text-xs text-gray-500">The source listing's capture is no longer available, so cost inputs (yard, title, platform) cannot be resolved.</div>;
@@ -153,7 +158,9 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
 
       <div className="text-[10px] text-gray-500 mb-2 bg-gray-50 rounded p-2">
         Fees priced under <strong>{DEFAULT_MEMBER_ACCOUNT}</strong>, <strong>{tier === 'secured' ? 'Secured' : 'Unsecured'}</strong> schedule
-        (org setting), at the <strong>approved price</strong>{priceUsd !== null ? ` of ${money(priceUsd)}` : ''} — the final winning bid is not recorded.
+        (org setting), {winningBidUsd !== null
+          ? <>at the <strong>recorded winning bid</strong> of {money(winningBidUsd)}</>
+          : <>at the <strong>approved price</strong>{priceUsd !== null ? ` of ${money(priceUsd)}` : ''} — no winning bid has been recorded yet</>}.
         Yard, title and platform are read from the captured listing as it stands now.
       </div>
 

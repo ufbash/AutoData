@@ -503,3 +503,49 @@ export const getClientContact = async (clientId: string): Promise<{ full_name: s
   if (error) throw new Error(`Failed to load the client: ${error.message}`);
   return data;
 };
+
+// --- Debt #60 - the real winning bid ---
+//
+// A separate, append-only, staff-entered record (never written into won_snapshot, which freezes
+// what the client approved). USD only. The current winning bid is the latest non-voided entry.
+// Writes go through the won-vehicle-winning-bid Edge Function; reads through RLS.
+
+export interface WinningBid {
+  id: string;
+  won_vehicle_id: string;
+  amount_usd: number;
+  bid_method: 'proxy' | 'live' | null;
+  note: string | null;
+  evidence_document_id: string | null;
+  recorded_by: string;
+  recorded_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+export const listWinningBids = async (wonVehicleId: string): Promise<WinningBid[]> => {
+  const { data, error } = await supabase
+    .from('won_vehicle_winning_bids')
+    .select('*')
+    .eq('won_vehicle_id', wonVehicleId)
+    .order('recorded_at', { ascending: false });
+  if (error) throw new Error(`Failed to load winning bids: ${error.message}`);
+  return ((data || []) as any[]).map(r => ({ ...r, amount_usd: Number(r.amount_usd) })) as WinningBid[];
+};
+
+/** Rows must be ordered newest first, as listWinningBids returns them. */
+export const currentWinningBid = (bids: WinningBid[]): WinningBid | null =>
+  bids.find(b => !b.voided_at) ?? null;
+
+export const recordWinningBid = async (input: {
+  wonVehicleId: string; amountUsd: number; bidMethod?: 'proxy' | 'live'; note?: string; evidenceDocumentId?: string;
+}): Promise<WinningBid> => {
+  const { ok, data } = await callFunction('won-vehicle-winning-bid', { mode: 'record', ...input });
+  if (!ok || data.error) throw new Error(data.error || 'Could not record the winning bid');
+  return data.winningBid;
+};
+
+export const voidWinningBid = async (bidId: string, reason: string): Promise<void> => {
+  const { ok, data } = await callFunction('won-vehicle-winning-bid', { mode: 'void', bidId, reason });
+  if (!ok || data.error) throw new Error(data.error || 'Could not void the winning bid');
+};
