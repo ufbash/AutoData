@@ -250,3 +250,125 @@ export const getWonVehicleThumbnails = async (wvs: WonVehicle[]): Promise<Record
   });
   return result;
 };
+
+// --- PROMPT 34 Stage 4 - documents anchored to the won vehicle ---
+//
+// Reads go through RLS (org members and superadmins only); every write goes through the
+// won-vehicle-documents Edge Function, the only path that can create or soft-delete a document.
+// Nothing here is ever exposed on the tracking page or behind a share token.
+
+export type WonVehicleDocumentType =
+  | 'invoice' | 'receipt' | 'shipping_document' | 'bill_of_lading' | 'title' | 'assessment_notice' | 'other';
+
+export const DOCUMENT_TYPES: { value: WonVehicleDocumentType; label: string }[] = [
+  { value: 'invoice', label: 'Invoice' },
+  { value: 'receipt', label: 'Receipt' },
+  { value: 'shipping_document', label: 'Shipping document' },
+  { value: 'bill_of_lading', label: 'Bill of lading' },
+  { value: 'title', label: 'Title' },
+  { value: 'assessment_notice', label: 'Assessment notice' },
+  { value: 'other', label: 'Other' },
+];
+
+export const DOCUMENT_ACCEPT = 'application/pdf,image/png,image/jpeg,image/webp';
+export const DOCUMENT_MAX_BYTES = 8 * 1024 * 1024;
+
+export interface WonVehicleDocument {
+  id: string;
+  org_id: string;
+  won_vehicle_id: string;
+  document_type: WonVehicleDocumentType;
+  storage_path: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  uploaded_by: string;
+  uploaded_at: string;
+  deleted_at: string | null;
+}
+
+export const listWonVehicleDocuments = async (
+  wonVehicleId: string,
+  documentType?: WonVehicleDocumentType
+): Promise<WonVehicleDocument[]> => {
+  let q = supabase
+    .from('won_vehicle_documents')
+    .select('*')
+    .eq('won_vehicle_id', wonVehicleId)
+    .is('deleted_at', null)
+    .order('uploaded_at', { ascending: false });
+  if (documentType) q = q.eq('document_type', documentType);
+  const { data, error } = await q;
+  if (error) throw new Error(`Failed to list documents: ${error.message}`);
+  return (data || []) as WonVehicleDocument[];
+};
+
+const fileToBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+    reader.onerror = () => reject(new Error('Could not read the file'));
+    reader.readAsDataURL(file);
+  });
+
+export const uploadWonVehicleDocument = async (
+  wonVehicleId: string,
+  documentType: WonVehicleDocumentType,
+  file: File
+): Promise<WonVehicleDocument> => {
+  if (file.size > DOCUMENT_MAX_BYTES) throw new Error('The file is larger than 8 MB.');
+  const token = await getAuthToken();
+  const res = await fetch(`${projectUrl()}/functions/v1/won-vehicle-documents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({
+      mode: 'upload', wonVehicleId, documentType,
+      filename: file.name, mimeType: file.type, fileBase64: await fileToBase64(file),
+    }),
+  });
+  const body = await res.json();
+  if (!res.ok || body.error) throw new Error(body.error || 'Upload failed');
+  return body.document;
+};
+
+export const deleteWonVehicleDocument = async (documentId: string): Promise<void> => {
+  const token = await getAuthToken();
+  const res = await fetch(`${projectUrl()}/functions/v1/won-vehicle-documents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ mode: 'delete', documentId }),
+  });
+  const body = await res.json();
+  if (!res.ok || body.error) throw new Error(body.error || 'Delete failed');
+};
+
+// Short-lived signed URL, created under the caller's own session - the bucket's staff-select
+// policy decides whether they may have one at all.
+export const getWonVehicleDocumentUrl = async (storagePath: string): Promise<string | null> => {
+  const { data, error } = await supabase.storage
+    .from('won-vehicle-documents')
+    .createSignedUrl(storagePath, 300);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+};
+
+// The seam with cost_document_extractions (SCHEMA.md): a rate-extraction document already paired
+// to this car's asset (Prompt 29 Stage 6) is read through THAT pairing - no second link is stored.
+// It is paired to the car, not to this client's purchase, so the view labels it as such.
+export interface PairedCostDocument {
+  id: string;
+  document_type: string;
+  original_filename: string | null;
+  storage_path: string;
+  asset_paired_at: string | null;
+}
+
+export const listAssetPairedCostDocuments = async (assetId: string): Promise<PairedCostDocument[]> => {
+  const { data, error } = await supabase
+    .from('cost_document_extractions')
+    .select('id, document_type, original_filename, storage_path, asset_paired_at')
+    .eq('asset_id', assetId)
+    .order('asset_paired_at', { ascending: false });
+  if (error) throw new Error(`Failed to list paired cost documents: ${error.message}`);
+  return (data || []) as PairedCostDocument[];
+};

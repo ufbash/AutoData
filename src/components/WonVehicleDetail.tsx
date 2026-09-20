@@ -7,6 +7,7 @@ import {
   getWonVehicleContext, signedImagePaths,
 } from '../services/wonVehicleService';
 import WonVehicleCosts from './WonVehicleCosts';
+import WonVehicleDocuments from './WonVehicleDocuments';
 import { X, Loader2, CheckCircle2, Circle, ExternalLink, Copy, AlertTriangle, ImageOff } from 'lucide-react';
 
 // PROMPT 34 Stage 3 - the staff-side status ladder and correction UI. Forward advance is any
@@ -291,9 +292,7 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
 
               <div>
                 <SectionTitle>Documents</SectionTitle>
-                <div className="text-xs text-gray-500 bg-gray-50 rounded p-3" data-testid="documents-placeholder">
-                  Documents are not available yet — the won-vehicle document store (Prompt 34 Stage 4) has not been built. Anything attached here will be staff-only.
-                </div>
+                <WonVehicleDocuments wonVehicle={wonVehicle} />
               </div>
 
               <div>
