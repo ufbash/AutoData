@@ -200,7 +200,8 @@ export const findRunIdsByVin = async (orgId: string, vin: string): Promise<strin
     .from('assets')
     .select('id')
     .eq('org_id', orgId)
-    .eq('vin', vin);
+    .eq('vin', vin)
+    .is('deleted_at', null);
   if (assetError) throw new Error(`VIN lookup failed: ${assetError.message}`);
   const assetIds = (assetRows || []).map((a: any) => a.id);
   if (assetIds.length === 0) return [];
@@ -1088,15 +1089,18 @@ export async function listAvailableSightings(
       sale_confirmed,
       current_bid_usd,
       raw_payload,
-      assets (
+      assets!inner (
         id,
         make,
         model,
         trim,
-        year
+        year,
+        deleted_at
       )
     `)
     .eq('org_id', orgId)
+    // Sightings of a soft-deleted asset (Prompt 35 follow-up, migration 046) are not offered.
+    .is('assets.deleted_at', null)
     .order('captured_at', { ascending: false });
 
   if (error) {

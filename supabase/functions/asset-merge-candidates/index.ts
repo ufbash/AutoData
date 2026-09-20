@@ -89,7 +89,8 @@ serve(async (req: Request) => {
 
     const { data: assets, error: assetsError } = await supabase
       .from('assets')
-      .select('id, org_id, vin, make, model, year, trim, exterior_color, interior_color, origin_status, fingerprint_hash, body_style, cylinders, engine_type, transmission, fuel, drivetrain, horsepower, status, historical_decay_timer_days, first_seen_at, last_seen_at, created_at, updated_at, merged_into_asset_id');
+      .select('id, org_id, vin, make, model, year, trim, exterior_color, interior_color, origin_status, fingerprint_hash, body_style, cylinders, engine_type, transmission, fuel, drivetrain, horsepower, status, historical_decay_timer_days, first_seen_at, last_seen_at, created_at, updated_at, merged_into_asset_id')
+      .is('deleted_at', null);
     if (assetsError) throw assetsError;
 
     const live = (assets as AssetRow[]).filter(a => a.merged_into_asset_id === null);

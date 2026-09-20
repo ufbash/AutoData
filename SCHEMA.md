@@ -682,3 +682,14 @@ end (AC Propulsion) has models in every year. The probe uses `GetModelsForMakeId
 because names containing a period 302 to a 404.
 
 **Not in this migration:** no won-vehicle tables (043/044 — documented with Prompt 34 Stage 6, still owed).
+
+---
+
+## 19. Asset soft-delete (migration 046, Prompt 35 follow-up)
+
+`assets.deleted_at timestamptz` and `assets.deleted_by uuid → auth.users`, both nullable, index on
+`deleted_at` — migration 023's pattern. A soft-deleted asset keeps its row, sightings and fingerprint.
+Distinct from the merge sentinel (`merged_into_asset_id`, §17), which means "merged into another asset".
+Filtered by: `listAvailableSightings` (inner join on `assets`), `findRunIdsByVin`, `searchAssets`,
+`traded_make_counts()`, `asset-merge-candidates`. **Not** filtered: `research-capture` fingerprint lookups
+(see `PLAN_TRACKER.md` §4.22) and `getAssetById` (it displays an already-linked asset).

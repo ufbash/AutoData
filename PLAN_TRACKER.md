@@ -1425,11 +1425,15 @@ explicit placeholder in its place.
 - **Stage 0 — E2E test data cleanup: DONE.** Soft-deleted (`deleted_at`/`deleted_by`, migration 023
   pattern) the walkthrough's client, brief, run and promoted won vehicle. The real Yaris won vehicle
   (`da661471…`, VIN `JTDBT923781219099`) untouched — note it is at `auction_paid`, not `won`: `ufbash`
-  advanced it on 16 Sep, a genuine step, so the prompt's "still `won`" premise was stale. **Not
-  cleaned:** the two dummy assets (`E2ETESTVIN0000001/2`), their sightings and listings — `assets`,
-  `sightings` and `research_run_listings` have no soft-delete column and adding one to `assets` means
-  filtering every asset read. Left in place, still `ACTIVE`, counted in Toyota's traded count. Decision
-  pending with Bashir.
+  advanced it on 16 Sep, a genuine step, so the prompt's "still `won`" premise was stale. **Follow-up, same
+  day (Bashir's call):** the two dummy assets (`E2ETESTVIN0000001/2`) were soft-deleted too — migration
+  046 added `assets.deleted_at`/`deleted_by`, and the capture picker (`listAvailableSightings`, inner-join
+  filter), VIN lookup, cost-document asset search, `traded_make_counts()` and asset-merge-candidates now
+  skip them. Their sightings and listings were not touched (no column; hidden through the asset filter,
+  the listings through the soft-deleted run). Verified: 208 real sightings still offered, 0 fake, both
+  sighting rows still exist, Toyota's traded count 77 → 75. **Not filtered, by design:** `research-capture`
+  fingerprint lookups — a capture matching a soft-deleted asset's fingerprint would still attach to it
+  (creating a second row would violate the unique `fingerprint_hash`); the fake VINs will never recur.
 - **Stage 1 — bought-car thumbnail and detail: DONE, verified in browser.** Thumbnail in the brief from
   *stored* images only (signed URLs; remote `image_urls` never rendered — `images.bid.cars` fails CORS);
   placeholder when none. Detail sections: Identity, Purchase, Costs, Status, Documents (placeholder),
