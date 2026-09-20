@@ -2167,3 +2167,20 @@ arithmetic implies a $420 buyer fee - but that is an inference. The invoice item
 matters for the `member_account` a future IAAI schedule must be stored under, exactly as White Nexus did for Copart.
 
 **Lesson.** When the authoritative table cannot be read, say which parts were verified, which were inferred, and what single document would settle it, rather than picking the source that happens to produce a tidy match.
+
+## 42. A correct fix that "did not work" - because the app was matching against 57% of the yard list
+
+**The symptom.** After the leading-"IAA " fix, the app's message changed from `no iaai yard found for "IAA DALLAS/FT WORTH, TEXAS"` to `no iaai yard found for "DALLAS/FT WORTH, TEXAS"`: the prefix was clearly stripped, yet the yard still did not match - although a Node test against the
+database's yard list matched it to `Dallas/Ft Worth, Texas`. The two could only differ in the yard list they were given.
+
+**The cause.** The browser loaded the yard list with a plain `select` and got exactly 1,000 rows. PostgREST caps every response at the project's max-rows (1,000), and the client's own `.limit(2000)` cannot raise it. `trucking_rates` has 1,740 active rows, so
+the list was the first 1,000 in arbitrary order: 738 Copart rows, 262 of 588 IAAI rows, and no Manheim or ADESA at all. A yard in the missing part came back as "no yard found", which looks exactly like a real absence - the silent-null shape this project keeps
+unwinding, this time from a row cap rather than a bad field path.
+
+**Why it survived.** Every verification of the matcher that had been run used the complete list (Node, straight from SQL), and the app only ever looked "roughly right" because the truncated list still contained most Copart yards. It also likely explains part of the
+"~1/3 of yards abstain" figure Prompt 20 recorded, and it made the debt #61/#67 verification less clean than it looked.
+
+**The fix, and the guard.** One helper pages the table in stable id order and de-duplicates to distinct yards; the four unpaginated call sites use it; and it compares the number of rows loaded with an exact server count, throwing if they differ, so a future cap or a concurrent
+import cannot silently shorten the list again. Result: all 531 distinct yards (208 Copart, 187 IAAI, 77 Manheim, 59 ADESA), the Yaris matched its yard, trucking $475 = the database rate.
+
+**Lesson.** A test that reads the data one way and an app that reads it another proves nothing about the app. When a fix works in isolation and not in the product, diff the *inputs* first. And any read that means "all of them" must either page or verify its own count.
