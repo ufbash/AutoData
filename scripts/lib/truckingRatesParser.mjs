@@ -24,6 +24,15 @@
 export const PORT_ALIASES = {
   'JACKSONVILLE YARD': 'JACKSONVILLE',
   'LOS ANGELOS': 'LOS ANGELES', // sic, in the source file
+  // Debt #66 (20 Sep 2026) - reviewed against every affected row: none of these has a correct-port
+  // rate at the same yard (so no duplicate is created), and each yard's geography fits the target.
+  'BATIMORE': 'BALTIMORE',           // 2 Copart rates: North Charleston SC, Spartanburg SC
+  'PROVDIENCE': 'PROVIDENCE',        // 3 IAAI rates: Boston-Shirley, Taunton, Templeton MA
+  'WILLMINGTON': 'WILMINGTON',       // 1 Copart rate: Seaford DE
+  'MD-BALTIMORE': 'BALTIMORE',       // 1 Copart rate: Houston TX (raw "MD-Baltimore", a state-prefixed Baltimore)
+  // Deliberately NOT aliased: GA-RINCON (Rincon GA is a distinct inland location, not proven to be
+  // SAVANNAH), DAVISVILLE (a real port town), CALIFORNIA/TEXAS/NEW JERSEY (the vendor's regional
+  // labels), and MIAMI PORT vs MIAMI (probably one port, but a naming call for a human).
 };
 
 export function normalizePort(raw) {
