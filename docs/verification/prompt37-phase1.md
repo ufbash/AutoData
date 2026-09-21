@@ -161,8 +161,8 @@ Migration review:
 | Trucking and ocean-freight readers ignored the currency convention | **Fixed** - both read through `usdAmount`; cheapest trucking quote is compared in dollars |
 | Second live fee failed with a raw unique violation | **Fixed** - plain message telling the reviewer to supersede the current one |
 | Extraction description said "fee schedule"; leftover half-comment in `CostRatesAdmin.tsx` | **Fixed** |
-| `auction_accounts` changes leave no history | **Migration 056 written, awaiting confirmation** |
-| Dismiss/Restore and candidates filter not deployed | **Awaiting confirmation to deploy** |
+| `auction_accounts` changes leave no history | **Fixed** - migration 056 applied; a tier change is logged with who and old -> new |
+| Dismiss/Restore and candidates filter not deployed | **Deployed** and tested end to end on dummy assets (the pending-list filter itself has had no real candidate to hide) |
 | `setDefaultAccount` non-atomic | **Recorded, accepted** - a failure between the two updates leaves a house with no default, which abstains loudly rather than mispricing |
 | Extraction prompt still says `member_account` | **Recorded** (debt #72) - the reviewer's tier choice (a foreign key) prevents a wrong write |
 | Yard matcher hardcodes copart/iaai with its own resolver | **Recorded** (debt #71) - outside the fee requirement; agrees with the fee resolver on every real sighting |
