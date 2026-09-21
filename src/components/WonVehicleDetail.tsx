@@ -6,6 +6,7 @@ import {
   listStatusHistory, advanceStatus, correctStatus, generateTrackingLink, revokeTrackingLink,
   getWonVehicleContext, signedImagePaths, listWinningBids, currentWinningBid, WinningBid, listDestinations, currentDestination, WonVehicleDestination,
 } from '../services/wonVehicleService';
+import { makeThumbnail } from '../utils/thumbnail';
 import WonVehicleCosts from './WonVehicleCosts';
 import WonVehicleDocuments from './WonVehicleDocuments';
 import WonVehicleInvoices from './WonVehicleInvoices';
@@ -54,10 +55,12 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
   const loadDestinations = () => listDestinations(wonVehicle.id).then(setDestinations).catch(e => setError(e?.message || 'Failed to load the destination.'));
   useEffect(() => { void loadDestinations(); }, [wonVehicle.id]);
   const [images, setImages] = useState<string[]>([]);
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
+    const created: string[] = [];
     (async () => {
       try {
         const ctx = await getWonVehicleContext(wonVehicle);
@@ -65,12 +68,30 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
         setContext(ctx);
         const paths = ctx.sighting?.stored_image_urls || [];
         const signed = await signedImagePaths(paths);
-        if (!cancelled) setImages(paths.map(p => signed[p]).filter(Boolean));
+        const urls = paths.map(p => signed[p]).filter(Boolean);
+        if (!cancelled) setImages(urls);
+        // Two at a time: each decode is transient, but twelve at once would spike memory.
+        let next = 0;
+        const worker = async () => {
+          while (!cancelled && next < urls.length) {
+            const u = urls[next++];
+            try {
+              const t = await makeThumbnail(u);
+              if (cancelled) { URL.revokeObjectURL(t); return; }
+              created.push(t);
+              setThumbs(prev => ({ ...prev, [u]: t }));
+            } catch {
+              // Fall back to the original: correct, just heavy - better than hiding a photo.
+              if (!cancelled) setThumbs(prev => ({ ...prev, [u]: u }));
+            }
+          }
+        };
+        await Promise.all([worker(), worker()]);
       } catch (e: any) {
         if (!cancelled) setError(e?.message || 'Failed to load purchase context.');
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; created.forEach(u => URL.revokeObjectURL(u)); };
   }, [wonVehicle.id]);
 
   const load = async () => {
@@ -197,8 +218,10 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
                 {images.length > 0 ? (
                   <div className="grid grid-cols-4 gap-2" data-testid="won-gallery">
                     {images.filter(u => !brokenImages.has(u)).map(u => (
-                      <img key={u} src={u} alt="" className="w-full h-20 object-cover rounded bg-gray-100"
-                        onError={() => setBrokenImages(prev => new Set(prev).add(u))} />
+                      thumbs[u]
+                        ? <img key={u} src={thumbs[u]} alt="" decoding="async" className="w-full h-20 object-cover rounded bg-gray-100"
+                            onError={() => setBrokenImages(prev => new Set(prev).add(u))} />
+                        : <div key={u} className="w-full h-20 rounded bg-gray-100 animate-pulse" />
                     ))}
                   </div>
                 ) : (
