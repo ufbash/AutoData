@@ -1,0 +1,30 @@
+{
+  "auction_platform": "iaai",
+  "fee_tier": "SYNTHETIC IAAI TEST TIER (delete me)",
+  "new_tier": {
+    "eligibility": "SYNTHETIC - Prompt 37 Stage 1.4 proof that a second auction house prices from data alone. Not a real IAAI schedule; the figures are made up.",
+    "source_url": null,
+    "notes": "SYNTHETIC TEST DATA. Remove with: node scripts/loadFeeSchedule.mjs scripts/feeRegression/synthetic-iaai.json --org <org> --remove",
+    "sort_order": 99
+  },
+  "account": { "holder_name": "SYNTHETIC TEST ACCOUNT (delete me)", "member_number": "0", "payment_tier": null, "is_default": true, "notes": "SYNTHETIC - proof account, not a real IAAI account." },
+  "source": "agent_quote",
+  "effective_from": "2026-01-01",
+  "title_status": "any",
+  "payment_tier": "any",
+  "buyer_fee": [
+    { "min": 0,    "max": 999.99,  "unit": "usd",     "value": 100 },
+    { "min": 1000, "max": 1999.99, "unit": "usd",     "value": 300 },
+    { "min": 2000, "max": 4999.99, "unit": "usd",     "value": 500 },
+    { "min": 5000, "max": null,    "unit": "percent", "value": 10 }
+  ],
+  "bid_fee": {
+    "proxy": [ { "min": 0, "max": 1999.99, "unit": "usd", "value": 50 }, { "min": 2000, "max": null, "unit": "usd", "value": 75 } ],
+    "live":  [ { "min": 0, "max": 1999.99, "unit": "usd", "value": 60 }, { "min": 2000, "max": null, "unit": "usd", "value": 90 } ]
+  },
+  "flat_fees": [
+    { "label": "SYNTHETIC IAAI Service Fee", "role": "service", "applies": "always", "value": 111 },
+    { "label": "SYNTHETIC IAAI Environmental Fee", "role": "environmental", "applies": "always", "value": 22 },
+    { "label": "SYNTHETIC IAAI Late Payment Fee", "role": "late_payment", "applies": "contingent", "value": 999 }
+  ]
+}

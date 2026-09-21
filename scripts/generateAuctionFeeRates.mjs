@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// PROMPT 37 NOTE: this one-shot seed produced the ORIGINAL 324 Copart rows (member_account text). It is kept as the
+// record of where they came from and is superseded by scripts/loadFeeSchedule.mjs, which loads any house's schedule
+// from JSON under an official fee tier. Do not re-run it: the live rows now carry fee_tier (migration 053).
 // PROMPT 21 Phase 2 — generates the SQL to store the confirmed Copart auction fee structure.
 // Never touches the database itself (same pattern as importTruckingRates.mjs) - writes a SQL
 // file for review, executed separately only after confirmation.

@@ -272,6 +272,31 @@ const resolveCurrencyFields = (
   return { currency, amount_usd: amountUsd, fx_rate: rate, fx_rate_date: fxDate };
 };
 
+// The database allows at most one LIVE row per fee role (per house) and per schedule cell: a duplicate would be
+// summed silently by a reader. Confirming a second live one is refused - say so plainly.
+const liveRowConflict = (error: { code?: string; message: string }, what: string, hint: string): string =>
+  error.code === '23505'
+    ? `A live ${what} already exists, so the replacement was not written. ${hint}.`
+    : `Failed to insert ${what}: ${error.message}`;
+
+// A flat auction fee must say which house it belongs to, what it is and whether it is always charged.
+const auctionFeeFields = (row: Record<string, any>) => {
+  if (row.cost_category !== 'auction_fee') return { auction_platform: null, fee_role: null, fee_applies: null };
+  const auction_platform = String(row.auction_platform || '').trim().toLowerCase();
+  const fee_role = String(row.fee_role || '').trim().toLowerCase();
+  const fee_applies = String(row.fee_applies || '').trim().toLowerCase();
+  if (!auction_platform || !fee_role || !['always', 'contingent'].includes(fee_applies)) {
+    throw new Error(`An auction fee ("${row.label}") needs its auction house, a fee role (e.g. environmental) and whether it is charged always or contingent.`);
+  }
+  return { auction_platform, fee_role, fee_applies };
+};
+
+const requireFeeTier = (row: Record<string, any>): string => {
+  const tier = String(row.fee_tier || '').trim();
+  if (!tier) throw new Error('Every fee bracket needs its official fee tier chosen (e.g. "Copart U.S. Non-Licensed").');
+  return tier;
+};
+
 export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> => {
   const { orgId, userId, extractionId, targetTable, source, effectiveFrom, rows } = input;
   if (rows.length === 0) throw new Error('At least one row must be included to confirm.');
@@ -297,9 +322,10 @@ export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> 
         source,
         effective_from: effectiveFrom,
         effective_to: null,
+        ...auctionFeeFields(row),
         ...currencyFields,
       }).select('id').single();
-      if (error) throw new Error(`Failed to insert cost_rates row ("${row.label}"): ${error.message}`);
+      if (error) throw new Error(liveRowConflict(error, `cost_rates row ("${row.label}")`, 'Supersede the current one in Admin > Rates > Cost Rates first'));
       insertedIds.push(data.id);
     } else if (targetTable === 'trucking_rates') {
       const currencyFields = resolveCurrencyFields(Number(row.price), row.currency, false, rates, fxDate);
@@ -329,7 +355,9 @@ export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> 
         org_id: orgId,
         created_by: userId,
         auction_platform: row.auction_platform,
-        member_account: String(row.member_account || '').trim(),
+        // The schedule belongs to an OFFICIAL tier of the house, chosen by the reviewer - never the account holder's
+        // name and never model-extracted text (the foreign key refuses anything that is not a real tier).
+        fee_tier: requireFeeTier(row),
         fee_type: row.fee_type,
         title_status: row.title_status,
         payment_tier: row.payment_tier,
@@ -343,7 +371,7 @@ export const confirmExtraction = async (input: ConfirmInput): Promise<string[]> 
         effective_to: null,
         ...currencyFields,
       }).select('id').single();
-      if (error) throw new Error(`Failed to insert auction_fee_brackets row: ${error.message}`);
+      if (error) throw new Error(liveRowConflict(error, 'auction_fee_brackets row', 'A schedule for this tier and bracket is already live - it must be closed before a replacement is confirmed'));
       insertedIds.push(data.id);
     }
   }

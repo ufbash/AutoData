@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import {
-  CostComponent, DEFAULT_MEMBER_ACCOUNT,
+  CostComponent,
   getAuctionFeeComponent, getInlandTruckingComponent, getOceanFreightComponent, getDutyComponent,
 } from '../services/bidHeadroomService';
 import { matchSightingToYard, MatchResult } from '../services/yardMatchingService';
 import { listPortsForYard, listActiveYardKeys, PortSummary } from '../services/truckingRatesService';
-import { getPaymentTier, PaymentTier, DEFAULT_PAYMENT_TIER } from '../services/orgSettingsService';
 import type { WonVehicle, WonVehicleContext, WonVehicleDestination } from '../services/wonVehicleService';
 import WonVehicleDestinationPanel from './WonVehicleDestination';
 
@@ -45,7 +44,6 @@ const Row: React.FC<{ label: string; component: CostComponent; note?: string }> 
 const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleContext; winningBidUsd: number | null; winningBidMethod: 'proxy' | 'live' | null; winningBidKey: string; destination: WonVehicleDestination | null; destinations: WonVehicleDestination[]; onDestinationChanged: () => void }> = ({ wonVehicle, context, winningBidUsd, winningBidMethod, winningBidKey, destination, destinations, onDestinationChanged }) => {
   const snapshot = wonVehicle.won_snapshot as any;
   const sighting = context.sighting;
-  const [tier, setTier] = useState<PaymentTier>(DEFAULT_PAYMENT_TIER);
   const [match, setMatch] = useState<MatchResult | null>(null);
   const [ports, setPorts] = useState<PortSummary[]>([]);
   const [fees, setFees] = useState<CostComponent | null>(null);
@@ -81,9 +79,6 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
       setLoading(true);
       setError(null);
       try {
-        const t = await getPaymentTier(wonVehicle.org_id);
-        if (cancelled) return;
-        setTier(t);
         if (!sightingForCosts) {
           setMatch(null);
           return;
@@ -117,7 +112,7 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
         const [f, tr, sh] = await Promise.all([
           getAuctionFeeComponent({
             sighting: sightingForCosts, titleType: sighting!.title_type, referencePriceUsd: priceUsd,
-            referencePriceUnavailableDetail: priceUnavailableDetail, orgId: wonVehicle.org_id, paymentTier: tier,
+            referencePriceUnavailableDetail: priceUnavailableDetail, orgId: wonVehicle.org_id,
             // Only meaningful with a recorded winning bid; the approved-price fallback stays a range.
             bidMethod: winningBidUsd !== null ? winningBidMethod : null,
           }),
@@ -135,7 +130,7 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, tier, destination?.id, wonVehicle.id, winningBidKey]);
+  }, [loading, destination?.id, wonVehicle.id, winningBidKey]);
 
   if (!sighting) {
     return <div className="text-xs text-gray-500">The source listing's capture is no longer available, so cost inputs (yard, title, platform) cannot be resolved.</div>;
@@ -154,8 +149,14 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
       {error && <div className="text-xs text-[#ba3b46] mb-2">{error}</div>}
 
       <div className="text-[10px] text-gray-500 mb-2 bg-gray-50 rounded p-2">
-        Fees priced under <strong>{DEFAULT_MEMBER_ACCOUNT}</strong>, <strong>{tier === 'secured' ? 'Secured' : 'Unsecured'}</strong> schedule
-        (org setting), {winningBidUsd !== null
+        {fees?.basis
+          ? <>Fees priced under <strong>{fees.basis.feeTier}</strong>{fees.basis.holder ? <> (account: {fees.basis.holder}{fees.basis.memberNumber ? ` #${fees.basis.memberNumber}` : ''})</> : null}
+              {fees.basis.paymentTier === 'secured' || fees.basis.paymentTier === 'unsecured'
+                ? <>, <strong>{fees.basis.paymentTier === 'secured' ? 'Secured' : 'Unsecured'}</strong> schedule (the account's payment tier)</>
+                : <>, with no Secured/Unsecured distinction for this house</>}</>
+          : <>No fee schedule basis could be resolved for this vehicle</>}
+        {' '}
+        {winningBidUsd !== null
           ? <>at the <strong>recorded winning bid</strong> of {money(winningBidUsd)}</>
           : <>at the <strong>approved price</strong>{priceUsd !== null ? ` of ${money(priceUsd)}` : ''} — no winning bid has been recorded yet</>}.
         Yard, title and platform are read from the captured listing as it stands now.

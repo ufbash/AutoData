@@ -6,7 +6,8 @@ import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead
 // effective_to. Nothing here computes a duty or a landed cost - that is C2, explicitly out
 // of scope until 10+ assessment notices exist (PLAN_TRACKER.md).
 
-export type CostCategory = 'inland_trucking' | 'ocean_freight' | 'duty_component' | 'service_fee';
+export type CostCategory = 'inland_trucking' | 'ocean_freight' | 'duty_component' | 'service_fee' | 'auction_fee';
+export type FeeApplies = 'always' | 'contingent';
 export type CostRateBasis = 'cif' | 'cif_plus_prior' | 'import_duty';
 export type CostRateUnit = 'percent' | 'usd';
 export type CostRateSource = 'official_tariff' | 'agent_quote' | 'actual_paid';
@@ -33,6 +34,11 @@ export interface CostRate {
   amount_usd: number | null;
   fx_rate: number | null;
   fx_rate_date: string | null;
+  // PROMPT 37 - a flat AUCTION fee says which house it belongs to, what it is (a role, not a label) and
+  // whether it is charged on every purchase. Null on every other category.
+  auction_platform: string | null;
+  fee_role: string | null;
+  fee_applies: FeeApplies | null;
 }
 
 export const listCostRates = async (orgId: string): Promise<CostRate[]> =>
@@ -58,6 +64,9 @@ export interface NewCostRateInput {
   rate_value_max: number | null;
   source: CostRateSource;
   effective_from: string;
+  auction_platform?: string | null;
+  fee_role?: string | null;
+  fee_applies?: FeeApplies | null;
 }
 
 export const addCostRate = async (orgId: string, userId: string, input: NewCostRateInput): Promise<CostRate> => {
@@ -75,6 +84,9 @@ export const addCostRate = async (orgId: string, userId: string, input: NewCostR
       source: input.source,
       effective_from: input.effective_from,
       effective_to: null,
+      auction_platform: input.cost_category === 'auction_fee' ? input.auction_platform ?? null : null,
+      fee_role: input.cost_category === 'auction_fee' ? input.fee_role ?? null : null,
+      fee_applies: input.cost_category === 'auction_fee' ? input.fee_applies ?? null : null,
     })
     .select('*')
     .single();
@@ -98,6 +110,8 @@ export const supersedeCostRate = async (
   oldRateEffectiveFrom: string,
   newRate: NewCostRateInput
 ): Promise<{ closed: CostRate; created: CostRate }> => {
+  // Never re-priced here: a non-USD rate carries a frozen FX rate that a supersede would have to re-freeze.
+  // Those go through Document Extraction, where the currency is chosen and the rate frozen by a human.
   if (newRate.effective_from <= oldRateEffectiveFrom) {
     throw new Error('The new rate must take effect after the superseded rate started.');
   }

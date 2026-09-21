@@ -2,11 +2,17 @@ import { supabase } from './supabaseClient';
 import { matchSightingToYard } from './yardMatchingService';
 import { listActiveYardKeys } from './truckingRatesService';
 import type { YardKey, SightingForMatching } from './yardMatchingService';
-// PROMPT 29 Stage 4 - PaymentTier's single definition lives in orgSettingsService.ts, the
-// module that owns reading/writing it as configuration. Imported, not redefined.
-import type { PaymentTier } from './orgSettingsService';
-import { DEFAULT_PAYMENT_TIER } from './orgSettingsService';
+import { listAuctionHouses, getAccount, getDefaultAccount } from './auctionAccountsService';
+import type { AuctionAccount, PaymentTier } from './auctionAccountsService';
 import { classifyTitleStatus as classifySharedTitleStatus } from '../../supabase/functions/_shared/specVocabulary.ts';
+import { usdAmount } from '../../supabase/functions/_shared/rateConventions.ts';
+import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
+import {
+  unavailable, findBracket, selectSchedule, auctionFeeFromRows, boundaryPair, combinedFeeAt, solveMaxBidForFees, solverSupports, feeForBracket,
+} from '../../supabase/functions/_shared/feeSchedule.ts';
+import type { CostComponent, ComponentStatus, FeeBasis, FeeBracketRow, FlatFee, ScheduleRows, FeeBracketBoundary } from '../../supabase/functions/_shared/feeSchedule.ts';
+
+export type { CostComponent, ComponentStatus, FeeBasis, FeeBracketBoundary };
 
 // PROMPT 21 Phase 3 — the single shared cost-breakdown and bid-headroom module. Not scattered
 // across components: isUnconfirmed is already duplicated as debt because that happened once
@@ -20,20 +26,6 @@ import { classifyTitleStatus as classifySharedTitleStatus } from '../../supabase
 // available AND a target landed cost - missing any one makes headroom unavailable, never
 // smaller, never zero-filled (PROJECT_CHARTER.md S5.1/S5.4).
 
-export type ComponentStatus = 'available' | 'unavailable';
-
-export interface CostComponent {
-  status: ComponentStatus;
-  amountUsd: number | null;
-  reason: string | null; // populated only when unavailable
-  // PROMPT 35 - set when the component is 'available' but a sub-part has no stored schedule and
-  // was left out of amountUsd (e.g. the bid fee for clean-title/unsecured, which has no rows).
-  // A partial figure must never feed a landed total as though it were complete.
-  partialReason?: string;
-  detail: string; // human-readable explanation of what this figure is / came from
-  sourceRows: { label: string; source: string; effectiveFrom: string }[]; // dated provenance
-}
-
 export interface BidHeadroomResult {
   auctionFees: CostComponent;
   inlandTrucking: CostComponent;
@@ -41,11 +33,10 @@ export interface BidHeadroomResult {
   duty: CostComponent;
   targetLandedCostUsd: number | null;
   headroom: CostComponent;
-  // Which member account/tier the auction-fee figure was actually computed under - shown
-  // prominently, not buried in a source line, so it is never ambiguous which basis a
-  // headroom number rests on (a real correction: an earlier default silently priced against
-  // a one-off middleman's cheaper schedule instead of Caplimo's own account).
-  pricedUnder: { memberAccount: string; titleStatus: string; paymentTier: string } | null;
+  // Which official fee tier (and account) the auction-fee figure was computed under - shown
+  // prominently, not buried in a source line, so it is never ambiguous which basis a headroom number
+  // rests on. Null only when no basis could be resolved at all (no platform, or no account set up).
+  pricedUnder: { feeTier: string; holder: string | null; titleStatus: string; paymentTier: string } | null;
   // PROMPT 26 - null for a finished listing (headroom on a sold car is meaningless; there's no
   // future bid to solve for). For an active listing, 'available' only when shipping, trucking
   // AND duty are all available too - which duty being permanently blocked today means never,
@@ -53,10 +44,6 @@ export interface BidHeadroomResult {
   // reasoning as the solver it wraps.
   maxBidSolve: MaxBidSolveResult | null;
 }
-
-const unavailable = (reason: string, detail = ''): CostComponent => ({
-  status: 'unavailable', amountUsd: null, reason, detail, sourceRows: [],
-});
 
 // --- Title status classification ---
 // SCHEMA.md S5: title_type is genuinely messy, format varies by state and capture source.
@@ -76,206 +63,157 @@ export function classifyTitleStatus(titleType: string | null | undefined): 'clea
   return 'non_clean'; // salvage | rebuilt | non_repairable
 }
 
-// --- Effective platform (shared logic with the Prompt 20 matcher - bid.cars is a resale
-// aggregator, never a yard network; its real platform is source_auction_platform) ---
-function resolveEffectivePlatform(sighting: SightingForMatching): string | null {
-  if (sighting.source_platform === 'copart' || sighting.source_platform === 'iaai') return sighting.source_platform;
-  if (sighting.source_platform === 'bidcars') return sighting.source_auction_platform || null;
+// --- Effective platform ---
+// The lot's real auction house: the capture source itself when that source IS a configured house (a direct
+// Copart or IAAI capture), otherwise the house an aggregator (bid.cars) recorded in source_auction_platform.
+// Which houses exist is data (auction_houses), not a list in this file. Verified identical to the previous
+// hardcoded rule on all 221 real sightings (21 Sep 2026): bidcars/copart, bidcars/iaai, bidcars/null,
+// copart, iaai and manual all resolve as before.
+function resolveEffectivePlatform(sighting: SightingForMatching, houses: { auction_platform: string }[]): string | null {
+  const isHouse = (v: string | null | undefined) => !!v && houses.some(h => h.auction_platform === v);
+  if (isHouse(sighting.source_platform)) return sighting.source_platform;
+  if (isHouse(sighting.source_auction_platform)) return sighting.source_auction_platform as string;
   return null;
 }
 
-export interface AuctionFeeBracketRow {
-  member_account: string;
-  fee_type: 'buyer_fee' | 'bid_fee';
-  title_status: 'clean' | 'non_clean';
-  payment_tier: 'secured' | 'unsecured';
-  bid_method: 'proxy' | 'live' | null;
-  bracket_min: number;
-  bracket_max: number | null;
-  fee_unit: 'usd' | 'percent';
-  fee_value: number;
-  source: string;
-  effective_from: string;
-}
-
-export function feeForBracket(row: AuctionFeeBracketRow, referencePrice: number): number {
-  return row.fee_unit === 'percent' ? referencePrice * (row.fee_value / 100) : row.fee_value;
-}
-
-export function findBracket(rows: AuctionFeeBracketRow[], referencePrice: number): AuctionFeeBracketRow | null {
-  return rows.find(r => referencePrice >= r.bracket_min && (r.bracket_max === null || referencePrice <= r.bracket_max)) || null;
-}
+export type { FeeBracketRow };
+export { feeForBracket, findBracket };
 
 export interface AuctionFeeInput {
   sighting: SightingForMatching;
   titleType: string | null;
-  // PROMPT 26 - no longer a guessed reference price. Either the actual confirmed sale price
-  // (a finished, sale_confirmed=true listing's price_usd) or a staff-entered candidate bid on
-  // an active listing. Never current_bid_usd on its own - that was the bug this prompt fixes.
+  // Either the actual confirmed sale price (a finished, sale_confirmed=true listing's price_usd) or a
+  // staff-entered candidate bid on an active listing. Never current_bid_usd on its own.
   referencePriceUsd: number | null;
-  // Shown as the abstention reason when referencePriceUsd is null, so the UI can say WHY
-  // (sale unconfirmed vs. no candidate entered yet) instead of one generic message.
+  // Shown as the abstention reason when referencePriceUsd is null, so the UI can say WHY.
   referencePriceUnavailableDetail?: string;
   orgId: string;
-  memberAccount?: string; // defaults to the confirmed default account below
-  paymentTier?: PaymentTier; // PROMPT 29 Stage 4 - defaults to DEFAULT_PAYMENT_TIER below
-  // How the winning bid was placed, when known (a won vehicle's recorded bid method). Absent for
-  // every listing that has not been won - the fee then stays a range across both methods.
+  // Price under a specific account instead of the org's default account for the house.
+  accountId?: string;
+  // Override the account's own payment tier (a what-if); absent means the account's tier.
+  paymentTier?: PaymentTier;
+  // How the winning bid was placed, when known. Absent for every listing that has not been won - the
+  // fee then stays a range across both methods.
   bidMethod?: 'proxy' | 'live' | null;
 }
 
-// CORRECTED (see PLAN_TRACKER.md debt) - the default is Caplimo's OWN Copart account, not
-// White Nexus. White Nexus is a one-off middleman that bought on Caplimo's behalf for a
-// single invoice; it is not the entity Caplimo's own research-run client options should be
-// priced against. Defaulting to White Nexus's cheaper High-Volume schedule would assume a
-// discount Caplimo does not itself receive - understating cost on every listing,
-// systematically, in the direction that loses money. Jamilu Danmusa Danmusa is Caplimo's own
-// account (Non-Licensed), confirmed against invoices 1 & 3. White Nexus's High-Volume rows
-// stay stored - they priced a real purchase and S5.10 requires that invoice to stay
-// explicable - but they are historical, not the default.
-export const DEFAULT_MEMBER_ACCOUNT = 'Jamilu Danmusa Danmusa (Copart Non-Licensed)';
-// PROMPT 29 Stage 4 - was a hardcoded constant; now configuration (org_settings, migration
-// 034). Both real Copart accounts price as Unsecured on every invoice seen - including one
-// funded mostly by wire and one where a $400 security deposit is on file with Copart
-// (PLAN_TRACKER.md debt #43 - open question, not yet resolved). This module never defaults to
-// Secured itself; DEFAULT_PAYMENT_TIER is only the fallback for an org with no settings row
-// yet, and is deliberately identical to the value the old hardcoded constant held, so a
-// missing settings row changes nothing.
+// PROMPT 37 Phase 1 - which schedule a lot prices against is DATA: the org's account for the lot's auction
+// house, that account's official fee tier, and its payment tier. This function names no house, no account
+// and no fee. A house with no account, or an account whose tier has no schedule loaded, abstains and says so.
+type Resolved =
+  | { ok: true; house: { auction_platform: string; display_name: string }; account: AuctionAccount; basis: FeeBasis; schedule: ScheduleRows; titleStatus: 'clean' | 'non_clean'; paymentTier: string }
+  | { ok: false; component: CostComponent };
 
-interface AuctionFeeRows {
-  buyerFeeRows: AuctionFeeBracketRow[];
-  bidFeeProxyRows: AuctionFeeBracketRow[];
-  bidFeeLiveRows: AuctionFeeBracketRow[];
-  flatFees: { label: string; source: string; effective_from: string; rate_value: number }[];
-  flatFeeTotal: number;
+interface ResolveArgs {
+  orgId: string;
+  sighting: SightingForMatching;
+  titleType: string | null;
+  accountId?: string;
+  paymentTier?: PaymentTier;
+  // When present the reference price is checked in the same precedence order the fee always used.
+  price?: { value: number | null; detail?: string };
 }
 
-// Extracted (PROMPT 26) so the forward calculation (getAuctionFeeComponent, a known price ->
-// a fee) and the inverse one (solveMaxBidForFees, a target -> the bid that produces it) share
-// one fetch instead of two copies of the same query drifting apart over time.
-async function fetchAuctionFeeRows(orgId: string, platform: string, memberAccount: string, titleStatus: 'clean' | 'non_clean', paymentTier: PaymentTier): Promise<AuctionFeeRows> {
+async function fetchTierRows(orgId: string, platform: string, feeTier: string): Promise<FeeBracketRow[]> {
+  const rows = await fetchAllVerified<any>(
+    'fee brackets',
+    (from, to) => supabase
+      .from('auction_fee_brackets')
+      .select('fee_type, title_status, payment_tier, bid_method, bracket_min, bracket_max, fee_unit, fee_value, source, effective_from, currency, amount_usd')
+      .eq('org_id', orgId).eq('auction_platform', platform).eq('fee_tier', feeTier).is('effective_to', null)
+      .order('bracket_min').order('id').range(from, to),
+    () => supabase.from('auction_fee_brackets').select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId).eq('auction_platform', platform).eq('fee_tier', feeTier).is('effective_to', null),
+  );
+  return rows.map((r: any): FeeBracketRow => ({
+    fee_type: r.fee_type, title_status: r.title_status, payment_tier: r.payment_tier, bid_method: r.bid_method,
+    bracket_min: Number(r.bracket_min), bracket_max: r.bracket_max === null ? null : Number(r.bracket_max),
+    fee_unit: r.fee_unit,
+    // A percent is a pure ratio; a dollar bracket is read in dollars (rateConventions.usdAmount).
+    fee_value: r.fee_unit === 'percent' ? Number(r.fee_value) : usdAmount(r, r.fee_value, 'fee bracket'),
+    source: r.source, effective_from: r.effective_from,
+  }));
+}
+
+async function fetchFlatFees(orgId: string, platform: string): Promise<FlatFee[]> {
   const { data, error } = await supabase
-    .from('auction_fee_brackets')
-    .select('member_account, fee_type, title_status, payment_tier, bid_method, bracket_min, bracket_max, fee_unit, fee_value, source, effective_from')
-    .eq('org_id', orgId)
-    .eq('auction_platform', platform)
-    .eq('member_account', memberAccount)
-    .eq('title_status', titleStatus)
-    .eq('payment_tier', paymentTier)
-    .is('effective_to', null);
-  if (error) throw new Error(`Failed to load auction fee brackets: ${error.message}`);
-
-  const rows = (data || []) as AuctionFeeBracketRow[];
-  const buyerFeeRows = rows.filter(r => r.fee_type === 'buyer_fee');
-  const bidFeeRows = rows.filter(r => r.fee_type === 'bid_fee');
-  const bidFeeProxyRows = bidFeeRows.filter(r => r.bid_method === 'proxy');
-  const bidFeeLiveRows = bidFeeRows.filter(r => r.bid_method === 'live');
-
-  const { data: flatFeeData, error: flatFeeError } = await supabase
     .from('cost_rates')
-    .select('label, rate_value, source, effective_from')
+    .select('label, fee_role, rate_value, source, effective_from, currency, amount_usd')
     .eq('org_id', orgId)
     .eq('cost_category', 'auction_fee')
-    .in('label', ['Copart Environmental Fee', 'Copart Gate Fee (Non-Clean Title)', 'Copart Title Pickup Fee'])
+    .eq('auction_platform', platform)
+    .eq('fee_applies', 'always')
     .is('effective_to', null);
-  if (flatFeeError) throw new Error(`Failed to load flat auction fees: ${flatFeeError.message}`);
-  const flatFees = (flatFeeData || []) as any[];
-  const flatFeeTotal = flatFees.reduce((sum, f) => sum + Number(f.rate_value), 0);
-
-  return { buyerFeeRows, bidFeeProxyRows, bidFeeLiveRows, flatFees, flatFeeTotal };
+  if (error) throw new Error(`Failed to load flat auction fees: ${error.message}`);
+  return (data || []).map((r: any): FlatFee => ({
+    label: r.label, fee_role: r.fee_role, source: r.source, effective_from: r.effective_from, rate_value: usdAmount(r, r.rate_value, 'flat fee'),
+  }));
 }
 
-function auctionFeeComponentFromRows(
-  priceUsd: number,
-  memberAccount: string,
-  titleStatus: 'clean' | 'non_clean',
-  rows: AuctionFeeRows,
-  paymentTier: PaymentTier,
-  bidMethod: 'proxy' | 'live' | null = null
-): CostComponent {
-  const buyerBracket = findBracket(rows.buyerFeeRows, priceUsd);
-  if (!buyerBracket) {
-    return unavailable('no buyer-fee bracket covers this price', `price $${priceUsd} against ${memberAccount}`);
+async function resolveSchedule(args: ResolveArgs): Promise<Resolved> {
+  const houses = await listAuctionHouses();
+  const platform = resolveEffectivePlatform(args.sighting, houses);
+  if (!platform) {
+    return { ok: false, component: unavailable('no resolvable auction platform', `source_platform=${args.sighting.source_platform}`) };
+  }
+  const house = houses.find(h => h.auction_platform === platform)!;
+
+  // A capture that labels a lot with one house while its yard names another is contradictory: pricing under
+  // either schedule would be a confident wrong number, so no fee is quoted (Yaris, debt #61). The prefixes
+  // that identify a house's yards ("IAA ...") are data on auction_houses, not a regex here.
+  const leading = (args.sighting.location ?? '').trim().split(/[\s,(/-]+/)[0]?.toUpperCase() ?? '';
+  const other = leading ? houses.find(h => h.auction_platform !== platform && h.location_prefixes.some(p => p.toUpperCase() === leading)) : undefined;
+  if (other) {
+    return { ok: false, component: unavailable('platform label contradicts the yard', `source_auction_platform="${args.sighting.source_auction_platform}" but location="${args.sighting.location}" names a ${other.display_name} yard - no fee is quoted rather than pricing under ${house.display_name}'s schedule`) };
   }
 
-  const proxyBracket = findBracket(rows.bidFeeProxyRows, priceUsd);
-  const liveBracket = findBracket(rows.bidFeeLiveRows, priceUsd);
+  const account = args.accountId ? await getAccount(args.orgId, args.accountId) : await getDefaultAccount(args.orgId, platform);
+  if (account && account.auction_platform !== platform) {
+    return { ok: false, component: unavailable('the chosen account belongs to a different auction house', `account "${account.holder_name}" is a ${account.auction_platform} account but this lot is at ${house.display_name}`) };
+  }
+  if (!account) {
+    return { ok: false, component: unavailable(`no ${house.display_name} account is set up`, `add the ${house.display_name} account this org buys through (with its official fee tier) under Admin > Rates > Fee schedules and accounts`) };
+  }
 
-  // Bid method (proxy vs. live) for a future bid on an active listing is genuinely unknown
-  // ahead of time - shown as a range with both real figures, never collapsed into one guessed
-  // number (PROJECT_CHARTER.md S5.1: show the underlying figures).
-  //
-  // PROMPT 35 follow-up (debt #60): for a WON vehicle, staff can record how the winning bid was
-  // placed. When bidMethod is given, only that method's bracket applies and the figure is exact,
-  // not a range; when it is absent (every other caller, and a won vehicle with no method recorded)
-  // this is unchanged.
-  const methodKnown = bidMethod === 'proxy' || bidMethod === 'live';
-  const knownBracket = bidMethod === 'proxy' ? proxyBracket : bidMethod === 'live' ? liveBracket : null;
-  const bidFeeLow = methodKnown
-    ? (knownBracket ? feeForBracket(knownBracket, priceUsd) : null)
-    : (proxyBracket && liveBracket ? Math.min(feeForBracket(proxyBracket, priceUsd), feeForBracket(liveBracket, priceUsd)) : null);
-  const bidFeeHigh = methodKnown
-    ? bidFeeLow
-    : (proxyBracket && liveBracket ? Math.max(feeForBracket(proxyBracket, priceUsd), feeForBracket(liveBracket, priceUsd)) : null);
+  const titleStatus = classifyTitleStatus(args.titleType);
+  const paymentTier = args.paymentTier ?? account.payment_tier;
+  const basisBase = { houseName: house.display_name, feeTier: account.fee_tier, holder: account.holder_name, memberNumber: account.member_number, paymentTier: paymentTier ?? 'n/a' };
+  const abstain = (reason: string, detail: string, title: string): Resolved => ({
+    ok: false, component: { ...unavailable(reason, detail), basis: { ...basisBase, titleStatus: title } },
+  });
 
-  const buyerFeeAmount = feeForBracket(buyerBracket, priceUsd);
-  const bidFeeMid = bidFeeLow !== null && bidFeeHigh !== null ? (bidFeeLow + bidFeeHigh) / 2 : 0;
-  const total = buyerFeeAmount + bidFeeMid + rows.flatFeeTotal;
+  const [tierRows, flatFees] = await Promise.all([fetchTierRows(args.orgId, platform, account.fee_tier), fetchFlatFees(args.orgId, platform)]);
+  if (tierRows.length === 0) {
+    return abstain(`no fee schedule is loaded for ${account.fee_tier}`, `${house.display_name} account "${account.holder_name}" is on ${account.fee_tier}, which has no fee brackets loaded yet - load its schedule (Admin > Rates > Fee schedules and accounts) rather than pricing it under another tier`, titleStatus);
+  }
 
-  const sourceRows = [
-    { label: `Buyer fee (${memberAccount}, ${titleStatus}, ${paymentTier})`, source: buyerBracket.source, effectiveFrom: buyerBracket.effective_from },
-    ...rows.flatFees.map(f => ({ label: f.label, source: f.source, effectiveFrom: f.effective_from })),
-  ];
-  if (proxyBracket && bidMethod !== 'live') sourceRows.push({ label: 'Bid fee (proxy)', source: proxyBracket.source, effectiveFrom: proxyBracket.effective_from });
-  if (liveBracket && bidMethod !== 'proxy') sourceRows.push({ label: 'Bid fee (live)', source: liveBracket.source, effectiveFrom: liveBracket.effective_from });
+  const selected = selectSchedule(tierRows, titleStatus, paymentTier, flatFees);
+  if (selected.ok === false) return abstain('the fee schedule is ambiguous', selected.reason, titleStatus);
 
-  const bidFeeNote = bidFeeLow !== null && bidFeeHigh !== null
-    ? (methodKnown
-      ? `$${bidFeeLow.toFixed(2)} (${bidMethod} bid)`
-      : (bidFeeLow === bidFeeHigh ? `$${bidFeeLow.toFixed(2)}` : `$${bidFeeLow.toFixed(2)}-$${bidFeeHigh.toFixed(2)} depending on bid method (not yet known)`))
-    : 'not available';
-
+  // Same precedence the fee has always had: an unclassifiable title abstains before a missing price does.
+  if (titleStatus === 'unknown' && selected.rows.buyerFeeRows.length === 0) {
+    return abstain('title status could not be classified', `title_type="${args.titleType ?? ''}" matched neither a clean nor non-clean indicator`, 'unknown');
+  }
+  if (args.price && (args.price.value === null || args.price.value === undefined)) {
+    return abstain('no price to bracket against', args.price.detail ?? 'no confirmed sale price and no candidate bid entered', titleStatus);
+  }
+  if (selected.rows.buyerFeeRows.length === 0) {
+    return abstain(`no fee schedule is loaded for ${account.fee_tier} under a ${titleStatus} title / ${paymentTier ?? 'n/a'} payment`, `${account.fee_tier} has brackets loaded, but none for this title status and payment tier`, titleStatus);
+  }
   return {
-    status: 'available',
-    amountUsd: Math.round(total * 100) / 100,
-    reason: null,
-    partialReason: bidFeeLow === null ? 'no bid-fee schedule is stored for this title status / payment tier, so the bid fee is not included in this figure' : undefined,
-    detail: `Buyer fee $${buyerFeeAmount.toFixed(2)} + bid fee ${bidFeeNote} + flat fees $${rows.flatFeeTotal.toFixed(2)} (Environmental/Gate/Title Pickup), at price $${priceUsd}`,
-    sourceRows,
+    ok: true, house, account, titleStatus: titleStatus as 'clean' | 'non_clean', paymentTier: paymentTier ?? 'n/a', schedule: selected.rows,
+    basis: { ...basisBase, titleStatus },
   };
 }
 
 export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<CostComponent> {
-  const platform = resolveEffectivePlatform(input.sighting);
-  if (!platform) {
-    return unavailable('no resolvable auction platform', `source_platform=${input.sighting.source_platform}`);
-  }
-  if (platform !== 'copart') {
-    return unavailable(`no stored fee schedule for platform "${platform}" yet`, 'only Copart fee schedules are confirmed and stored (PROMPT_21 Phase 2) - no IAAI invoice exists to cross-check its published tables against');
-  }
-  // PROMPT 35, cause fixed by debt #61 - the extension used to label every prefix-0 bid.cars lot
-  // 'copart' although prefix 0 is IAAI, so an IAA yard could arrive labelled Copart. Capture now
-  // derives the house server-side from the lot prefix and old rows were relabelled, so this should
-  // not fire; it stays as a cheap consistency check because pricing an IAAI car under Copart's
-  // schedule is a confident wrong number - a location that names IAA contradicts a 'copart' label
-  // and the fee abstains rather than picking a side.
-  if (/^\s*IAAI?\b/i.test(input.sighting.location ?? '')) {
-    return unavailable('platform label contradicts the yard', `source_auction_platform="${input.sighting.source_auction_platform}" but location="${input.sighting.location}" names an IAA yard - IAAI has no stored fee schedule, so no fee is quoted rather than pricing under Copart's`);
-  }
-
-  const titleStatus = classifyTitleStatus(input.titleType);
-  if (titleStatus === 'unknown') {
-    return unavailable('title status could not be classified', `title_type="${input.titleType ?? ''}" matched neither a clean nor non-clean indicator`);
-  }
-
-  if (input.referencePriceUsd === null || input.referencePriceUsd === undefined) {
-    return unavailable('no price to bracket against', input.referencePriceUnavailableDetail ?? 'no confirmed sale price and no candidate bid entered');
-  }
-
-  const memberAccount = input.memberAccount || DEFAULT_MEMBER_ACCOUNT;
-  const paymentTier = input.paymentTier ?? DEFAULT_PAYMENT_TIER;
-  const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus, paymentTier);
-  return auctionFeeComponentFromRows(input.referencePriceUsd, memberAccount, titleStatus, rows, paymentTier, input.bidMethod ?? null);
+  const r = await resolveSchedule({
+    orgId: input.orgId, sighting: input.sighting, titleType: input.titleType, accountId: input.accountId, paymentTier: input.paymentTier,
+    price: { value: input.referencePriceUsd, detail: input.referencePriceUnavailableDetail },
+  });
+  if (r.ok === false) return r.component;
+  const component = auctionFeeFromRows(input.referencePriceUsd!, r.account.fee_tier, r.titleStatus, r.schedule, r.paymentTier, input.bidMethod ?? null);
+  return { ...component, basis: r.basis };
 }
 
 export interface InlandTruckingInput {
@@ -300,25 +238,26 @@ export async function getInlandTruckingComponent(input: InlandTruckingInput): Pr
 
   const { data: rates, error: ratesError } = await supabase
     .from('trucking_rates')
-    .select('vendor, price, source, effective_from')
+    .select('vendor, price, source, effective_from, currency, amount_usd')
     .eq('org_id', input.orgId)
     .eq('auction_platform', matchResult.effectivePlatform!)
     .eq('yard_state', matchResult.matchedYard.yard_state)
     .eq('yard_city', matchResult.matchedYard.yard_city)
     .eq('destination_port_normalized', input.destinationPortNormalized)
     .eq('shipping_method', input.shippingMethod)
-    .is('effective_to', null)
-    .order('price', { ascending: true });
+    .is('effective_to', null);
 
   if (ratesError) throw new Error(`Failed to load trucking rates: ${ratesError.message}`);
   if (!rates || rates.length === 0) {
     return unavailable('trucking not quotable: no current rate for this yard/port/method', `${matchResult.matchedYard.yard_city}, ${matchResult.matchedYard.yard_state} -> ${input.destinationPortNormalized} (${input.shippingMethod})`);
   }
 
-  const cheapest = rates[0] as any;
+  // Cheapest in DOLLARS: a non-USD quote is compared by its frozen USD equivalent, never by its raw figure.
+  const priced = (rates as any[]).map(r => ({ ...r, usd: usdAmount(r, r.price, 'trucking rate') })).sort((a, b) => a.usd - b.usd);
+  const cheapest = priced[0];
   return {
     status: 'available',
-    amountUsd: Number(cheapest.price),
+    amountUsd: cheapest.usd,
     reason: null,
     detail: `Cheapest of ${rates.length} current quote(s) for ${matchResult.matchedYard.yard_city}, ${matchResult.matchedYard.yard_state} -> ${input.destinationPortNormalized} (${input.shippingMethod})`,
     sourceRows: [{ label: `${cheapest.vendor} (inland trucking)`, source: cheapest.source, effectiveFrom: cheapest.effective_from }],
@@ -332,7 +271,7 @@ export async function getOceanFreightComponent(orgId: string, shippingMethod: 'c
 
   const { data, error } = await supabase
     .from('cost_rates')
-    .select('label, rate_value, rate_value_max, source, effective_from')
+    .select('label, rate_value, rate_value_max, source, effective_from, currency, amount_usd')
     .eq('org_id', orgId)
     .eq('cost_category', 'ocean_freight')
     .ilike('label', `%${shippingMethod}%`)
@@ -345,7 +284,10 @@ export async function getOceanFreightComponent(orgId: string, shippingMethod: 'c
   }
 
   const row = data[0] as any;
-  const amount = row.rate_value_max ? (Number(row.rate_value) + Number(row.rate_value_max)) / 2 : Number(row.rate_value);
+  // A non-USD rate is read through its frozen USD equivalent; its max shares that frozen exchange rate.
+  const valueUsd = usdAmount(row, row.rate_value, 'ocean freight rate');
+  const maxUsd = row.rate_value_max ? (valueUsd / Number(row.rate_value)) * Number(row.rate_value_max) : null;
+  const amount = maxUsd !== null ? (valueUsd + maxUsd) / 2 : valueUsd;
   return {
     status: 'available',
     amountUsd: amount,
@@ -361,52 +303,28 @@ export function getDutyComponent(): CostComponent {
   return unavailable('C2 duty calculator not yet built', 'blocked on collecting 10+ assessment notices (PLAN_TRACKER.md Phase C); the 51.47% formula exists but is uncalibrated for declared-CIF purposes');
 }
 
-// PROMPT 26 - fee as a function of bid, not a bracket lookup on a guessed reference price.
-// Copart/IAAI buyer fees are tiered by actual sale price; there is no single correct price to
-// look up a bracket against for a car that hasn't sold. Model the fee as fees(bid) instead.
-
-export interface FeeBracketBoundary {
-  min: number;
-  max: number | null;
-  feeLabel: string; // "$385" for a flat bracket, "12.5% of price" for the terminal percent one
-}
+// PROMPT 26 - fee as a function of bid, not a bracket lookup on a guessed reference price. Buyer fees are
+// tiered by actual sale price; there is no single correct price to look up a bracket against for a car that
+// hasn't sold. The arithmetic itself lives in _shared/feeSchedule.ts.
 
 export interface FeeBoundaries {
   buyerFee: { current: FeeBracketBoundary; next: FeeBracketBoundary | null };
   bidFee: { current: FeeBracketBoundary; next: FeeBracketBoundary | null }; // midpoint of proxy/live
 }
 
-function boundaryPair(rows: AuctionFeeBracketRow[], price: number, feeAt: (p: number) => number): { current: FeeBracketBoundary; next: FeeBracketBoundary | null } | null {
-  const sorted = [...rows].sort((a, b) => a.bracket_min - b.bracket_min);
-  const idx = sorted.findIndex(r => price >= r.bracket_min && (r.bracket_max === null || price <= r.bracket_max));
-  if (idx === -1) return null;
-  const cur = sorted[idx];
-  const nxt = idx + 1 < sorted.length ? sorted[idx + 1] : null;
-  const label = (b: AuctionFeeBracketRow, feeVal: number) => (b.fee_unit === 'percent' ? `${b.fee_value}% of price` : `$${feeVal.toFixed(2)}`);
-  return {
-    current: { min: cur.bracket_min, max: cur.bracket_max, feeLabel: label(cur, feeAt(price)) },
-    next: nxt ? { min: nxt.bracket_min, max: nxt.bracket_max, feeLabel: label(nxt, feeAt(nxt.bracket_min)) } : null,
-  };
-}
-
-// Mode B (PROMPT 26 Phase 2) - "the bracket boundaries around that candidate," so staff can
-// see the step changes near a bid they're actually considering. Never called with a guessed
-// price - only a staff-entered candidate or (for display symmetry) a confirmed sale price.
+// Mode B (PROMPT 26 Phase 2) - "the bracket boundaries around that candidate," so staff can see the step
+// changes near a bid they're actually considering.
 export async function getFeeBracketBoundaries(
   orgId: string,
   sighting: SightingForMatching,
   titleType: string | null,
   candidateBidUsd: number,
-  memberAccount?: string,
+  accountId?: string,
   paymentTier?: PaymentTier
 ): Promise<FeeBoundaries | null> {
-  const platform = resolveEffectivePlatform(sighting);
-  if (platform !== 'copart') return null;
-  const titleStatus = classifyTitleStatus(titleType);
-  if (titleStatus === 'unknown') return null;
-
-  const acct = memberAccount || DEFAULT_MEMBER_ACCOUNT;
-  const rows = await fetchAuctionFeeRows(orgId, platform, acct, titleStatus, paymentTier ?? DEFAULT_PAYMENT_TIER);
+  const r = await resolveSchedule({ orgId, sighting, titleType, accountId, paymentTier });
+  if (r.ok === false) return null;
+  const rows = r.schedule;
 
   const buyerFee = boundaryPair(rows.buyerFeeRows, candidateBidUsd, p => {
     const b = findBracket(rows.buyerFeeRows, p);
@@ -428,53 +346,6 @@ export interface MaxBidSolveResult {
   reason: string | null;
 }
 
-function combinedFeeAt(bid: number, rows: AuctionFeeRows): number | null {
-  const buyerBracket = findBracket(rows.buyerFeeRows, bid);
-  if (!buyerBracket) return null;
-  const proxyBracket = findBracket(rows.bidFeeProxyRows, bid);
-  const liveBracket = findBracket(rows.bidFeeLiveRows, bid);
-  const bidFeeMid = proxyBracket && liveBracket ? (feeForBracket(proxyBracket, bid) + feeForBracket(liveBracket, bid)) / 2 : 0;
-  return feeForBracket(buyerBracket, bid) + bidFeeMid + rows.flatFeeTotal;
-}
-
-// Mode A (PROMPT 26 Phase 2) - solve for the maximum bid where
-// bid + fees(bid) + shipping + trucking + duty <= targetLandedCost. Replaces the earlier
-// single-bracket scaffold (buyer fee only) with the real combined function: buyer fee AND
-// bid-fee-midpoint AND the flat fees, all as steps of bid. Correct by construction wherever
-// monotonicity holds (verified against all 108 real bracket rows, Phase 1 - zero violations):
-// within any region bounded by two consecutive breakpoints from EITHER bracket set, both the
-// buyer-fee bracket and the bid-fee brackets are constant, so total(bid) = bid + constant (or,
-// in the one open-ended percent bracket, a one-step linear equation) is directly solvable, and
-// monotonicity guarantees at most one region contains the true answer.
-function solveMaxBidForFees(targetAfterOtherCosts: number, rows: AuctionFeeRows): number | null {
-  const breakpoints = Array.from(new Set([
-    ...rows.buyerFeeRows.map(r => r.bracket_min),
-    ...rows.bidFeeProxyRows.map(r => r.bracket_min),
-    ...rows.bidFeeLiveRows.map(r => r.bracket_min),
-  ])).sort((a, b) => a - b);
-
-  for (let i = 0; i < breakpoints.length; i++) {
-    const regionMin = breakpoints[i];
-    const regionMaxExclusive = i + 1 < breakpoints.length ? breakpoints[i + 1] : null;
-    const buyerBracket = findBracket(rows.buyerFeeRows, regionMin);
-    if (!buyerBracket) continue;
-    const proxyBracket = findBracket(rows.bidFeeProxyRows, regionMin);
-    const liveBracket = findBracket(rows.bidFeeLiveRows, regionMin);
-    const bidFeeMid = proxyBracket && liveBracket ? (feeForBracket(proxyBracket, regionMin) + feeForBracket(liveBracket, regionMin)) / 2 : 0;
-
-    const candidate = buyerBracket.fee_unit === 'usd'
-      ? targetAfterOtherCosts - buyerBracket.fee_value - bidFeeMid - rows.flatFeeTotal
-      : (targetAfterOtherCosts - bidFeeMid - rows.flatFeeTotal) / (1 + buyerBracket.fee_value / 100);
-
-    const withinBuyerBracket = candidate >= buyerBracket.bracket_min && (buyerBracket.bracket_max === null || candidate <= buyerBracket.bracket_max);
-    const withinRegion = candidate >= regionMin && (regionMaxExclusive === null || candidate < regionMaxExclusive);
-    if (withinBuyerBracket && withinRegion) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 export function computeHeadroom(
   targetLandedCostUsd: number | null,
   auctionFees: CostComponent,
@@ -485,10 +356,12 @@ export function computeHeadroom(
   if (targetLandedCostUsd === null) {
     return unavailable('no client budget stated', 'target landed cost comes from client_briefs.max_budget_usd, which is null for this brief');
   }
+  // A PARTIAL component (available, but a sub-part such as the bid fee has no stored schedule) is missing
+  // information too: it must never feed a headroom figure as though it were complete.
   const missing = [
     ['auction fees', auctionFees], ['inland trucking', inlandTrucking],
     ['ocean freight', oceanFreight], ['duty', duty],
-  ].filter(([, c]) => (c as CostComponent).status === 'unavailable').map(([name]) => name);
+  ].filter(([, c]) => (c as CostComponent).status === 'unavailable' || !!(c as CostComponent).partialReason).map(([name, c]) => (c as CostComponent).status === 'unavailable' ? name : `${name} (partial: ${(c as CostComponent).partialReason})`);
 
   if (missing.length > 0) {
     return unavailable('one or more cost components unavailable', `missing: ${missing.join(', ')} - a headroom figure computed with any of these silently zeroed would be dangerously and falsely precise`);
@@ -514,8 +387,8 @@ export interface ComputeBidHeadroomInput {
   destinationPortLabel: string | null;
   shippingMethod: 'container' | 'roro' | null;
   targetLandedCostUsd: number | null; // from client_briefs.max_budget_usd
-  memberAccount?: string;
-  paymentTier?: PaymentTier; // PROMPT 29 Stage 4 - defaults to DEFAULT_PAYMENT_TIER below
+  accountId?: string; // defaults to the org's default account for the lot's auction house
+  paymentTier?: PaymentTier; // optional what-if override of the account's own payment tier
   // PROMPT 26 - a sold car has no future bid to size headroom for; forces headroom to abstain
   // regardless of what other components are available, while still letting the cost
   // components themselves render (that's the number that validates the fee model against
@@ -528,7 +401,7 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
     getAuctionFeeComponent({
       sighting: input.sighting, titleType: input.titleType, referencePriceUsd: input.referencePriceUsd,
       referencePriceUnavailableDetail: input.referencePriceUnavailableDetail,
-      orgId: input.orgId, memberAccount: input.memberAccount, paymentTier: input.paymentTier,
+      orgId: input.orgId, accountId: input.accountId, paymentTier: input.paymentTier,
     }),
     getInlandTruckingComponent({
       sighting: input.sighting, destinationPortNormalized: input.destinationPortNormalized,
@@ -554,15 +427,16 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
         reason: 'shipping, trucking, and duty must all be available to solve for a maximum bid (duty is currently always unavailable - C2 is blocked)',
       };
     } else {
-      const platform = resolveEffectivePlatform(input.sighting);
-      const titleStatus = classifyTitleStatus(input.titleType);
-      if (platform === 'copart' && titleStatus !== 'unknown') {
-        const memberAccount = input.memberAccount || DEFAULT_MEMBER_ACCOUNT;
-        const rows = await fetchAuctionFeeRows(input.orgId, platform, memberAccount, titleStatus, input.paymentTier ?? DEFAULT_PAYMENT_TIER);
+      const r = await resolveSchedule({ orgId: input.orgId, sighting: input.sighting, titleType: input.titleType, accountId: input.accountId, paymentTier: input.paymentTier });
+      if (r.ok === false) {
+        maxBidSolve = { status: 'unavailable', maxBidUsd: null, feeAtMaxBidUsd: null, reason: r.component.reason };
+      } else if (!solverSupports(r.schedule)) {
+        maxBidSolve = { status: 'unavailable', maxBidUsd: null, feeAtMaxBidUsd: null, reason: 'this schedule has a percent bid fee, which the max-bid solver cannot solve exactly - no figure is given rather than a wrong one' };
+      } else {
         const targetAfterOtherCosts = input.targetLandedCostUsd! - inlandTrucking.amountUsd! - oceanFreight.amountUsd! - duty.amountUsd!;
-        const maxBid = solveMaxBidForFees(targetAfterOtherCosts, rows);
+        const maxBid = solveMaxBidForFees(targetAfterOtherCosts, r.schedule);
         if (maxBid !== null) {
-          const feeAtMaxBid = combinedFeeAt(maxBid, rows);
+          const feeAtMaxBid = combinedFeeAt(maxBid, r.schedule);
           maxBidSolve = {
             status: 'available',
             maxBidUsd: Math.round(maxBid * 100) / 100,
@@ -572,19 +446,15 @@ export async function computeBidHeadroom(input: ComputeBidHeadroomInput): Promis
         } else {
           maxBidSolve = { status: 'unavailable', maxBidUsd: null, feeAtMaxBidUsd: null, reason: 'no bracket region produces a self-consistent solution for this target' };
         }
-      } else {
-        maxBidSolve = { status: 'unavailable', maxBidUsd: null, feeAtMaxBidUsd: null, reason: 'no bracket schedule for this platform/title status' };
       }
     }
   }
 
-  // Shown regardless of whether the auction-fee component actually succeeded, so the panel
-  // always states what basis was ATTEMPTED, not just what basis produced a number.
-  const pricedUnder = {
-    memberAccount: input.memberAccount || DEFAULT_MEMBER_ACCOUNT,
-    titleStatus: classifyTitleStatus(input.titleType),
-    paymentTier: input.paymentTier ?? DEFAULT_PAYMENT_TIER,
-  };
+  // The basis the fee was computed under (or attempted under) - shown so a headroom figure never rests on an
+  // unstated schedule. Null only when no account could be resolved at all.
+  const pricedUnder = auctionFees.basis
+    ? { feeTier: auctionFees.basis.feeTier, holder: auctionFees.basis.holder, titleStatus: auctionFees.basis.titleStatus, paymentTier: auctionFees.basis.paymentTier }
+    : null;
 
   return { auctionFees, inlandTrucking, oceanFreight, duty, targetLandedCostUsd: input.targetLandedCostUsd, headroom, pricedUnder, maxBidSolve };
 }
