@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { briefReference } from '../../supabase/functions/_shared/vehicleHeading.ts';
 import { useAuth } from '../contexts/AuthContext';
 import { listClients, createClient, updateClient, softDeleteClient, listClientBriefs, createClientBrief, updateClientBrief, softDeleteClientBrief, Client, ClientBrief, listRuns, ResearchRun, listDeletedClients, listDeletedClientBriefs, restoreClient, restoreClientBrief, generateBriefLink, revokeBriefLink, approveBrief, createBriefWithIntakeLink } from '../services/researchService';
 import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon, ImageOff } from 'lucide-react';
@@ -683,7 +684,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                     className="p-4 bg-orange-50 hover:bg-orange-100 cursor-pointer flex items-center justify-between transition-colors"
                   >
                     <div>
-                      <div className="font-medium text-gray-900 line-through">Brief: {b.year_min||'Any'}-{b.year_max||'Any'} {b.make||'Any'} {b.model||'Any'}</div>
+                      <div className="font-medium text-gray-900 line-through">Brief: {briefReference(b)}</div>
                       <div className="text-xs text-gray-500">Deleted {new Date(b.deleted_at!).toLocaleDateString()}</div>
                     </div>
                     <button onClick={(e) => { e.stopPropagation(); handleRestoreBrief(b.id); }} className="text-sm font-bold text-gray-600 hover:text-green-600 flex items-center gap-1">
@@ -740,7 +741,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                   ← Back to Briefs
                 </button>
                 <h2 className="text-2xl font-bold text-[#403f4c] flex items-center gap-3">
-                  {selectedBrief.year_min || 'Any'}-{selectedBrief.year_max || 'Any'} {selectedBrief.make || 'Any Make'} {selectedBrief.model || 'Any Model'}
+                  {briefReference(selectedBrief)}
                   {selectedBrief.status === 'pending_review' && (
                     <span className="bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wide">Pending review</span>
                   )}
@@ -797,7 +798,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                     {role === 'superadmin' && (
                       <button
                         onClick={() => {
-                          const name = `${selectedBrief.year_min || 'Any'}-${selectedBrief.year_max || 'Any'} ${selectedBrief.make || 'Any Make'} ${selectedBrief.model || 'Any Model'}`;
+                          const name = `${briefReference(selectedBrief)}`;
                           setDeleteTarget({ type: 'brief', id: selectedBrief.id, name });
                           setDeleteConfirmName('');
                           setShowDeleteModal(true);
@@ -1184,7 +1185,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                       <div className="flex justify-between items-start mb-3">
                         <div>
                           <h4 className="font-bold text-gray-900 text-lg group-hover:text-[#a58039] transition-colors flex items-center gap-2">
-                            {b.year_min || 'Any'}-{b.year_max || 'Any'} {b.make || 'Any Make'} {b.model || 'Any Model'}
+                            {briefReference(b)}
                             {b.status === 'pending_review' && (
                               <span className="bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide">Pending review</span>
                             )}

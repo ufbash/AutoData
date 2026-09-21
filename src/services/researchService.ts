@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { briefReference } from '../../supabase/functions/_shared/vehicleHeading';
 import { fetchAllVerified, assertComplete } from '../../supabase/functions/_shared/paginatedRead';
 
 export interface Client {
@@ -252,7 +253,7 @@ export const createRun = async (orgId: string, input: {
   if (input.client_brief_id) {
     hasDeposit = !!input.brief?.deposit_received_at;
     depositSubject = input.brief
-      ? `${input.brief.year_min || 'Any'}-${input.brief.year_max || 'Any'} ${input.brief.make || 'Any Make'} ${input.brief.model || 'Any Model'}`
+      ? briefReference(input.brief)
       : 'this brief';
   } else {
     // No brief means no deposit record to check at all - a briefless run is the exception,

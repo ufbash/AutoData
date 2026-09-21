@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { briefReference } from '../../supabase/functions/_shared/vehicleHeading.ts';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getRun,
@@ -975,7 +976,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                         onClick={() => onOpenClient?.(run.client!.id, run.client_brief!.id)}
                         className="font-bold text-[#a58039] hover:underline"
                       >
-                        {run.client_brief.year_min || 'Any'}-{run.client_brief.year_max || 'Any'} {run.client_brief.make || 'Any Make'} {run.client_brief.model || 'Any Model'}
+                        {briefReference(run.client_brief)}
                       </button>
                     </>
                   )}

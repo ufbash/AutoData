@@ -424,7 +424,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
                   <option value="">{selectedClientId ? '-- No brief link --' : '-- Select a client first --'}</option>
                   {briefs.map(b => (
                     <option key={b.id} value={b.id}>
-                      {b.year_min || 'Any'}-{b.year_max || 'Any'} {b.make || 'Any Make'} {b.model || 'Any Model'}
+                      {briefReference(b)}
                     </option>
                   ))}
                 </select>
@@ -435,7 +435,7 @@ const ResearchRuns: React.FC<ResearchRunsProps> = ({ onOpenRun, initialClientId,
               <div className="border border-red-200 bg-red-50 rounded-lg p-4 space-y-2">
                 <p className="text-sm font-bold text-red-700">
                   {selectedBriefId
-                    ? `No commitment fee recorded for ${selectedBriefObj ? `${selectedBriefObj.year_min || 'Any'}-${selectedBriefObj.year_max || 'Any'} ${selectedBriefObj.make || 'Any Make'} ${selectedBriefObj.model || 'Any Model'}` : 'this brief'}.`
+                    ? `No commitment fee recorded for ${selectedBriefObj ? `${briefReference(selectedBriefObj)}` : 'this brief'}.`
                     : 'No brief selected — a run with no linked brief has no deposit record to check.'}
                 </p>
                 <p className="text-sm text-red-600">
