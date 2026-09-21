@@ -30,9 +30,15 @@ export const PORT_ALIASES = {
   'PROVDIENCE': 'PROVIDENCE',        // 3 IAAI rates: Boston-Shirley, Taunton, Templeton MA
   'WILLMINGTON': 'WILMINGTON',       // 1 Copart rate: Seaford DE
   'MD-BALTIMORE': 'BALTIMORE',       // 1 Copart rate: Houston TX (raw "MD-Baltimore", a state-prefixed Baltimore)
-  // Deliberately NOT aliased: GA-RINCON (Rincon GA is a distinct inland location, not proven to be
-  // SAVANNAH), DAVISVILLE (a real port town), CALIFORNIA/TEXAS/NEW JERSEY (the vendor's regional
-  // labels), and MIAMI PORT vs MIAMI (probably one port, but a naming call for a human).
+  // Prompt 36 Stage 4 (21 Sep 2026, Bashir's call): one port. 12 Copart RoRo rates carried MIAMI PORT
+  // while 12 IAAI container rates carried MIAMI; they never collided only because platform and
+  // method differ. Checked before applying: no yard holds a live MIAMI rate on the same platform
+  // and method as a MIAMI PORT rate, so no duplicate is created.
+  'MIAMI PORT': 'MIAMI',
+  // Deliberately NOT aliased (each with its reason, PLAN_TRACKER.md 4.31 Stage 4): GA-RINCON (Rincon
+  // GA is a distinct inland location, not proven to be SAVANNAH), DAVISVILLE (a real port town),
+  // CALIFORNIA/TEXAS/NEW JERSEY (the vendor's own regional labels - inventing a specific port from a
+  // state name is guessing).
 };
 
 export function normalizePort(raw) {
