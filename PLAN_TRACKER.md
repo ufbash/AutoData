@@ -1781,13 +1781,13 @@ zero matches - it will matter the day one is captured. The two ~65% numbers are 
 | Edge `vehicle-reference-models-ondemand` (×2) | vehicle_reference_makes; vehicle_reference_models | `ilike name`; `make_id` + `model_year` | 1; models for one make-year (≤ ~200) | Yes - one make-year | OK |
 | Edge `vehicle-reference-make-probe` (×2) | vehicle_reference_makes | pending filter, ordered, `.limit(batchSize)`; `head` count | one batch by design; a count | Yes - a deliberate batch | OK (deliberate) |
 | Edge `list-active-runs` | research_runs | org, live, ordered, `.limit(100)` | 100 by design - a run picker for the extension | Yes - deliberate limit | OK (deliberate; newest 100 runs) |
-| Edge `asset-merge-candidates` · assets | assets | live | **grows with every distinct vehicle** | Was not | **FIXED** - paged + count-verified. *Needs a deploy - not yet deployed* |
+| Edge `asset-merge-candidates` · assets | assets | live | **grows with every distinct vehicle** | Was not | **FIXED** - paged + count-verified. *Deployed 21 Sep 2026* |
 | Edge `asset-merge-candidates` · per pair (×4) | sightings, auction_history | `asset_id` | a few per asset | Per-asset | OK |
 | Edge `research-capture` · asset lookups by fingerprint / VIN-less hash (×3) | assets | `fingerprint_hash` / `vinless_identity_hash`, live | 0-1; a few | Yes - keyed on a hash | OK |
 | Edge `research-capture` · existing sighting; listing existence; max position (×3) | sightings; research_run_listings | asset + lot + platform; `run_id` + `sighting_id`; `run_id` `.limit(1)` | 0-1 | Yes | OK |
 | Edge `app-ingest` · asset by fingerprint | assets | `fingerprint_hash` | 0-1 | Yes | OK |
 | Edge `store-images`, `upload-images` · sighting by id | sightings | `id` | 1 | Yes | OK |
-| Edge `sightings-platform-relabel` | sightings | `source_platform = 'bidcars'` | **grows with every bid.cars capture** (was `.limit(5000)`, which PostgREST silently capped at 1,000) | Was not | **FIXED** - paged + count-verified. *Needs a deploy - not yet deployed* (a one-shot backfill, already applied; 171 rows today, so the cap was not reached) |
+| Edge `sightings-platform-relabel` | sightings | `source_platform = 'bidcars'` | **grows with every bid.cars capture** (was `.limit(5000)`, which PostgREST silently capped at 1,000) | Was not | **FIXED** - paged + count-verified. *Deployed 21 Sep 2026* (a one-shot backfill, already applied; 171 rows today, so the cap was not reached) |
 | Edge `intake-brief` (×2) | client_briefs; clients | share token; `id` | 1 | Yes | OK |
 | `chrome-extension/*` | - | no direct database reads; every call goes through an Edge Function (`list-active-runs`, `research-capture`, `upload-images`) | - | n/a | OK - covered by the Edge rows |
 | `scripts/*.mjs` | - | no live reads: they run over JSON exports made with `supabase db query`, which is direct SQL and is **not** subject to the API row cap | - | n/a | OK |
@@ -1825,7 +1825,7 @@ Row counts are the same today, as expected: none of these tables is over the cap
 
 A caveat found while testing, recorded because it is the kind of thing that recurs: a page builder that **ignores** `from`/`to` (returns the same 1,000 rows for every page) never terminates - `fetchAllPages` assumes the builder honours the range. All shipped callers use `.range(from, to)`; the test that hit this was mine.
 
-**Not done, and why.** (1) The two Edge Function changes (`asset-merge-candidates`, `sightings-platform-relabel`) are in the repo but **not deployed** - a deploy needs confirmation, and `deno` is not installed here so they were not type-checked locally (the helper is import-free and the pattern is identical to the frontend's). (2) `public-run` and `storeImagesForRun` per-run reads are recorded as accepted risk, not count-checked. (3) `listAvailableSightings` still loads the whole sightings set and slices it in memory; it is now correct, not cheap - a server-side pager belongs to a later prompt (no new features here).
+**Not done, and why.** (1) The two Edge Function changes (`asset-merge-candidates` v5, `sightings-platform-relabel` v2) were **deployed 21 Sep 2026** after confirmation and smoke-tested read-only in the signed-in app: the merge scan returned `{candidates: []}` and the relabel dry run examined 171 bid.cars sightings (the paged, count-verified path) and would change 0. `deno` is not installed here, so they were not type-checked locally - the deploy compiling and running is the check. (2) `public-run` and `storeImagesForRun` per-run reads are recorded as accepted risk, not count-checked. (3) `listAvailableSightings` still loads the whole sightings set and slices it in memory; it is now correct, not cheap - a server-side pager belongs to a later prompt (no new features here).
 
 #### Stage 3 — the debt register reconciled against the code (21 Sep 2026)
 
@@ -1930,10 +1930,10 @@ A caveat found while testing, recorded because it is the kind of thing that recu
 **Tested vs untested, stated plainly.**
 - *Proven server-side earlier (Prompt 34 Stage 4), through the service function:* type filing, wrong-MIME rejection, unknown type, soft-deleted / unknown vehicle, empty file, no token (401), soft delete keeps the stored file.
 - *Proven by Bashir through the real file picker, 21 Sep 2026:* an **epub is rejected**, and a **15 MB image is rejected** (the 8 MB limit). Both went through the real `<input type=file>`, the real `onChange` handler and the real error display - the part the automation could not reach.
-- *Not confirmed:* the **happy path through the picker** (one real PDF, accepted and listed) was not reported in this session's test. It is proven only through the service function. Listed as outstanding rather than claimed.
+- *Confirmed by Bashir later the same day (21 Sep 2026):* the **happy path** - one real PDF uploaded through the picker for the Yaris, accepted and listed. The server's own 413 (over-size) path remains unexercised: the 15 MB rejection fires in the browser first.
 - *Note on what the rejections prove:* the 15 MB rejection fires in the browser before any request is sent, so the server's own 413 path is still unexercised. The epub rejection is either the dialog's `accept` filter or the server's "Unsupported file type" - the report does not say which. Both end in a refusal; neither was distinguished.
 
-**Raised during that test: the popup lags.** Measured cause: 12 full-size photos (2576x1879, ~222 MB decoded) rendered into 80px tiles. Fixed with client-side thumbnails (`src/utils/thumbnail.ts`, `WonVehicleDetail.tsx`): gallery memory ~222 MB -> 3.4 MB, scroll frame time p95 27 ms -> 17.6 ms. See `docs/SOLVED.md` topic 44. **Not** verified on Bashir's own machine; the measurement was in the in-app browser. The list thumbnail in `ClientsList.tsx` (one full-size image per won vehicle) still decodes at full size and was left alone.
+**Raised during that test: the popup lags.** Measured cause: 12 full-size photos (2576x1879, ~222 MB decoded) rendered into 80px tiles. Fixed with client-side thumbnails (`src/utils/thumbnail.ts`, `WonVehicleDetail.tsx`): gallery memory ~222 MB -> 3.4 MB, scroll frame time p95 27 ms -> 17.6 ms. See `docs/SOLVED.md` topic 44. **Confirmed smooth on Bashir's own machine, 21 Sep 2026** (the measurement above was in the in-app browser). The list thumbnail in `ClientsList.tsx` (one full-size image per won vehicle) still decodes at full size and was left alone.
 
 ---
 
