@@ -1,5 +1,6 @@
 import { CarSale, RecordType, Currency } from "../types";
 import { supabase } from "./supabaseClient";
+import { fetchAllVerified } from "../../supabase/functions/_shared/paginatedRead";
 import { convertToUSD } from "./currencyService";
 import { v4 as uuidv4 } from "uuid";
 
@@ -37,17 +38,18 @@ export interface AppIngestPayload {
 }
 
 export const getStoredSales = async (): Promise<CarSale[]> => {
-  const { data, error } = await supabase
-    .from("sightings")
-    .select("id, dealer_source, listed_price, listed_currency, sale_date, mileage_miles, raw_payload, logged_via, captured_at, assets ( make, model, trim, year )")
-    .order("captured_at", { ascending: false });
-
-  if (error) {
-    console.error("Failed to fetch sightings from Supabase:", error);
-    throw error;
-  }
-
-  if (!data || !Array.isArray(data)) return [];
+  // Every sighting the caller can see. Paged and count-verified: a plain query is capped at
+  // 1,000 rows by PostgREST, which would silently drop the oldest records from every view.
+  const data = await fetchAllVerified<any>(
+    'sightings',
+    (from, to) => supabase
+      .from("sightings")
+      .select("id, dealer_source, listed_price, listed_currency, sale_date, mileage_miles, raw_payload, logged_via, captured_at, assets ( make, model, trim, year )")
+      .order("captured_at", { ascending: false })
+      .order("id")
+      .range(from, to),
+    () => supabase.from("sightings").select("id", { count: "exact", head: true }),
+  );
 
   return data.map((row: any): CarSale => {
     const raw = row.raw_payload || {};

@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
 // PROMPT 33 Stage 3 - "extend the existing normaliser, do not build a second one." specVocabulary.ts
 // is pure TS with no Deno-only imports (verified before reuse) - imported directly here rather
 // than duplicated, so alias/family logic never diverges between the frontend and the Edge
@@ -113,11 +114,16 @@ export const searchMakes = (tiered: TieredMake[], query: string): TieredMake[] =
 };
 
 export const listTieredMakes = async (): Promise<TieredMake[]> => {
-  const { data, error } = await supabase
-    .from('vehicle_reference_makes')
-    .select('id, name, probed_at, car_model_years, probe_failed, demoted_at, demoted_reason')
-    .order('name');
-  if (error) throw new Error(`Failed to load makes: ${error.message}`);
+  const data = await fetchAllVerified<MakeRowWithEvidence>(
+    'vehicle makes',
+    (from, to) => supabase
+      .from('vehicle_reference_makes')
+      .select('id, name, probed_at, car_model_years, probe_failed, demoted_at, demoted_reason')
+      .order('name')
+      .order('id')
+      .range(from, to),
+    () => supabase.from('vehicle_reference_makes').select('id', { count: 'exact', head: true }),
+  );
 
   // Demand evidence is best-effort: if the counts call fails, the vocabulary must still load
   // (every make remains selectable), just without tier 1.
@@ -131,7 +137,7 @@ export const listTieredMakes = async (): Promise<TieredMake[]> => {
       traded.set(key, (traded.get(key) ?? 0) + Number(row.n));
     }
   }
-  return tierMakes((data || []) as MakeRowWithEvidence[], traded);
+  return tierMakes(data, traded);
 };
 
 /** Reversible; never a delete. */
@@ -192,31 +198,41 @@ export const listReferenceModels = async (
       ? fullRange
       : Array.from(new Set([lo, hi, ...fullRange.slice(0, MAX_YEARS_PER_LOOKUP - 2)]));
 
-    const { data: cachedYears, error: cachedYearsError } = await supabase
-      .from('vehicle_reference_models')
-      .select('model_year')
-      .eq('make_id', makeRow.id)
-      .in('model_year', years);
-    if (cachedYearsError) throw new Error(`Failed to check model cache: ${cachedYearsError.message}`);
+    const cachedYears = await fetchAllVerified<{ model_year: number }>(
+      'cached model years',
+      (from, to) => supabase
+        .from('vehicle_reference_models')
+        .select('model_year')
+        .eq('make_id', makeRow.id)
+        .in('model_year', years)
+        .order('id')
+        .range(from, to),
+      () => supabase.from('vehicle_reference_models').select('id', { count: 'exact', head: true }).eq('make_id', makeRow.id).in('model_year', years),
+    );
     const alreadyCached = new Set((cachedYears || []).map((r: { model_year: number }) => r.model_year));
 
     const missingYears = years.filter(y => !alreadyCached.has(y));
     await Promise.all(missingYears.map(y => seedYearOnDemand(resolvedMake, y)));
   }
 
-  let query = supabase
-    .from('vehicle_reference_models')
-    .select('id, name')
-    .eq('make_id', makeRow.id);
-  if (yearMin != null) query = query.gte('model_year', yearMin);
-  if (yearMax != null) query = query.lte('model_year', yearMax);
-
-  const { data, error } = await query.order('name');
-  if (error) throw new Error(`Failed to load models: ${error.message}`);
+  const scope = <Q extends { gte: (c: string, v: number) => Q; lte: (c: string, v: number) => Q }>(q: Q): Q => {
+    let out = q;
+    if (yearMin != null) out = out.gte('model_year', yearMin);
+    if (yearMax != null) out = out.lte('model_year', yearMax);
+    return out;
+  };
+  const data = await fetchAllVerified<ReferenceModel>(
+    'reference models',
+    (from, to) => scope(supabase.from('vehicle_reference_models').select('id, name').eq('make_id', makeRow.id))
+      .order('name')
+      .order('id')
+      .range(from, to),
+    () => scope(supabase.from('vehicle_reference_models').select('id', { count: 'exact', head: true }).eq('make_id', makeRow.id)),
+  );
 
   // Dedupe by name (a model can legitimately repeat across several years).
   const seen = new Map<string, ReferenceModel>();
-  for (const row of data || []) {
+  for (const row of data) {
     if (!seen.has(row.name)) seen.set(row.name, row);
   }
   return Array.from(seen.values());

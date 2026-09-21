@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { canonicalizeForFingerprint } from "../_shared/specVocabulary.ts";
+import { fetchAllVerified } from "../_shared/paginatedRead.ts";
 import { detectMergeConflicts, detectFieldDisagreements } from "../_shared/assetMergeConflicts.ts";
 import { createHash } from "node:crypto";
 
@@ -87,13 +88,20 @@ serve(async (req: Request) => {
       });
     }
 
-    const { data: assets, error: assetsError } = await supabase
-      .from('assets')
-      .select('id, org_id, vin, make, model, year, trim, exterior_color, interior_color, origin_status, fingerprint_hash, body_style, cylinders, engine_type, transmission, fuel, drivetrain, horsepower, status, historical_decay_timer_days, first_seen_at, last_seen_at, created_at, updated_at, merged_into_asset_id')
-      .is('deleted_at', null);
-    if (assetsError) throw assetsError;
+    // Paged and count-verified: a merge-candidate scan over a truncated asset list would miss pairs,
+    // indistinguishable from there being none.
+    const assets = await fetchAllVerified<AssetRow>(
+      'assets',
+      (from, to) => supabase
+        .from('assets')
+        .select('id, org_id, vin, make, model, year, trim, exterior_color, interior_color, origin_status, fingerprint_hash, body_style, cylinders, engine_type, transmission, fuel, drivetrain, horsepower, status, historical_decay_timer_days, first_seen_at, last_seen_at, created_at, updated_at, merged_into_asset_id')
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to),
+      () => supabase.from('assets').select('id', { count: 'exact', head: true }).is('deleted_at', null),
+    );
 
-    const live = (assets as AssetRow[]).filter(a => a.merged_into_asset_id === null);
+    const live = assets.filter(a => a.merged_into_asset_id === null);
     const vinBearing = live.filter(a => a.vin && a.vin.length >= 11);
     const vinLess = live.filter(a => !a.vin || a.vin.length < 11);
     const vinLessByHash = new Map<string, AssetRow>();

@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
 import { CostCategory, CostRateBasis, CostRateUnit, CostRateSource } from './costRatesService';
 import { fetchExchangeRates } from './currencyService';
 
@@ -126,18 +127,20 @@ export const searchAssets = async (query: string): Promise<AssetSearchResult[]> 
   return data || [];
 };
 
-export const listExtractions = async (orgId: string, status?: ExtractionStatus): Promise<CostDocumentExtraction[]> => {
-  let q = supabase
-    .from('cost_document_extractions')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false });
-  if (status) q = q.eq('extraction_status', status);
-
-  const { data, error } = await q;
-  if (error) throw new Error(`Failed to list extractions: ${error.message}`);
-  return data || [];
-};
+export const listExtractions = async (orgId: string, status?: ExtractionStatus): Promise<CostDocumentExtraction[]> =>
+  fetchAllVerified<CostDocumentExtraction>(
+    'cost document extractions',
+    (from, to) => {
+      let q = supabase.from('cost_document_extractions').select('*').eq('org_id', orgId);
+      if (status) q = q.eq('extraction_status', status);
+      return q.order('created_at', { ascending: false }).order('id').range(from, to);
+    },
+    () => {
+      let q = supabase.from('cost_document_extractions').select('id', { count: 'exact', head: true }).eq('org_id', orgId);
+      if (status) q = q.eq('extraction_status', status);
+      return q;
+    },
+  );
 
 export const getSignedDocumentUrl = async (storagePath: string, expiresIn = 3600): Promise<string | null> => {
   const { data, error } = await supabase.storage

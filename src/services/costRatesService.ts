@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
 
 // PROMPT 19 Phase 5/6 - C1. PROJECT_CHARTER.md S5.10: rates are never edited in place. A
 // changed rate is a new row with a new effective_from; the superseded row gets an
@@ -34,19 +35,19 @@ export interface CostRate {
   fx_rate_date: string | null;
 }
 
-export const listCostRates = async (orgId: string): Promise<CostRate[]> => {
-  const { data, error } = await supabase
-    .from('cost_rates')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('cost_category', { ascending: true })
-    .order('effective_from', { ascending: false });
-
-  if (error) {
-    throw new Error(`Failed to list cost rates: ${error.message}`);
-  }
-  return data || [];
-};
+export const listCostRates = async (orgId: string): Promise<CostRate[]> =>
+  fetchAllVerified<CostRate>(
+    'cost rates',
+    (from, to) => supabase
+      .from('cost_rates')
+      .select('*')
+      .eq('org_id', orgId)
+      .order('cost_category', { ascending: true })
+      .order('effective_from', { ascending: false })
+      .order('id')
+      .range(from, to),
+    () => supabase.from('cost_rates').select('id', { count: 'exact', head: true }).eq('org_id', orgId),
+  );
 
 export interface NewCostRateInput {
   cost_category: CostCategory;

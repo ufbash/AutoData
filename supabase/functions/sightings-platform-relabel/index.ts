@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { auctionHouseFromBidcarsSnapshot } from "../_shared/bidcarsLot.ts";
+import { fetchAllVerified } from "../_shared/paginatedRead.ts";
 
 // DEBT #61 - corrects sightings.source_auction_platform on EXISTING bid.cars captures, using the
 // same one definition research-capture now uses at ingest (_shared/bidcarsLot.ts) rather than a
@@ -51,19 +52,25 @@ serve(async (req: Request) => {
     const payload = await req.json().catch(() => ({}));
     const mode = payload?.mode === 'apply' ? 'apply' : 'dry_run';
 
-    const { data: rows, error: rowsError } = await supabase
-      .from('sightings')
-      .select('id, source_auction_platform, raw_payload')
-      .eq('source_platform', 'bidcars')
-      .limit(5000);
-    if (rowsError) throw rowsError;
+    // Paged and count-verified: `.limit(5000)` is capped to 1,000 rows by PostgREST, so a backfill
+    // over more bid.cars sightings than that would silently skip the rest.
+    const rows = await fetchAllVerified<{ id: string; source_auction_platform: string | null; raw_payload: unknown }>(
+      'bid.cars sightings',
+      (from, to) => supabase
+        .from('sightings')
+        .select('id, source_auction_platform, raw_payload')
+        .eq('source_platform', 'bidcars')
+        .order('id')
+        .range(from, to),
+      () => supabase.from('sightings').select('id', { count: 'exact', head: true }).eq('source_platform', 'bidcars'),
+    );
 
     const summary: Record<string, number> = {};
     const changes: { id: string; from: string | null; to: string; lot_prefix: string | null }[] = [];
     let unresolved = 0;
     let unchanged = 0;
 
-    for (const row of rows ?? []) {
+    for (const row of rows) {
       const raw = (row.raw_payload ?? {}) as Record<string, unknown>;
       const derived = auctionHouseFromBidcarsSnapshot(raw.raw_dom_snapshot as string | null);
       if (!derived.house) { unresolved++; continue; }

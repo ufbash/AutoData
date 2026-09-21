@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { fetchAllVerified, assertComplete } from '../../supabase/functions/_shared/paginatedRead';
 
 export interface Client {
   id: string;
@@ -150,35 +151,38 @@ export interface RunListing {
 }
 
 export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
-  const { data, error } = await supabase
-    .from('research_runs')
-    .select('*, research_run_listings(count), client:clients(*), client_brief:client_briefs(*)')
-    .eq('org_id', orgId)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    throw new Error(`Failed to list research runs: ${error.message}`);
-  }
+  const runs = await fetchAllVerified<any>(
+    'research runs',
+    (from, to) => supabase
+      .from('research_runs')
+      .select('*, research_run_listings(count), client:clients(*), client_brief:client_briefs(*)')
+      .eq('org_id', orgId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .order('id')
+      .range(from, to),
+    () => supabase.from('research_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).is('deleted_at', null),
+  );
 
   // A single extra query for the at-a-glance marker, rather than embedding a filtered
   // count per row - PostgREST embedding doesn't cleanly express "count where approved_at
-  // is not null" alongside the unfiltered listing_count above.
-  const runIds = (data || []).map((row: any) => row.id);
-  const approvedRunIds = new Set<string>();
-  if (runIds.length > 0) {
-    const { data: approvals, error: approvalsError } = await supabase
+  // is not null" alongside the unfiltered listing_count above. Org-scoped and paged (not
+  // `.in('run_id', <every run id>)`, which grows the URL with the run count and fails loudly
+  // at scale); it may include approvals on deleted runs, which the membership test ignores.
+  const approvals = await fetchAllVerified<{ run_id: string }>(
+    'run approvals',
+    (from, to) => supabase
       .from('research_run_listings')
       .select('run_id')
-      .in('run_id', runIds)
-      .not('approved_at', 'is', null);
-    if (approvalsError) {
-      throw new Error(`Failed to list research runs: ${approvalsError.message}`);
-    }
-    (approvals || []).forEach((row: any) => approvedRunIds.add(row.run_id));
-  }
+      .eq('org_id', orgId)
+      .not('approved_at', 'is', null)
+      .order('id')
+      .range(from, to),
+    () => supabase.from('research_run_listings').select('id', { count: 'exact', head: true }).eq('org_id', orgId).not('approved_at', 'is', null),
+  );
+  const approvedRunIds = new Set<string>(approvals.map(row => row.run_id));
 
-  return (data || []).map((row: any) => ({
+  return runs.map((row: any) => ({
     ...row,
     listing_count: row.research_run_listings?.[0]?.count || 0,
     has_client_approval: approvedRunIds.has(row.id),
@@ -315,15 +319,18 @@ export const getRun = async (runId: string): Promise<ResearchRun> => {
 // --- Clients and Briefs API ---
 
 export const listClients = async (orgId: string): Promise<Client[]> => {
-  const { data, error } = await supabase
-    .from('clients')
-    .select('*')
-    .eq('org_id', orgId)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false });
-
-  if (error) throw new Error(`Failed to list clients: ${error.message}`);
-  return data || [];
+  return fetchAllVerified<Client>(
+    'clients',
+    (from, to) => supabase
+      .from('clients')
+      .select('*')
+      .eq('org_id', orgId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .order('id')
+      .range(from, to),
+    () => supabase.from('clients').select('id', { count: 'exact', head: true }).eq('org_id', orgId).is('deleted_at', null),
+  );
 };
 
 export const createClient = async (orgId: string, client: Partial<Client>): Promise<Client> => {
@@ -337,22 +344,20 @@ export const createClient = async (orgId: string, client: Partial<Client>): Prom
   return data;
 };
 
-export const listClientBriefs = async (orgId: string, clientId?: string): Promise<ClientBrief[]> => {
-  let q = supabase
-    .from('client_briefs')
-    .select('*')
-    .eq('org_id', orgId)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false });
-  
-  if (clientId) {
-    q = q.eq('client_id', clientId);
-  }
-
-  const { data, error } = await q;
-  if (error) throw new Error(`Failed to list client briefs: ${error.message}`);
-  return data || [];
-};
+export const listClientBriefs = async (orgId: string, clientId?: string): Promise<ClientBrief[]> =>
+  fetchAllVerified<ClientBrief>(
+    'client briefs',
+    (from, to) => {
+      let q = supabase.from('client_briefs').select('*').eq('org_id', orgId).is('deleted_at', null);
+      if (clientId) q = q.eq('client_id', clientId);
+      return q.order('created_at', { ascending: false }).order('id').range(from, to);
+    },
+    () => {
+      let q = supabase.from('client_briefs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).is('deleted_at', null);
+      if (clientId) q = q.eq('client_id', clientId);
+      return q;
+    },
+  );
 
 export const createClientBrief = async (orgId: string, clientId: string, brief: Partial<ClientBrief>): Promise<ClientBrief> => {
   // Staff entering a brief directly have already reviewed it by typing it themselves - the
@@ -519,17 +524,21 @@ export const softDeleteClientBrief = async (briefId: string, userId: string): Pr
 export const listDeletedClients = async (orgId: string): Promise<Client[]> => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const cutoff = thirtyDaysAgo.toISOString();
 
-  const { data, error } = await supabase
-    .from('clients')
-    .select('*')
-    .eq('org_id', orgId)
-    .not('deleted_at', 'is', null)
-    .gte('deleted_at', thirtyDaysAgo.toISOString())
-    .order('deleted_at', { ascending: false });
-
-  if (error) throw new Error(`Failed to list deleted clients: ${error.message}`);
-  return data || [];
+  return fetchAllVerified<Client>(
+    'deleted clients',
+    (from, to) => supabase
+      .from('clients')
+      .select('*')
+      .eq('org_id', orgId)
+      .not('deleted_at', 'is', null)
+      .gte('deleted_at', cutoff)
+      .order('deleted_at', { ascending: false })
+      .order('id')
+      .range(from, to),
+    () => supabase.from('clients').select('id', { count: 'exact', head: true }).eq('org_id', orgId).not('deleted_at', 'is', null).gte('deleted_at', cutoff),
+  );
 };
 
 export const restoreClient = async (clientId: string): Promise<void> => {
@@ -543,17 +552,21 @@ export const restoreClient = async (clientId: string): Promise<void> => {
 export const listDeletedClientBriefs = async (orgId: string): Promise<ClientBrief[]> => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const cutoff = thirtyDaysAgo.toISOString();
 
-  const { data, error } = await supabase
-    .from('client_briefs')
-    .select('*')
-    .eq('org_id', orgId)
-    .not('deleted_at', 'is', null)
-    .gte('deleted_at', thirtyDaysAgo.toISOString())
-    .order('deleted_at', { ascending: false });
-
-  if (error) throw new Error(`Failed to list deleted briefs: ${error.message}`);
-  return data || [];
+  return fetchAllVerified<ClientBrief>(
+    'deleted client briefs',
+    (from, to) => supabase
+      .from('client_briefs')
+      .select('*')
+      .eq('org_id', orgId)
+      .not('deleted_at', 'is', null)
+      .gte('deleted_at', cutoff)
+      .order('deleted_at', { ascending: false })
+      .order('id')
+      .range(from, to),
+    () => supabase.from('client_briefs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).not('deleted_at', 'is', null).gte('deleted_at', cutoff),
+  );
 };
 
 export const restoreClientBrief = async (briefId: string): Promise<void> => {
@@ -617,14 +630,15 @@ export const listAuctionHistoryForAssets = async (assetIds: string[]): Promise<M
   const uniqueIds = Array.from(new Set(assetIds.filter(Boolean)));
   if (uniqueIds.length === 0) return map;
 
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('auction_history')
-    .select('asset_id, auction_platform, auction_date, lot_number, bid_amount_usd, odometer_miles, status')
+    .select('asset_id, auction_platform, auction_date, lot_number, bid_amount_usd, odometer_miles, status', { count: 'exact' })
     .in('asset_id', uniqueIds);
 
   if (error) {
     throw new Error(`Failed to list auction history: ${error.message}`);
   }
+  assertComplete('auction history', (data || []).length, count);
 
   (data || []).forEach((row: AuctionHistoryRecord) => {
     if (!map.has(row.asset_id)) map.set(row.asset_id, []);
@@ -649,15 +663,16 @@ export const listVinDecodesForVins = async (vins: string[]): Promise<Map<string,
   const uniqueVins = Array.from(new Set(vins.filter(Boolean)));
   if (uniqueVins.length === 0) return map;
 
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('vin_decodes')
-    .select('vin, decoded_data')
+    .select('vin, decoded_data', { count: 'exact' })
     .in('vin', uniqueVins)
     .eq('decode_status', 'success');
 
   if (error) {
     throw new Error(`Failed to list VIN decodes: ${error.message}`);
   }
+  assertComplete('VIN decodes', (data || []).length, count);
 
   (data || []).forEach((row: { vin: string; decoded_data: Record<string, unknown> | null }) => {
     map.set(row.vin, {
@@ -671,7 +686,7 @@ export const listVinDecodesForVins = async (vins: string[]): Promise<Map<string,
 };
 
 export const listRunListings = async (runId: string): Promise<RunListing[]> => {
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('research_run_listings')
     .select(`
       id,
@@ -735,13 +750,14 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
           exterior_color
         )
       )
-    `)
+    `, { count: 'exact' })
     .eq('run_id', runId)
     .order('position', { ascending: true, nullsFirst: false });
 
   if (error) {
     throw new Error(`Failed to list run listings: ${error.message}`);
   }
+  assertComplete('run listings', (data || []).length, count);
 
   return (data || []).map((row: any) => {
     const sighting = Array.isArray(row.sightings) ? row.sightings[0] : (row.sightings || {});
@@ -1071,7 +1087,9 @@ export async function listAvailableSightings(
   limit = 60,
   offset = 0
 ): Promise<AvailableSighting[]> {
-  const { data, error } = await supabase
+  const data = await fetchAllVerified<any>(
+    'available sightings',
+    (from, to) => supabase
     .from('sightings')
     .select(`
       id,
@@ -1101,11 +1119,11 @@ export async function listAvailableSightings(
     .eq('org_id', orgId)
     // Sightings of a soft-deleted asset (Prompt 35 follow-up, migration 046) are not offered.
     .is('assets.deleted_at', null)
-    .order('captured_at', { ascending: false });
-
-  if (error) {
-    throw new Error(`Failed to list available sightings: ${error.message}`);
-  }
+    .order('captured_at', { ascending: false })
+    .order('id')
+    .range(from, to),
+    () => supabase.from('sightings').select('id, assets!inner(id)', { count: 'exact', head: true }).eq('org_id', orgId).is('assets.deleted_at', null),
+  );
 
   const excludeSet = new Set(excludeSightingIds);
   const available = (data || [])
@@ -1209,20 +1227,23 @@ export const softDeleteRun = async (runId: string, userId: string): Promise<void
 export const listDeletedRuns = async (orgId: string): Promise<ResearchRun[]> => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const cutoff = thirtyDaysAgo.toISOString();
 
-  const { data, error } = await supabase
-    .from('research_runs')
-    .select('*, research_run_listings(count)')
-    .eq('org_id', orgId)
-    .not('deleted_at', 'is', null)
-    .gte('deleted_at', thirtyDaysAgo.toISOString())
-    .order('deleted_at', { ascending: false });
+  const rows = await fetchAllVerified<any>(
+    'deleted research runs',
+    (from, to) => supabase
+      .from('research_runs')
+      .select('*, research_run_listings(count)')
+      .eq('org_id', orgId)
+      .not('deleted_at', 'is', null)
+      .gte('deleted_at', cutoff)
+      .order('deleted_at', { ascending: false })
+      .order('id')
+      .range(from, to),
+    () => supabase.from('research_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).not('deleted_at', 'is', null).gte('deleted_at', cutoff),
+  );
 
-  if (error) {
-    throw new Error(`Failed to list deleted runs: ${error.message}`);
-  }
-
-  return (data || []).map((row: any) => ({
+  return rows.map((row: any) => ({
     ...row,
     listing_count: row.research_run_listings?.[0]?.count || 0,
   }));
