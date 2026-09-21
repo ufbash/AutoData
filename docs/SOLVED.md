@@ -2177,10 +2177,39 @@ database's yard list matched it to `Dallas/Ft Worth, Texas`. The two could only 
 the list was the first 1,000 in arbitrary order: 738 Copart rows, 262 of 588 IAAI rows, and no Manheim or ADESA at all. A yard in the missing part came back as "no yard found", which looks exactly like a real absence - the silent-null shape this project keeps
 unwinding, this time from a row cap rather than a bad field path.
 
-**Why it survived.** Every verification of the matcher that had been run used the complete list (Node, straight from SQL), and the app only ever looked "roughly right" because the truncated list still contained most Copart yards. It also likely explains part of the
-"~1/3 of yards abstain" figure Prompt 20 recorded, and it made the debt #61/#67 verification less clean than it looked.
+**Why it survived.** Every verification of the matcher that had been run used the complete list (Node, straight from SQL), and the app only ever looked "roughly right" because the truncated list still contained most Copart yards. It also made the debt #61/#67 verification less clean than it looked.
+
+> **Correction (21 Sep 2026, Prompt 36 Stage 1):** an earlier draft of this entry said the cap "likely explains part of" Prompt 20's 65.5% match rate. That was wrong: Prompt 20's figure (and the Prompt 22 regression check's 70.7%) came from scripts over a complete export of all 1,740 rows, so the cap never touched them. The cap explains only the *app's* behaviour, and re-measuring showed it cost 39 sightings (all IAAI): 137/211 (64.9%) matched instead of 176/211 (83.4%). The two ~65% figures agree only by coincidence of different causes.
 
 **The fix, and the guard.** One helper pages the table in stable id order and de-duplicates to distinct yards; the four unpaginated call sites use it; and it compares the number of rows loaded with an exact server count, throwing if they differ, so a future cap or a concurrent
 import cannot silently shorten the list again. Result: all 531 distinct yards (208 Copart, 187 IAAI, 77 Manheim, 59 ADESA), the Yaris matched its yard, trucking $475 = the database rate.
 
 **Lesson.** A test that reads the data one way and an app that reads it another proves nothing about the app. When a fix works in isolation and not in the product, diff the *inputs* first. And any read that means "all of them" must either page or verify its own count.
+
+## 43. The fifth silent shortfall: a query that returns less than asked, indistinguishable from real absence
+
+**The pattern.** A read returns fewer rows or fields than the caller asked for, nothing errors, and the result is exactly what a genuinely empty or smaller world would have returned. It has now been found five times in this project, and each time the code that consumed the result was correct:
+
+1. `current_bid_usd` missing from three select lists - the column existed, the query never asked for it.
+2. Three `raw_payload` fields read from the wrong path - the value lived nested, the reader saw `undefined`.
+3. `estimated_retail_value_usd` and two siblings - same shape as 1.
+4. The spec rules gated behind a run-type check - the rules never ran, so "no flags" looked like "no problems".
+5. **The PostgREST 1,000-row cap** (debt #68) - the app matched yards against 1,000 of 1,740 rows, so a yard in the missing part read as "no yard found".
+
+**The general rule, so it stops recurring.** *Any read that means "all of them" must either page to the end and verify its own count, or be provably a small set keyed on something bounded. Loading fewer rows than the server counts is an error, never a result.* In code: `supabase/functions/_shared/paginatedRead.ts` (`fetchAllVerified` for growable tables, `assertComplete` for per-parent reads). Do not write a second helper; a client-side `.limit(n)` above 1,000 is a bug, not a guard.
+
+**How it was audited (Prompt 36 Stage 2).** Every `.from()`/`.rpc()` in the frontend, the Edge Functions and the extension was listed, then judged by *future growth*, not today's row count - `trucking_rates` was under the cap until it was not. 16 reads over growable tables now page and verify; 3 per-parent reads verify their count; the rest are bounded by a key or a deliberate `LIMIT`, with the reason recorded in `PLAN_TRACKER.md` §4.31. Today's counts were identical before and after, which is the point: the failure had not happened yet on any of them.
+
+**Proving a check that has no live positives.** A completeness check passes on every complete read, so production never shows it firing. It was exercised against the real `trucking_rates` table with a plain query (throws `loaded 1000 of 1740`) and with 500-row pages (throws `loaded 500 of 1740`), plus synthetic cases in `scripts/testPaginatedRead.mts`. A check nobody has seen fire is a hope, not a guard.
+
+**One trap found while testing.** `fetchAllPages` assumes the page builder honours `.range(from, to)`; a builder that ignores it returns a full page forever and never terminates. Every shipped caller ranges correctly; the bug was in the first draft of the test.
+
+## 44. The won-vehicle popup lagged because 12 photos were decoded at full size into 80px tiles
+
+**The symptom.** Opening a bought car's popup was slow and scrolling stuttered - the same complaint the run-detail modal had earlier.
+
+**The cause, measured rather than assumed.** The 12 stored photos are 2576x1879 (about 500 KB each, 6.5 MB together). The gallery put each in a `w-full h-20` tile, so the browser decoded all twelve at full size - roughly 222 MB of bitmaps - to paint 80-pixel-high boxes. Supabase's image transformation is not enabled on this project (a transform URL returns 403), so a server-side thumbnail was not available.
+
+**The fix.** `src/utils/thumbnail.ts` downscales each image in the browser (`createImageBitmap` with `resizeWidth`, re-encoded to a small JPEG blob URL), two at a time, and the gallery shows placeholders until each is ready. Object URLs are revoked when the popup closes. On any failure the tile falls back to the original image - heavy but correct, never a silently missing photo. Result on the real Yaris: decoded gallery memory about 222 MB -> 3.4 MB; scroll frame time p95 27 ms / worst 37 ms -> 17.6 / 17.8 ms (in-app browser, same page, A/B on the same twelve tiles). The photos are still downloaded at full size once per popup; a stored thumbnail written at capture time would remove that too, and is a separate change.
+
+**Lesson.** "The images are too big" was the right guess, but the number (222 MB) and the unavailable easy fix (no transforms) decided the approach. Measure the decoded size, not the file size.

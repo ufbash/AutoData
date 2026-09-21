@@ -244,6 +244,8 @@ shipped.
   systematically understate cost on every listing. The cost-breakdown panel now states which
   account/tier a figure was computed under, always. `PLAN_TRACKER.md` debt #42.
 
+  > CORRECTION (21 Sep 2026, Prompt 36 Stage 1): this figure was measured by script over a complete export (not the app's runtime, and not affected by the 1,000-row cap of debt #68), and is stale as a description of today's data. Re-measured against the full yard list: 176 of 211 real sightings matched (83.4%); per-network numbers and the composition of the gap are in `PLAN_TRACKER.md` §4.31.
+
 **Duty remains permanently unavailable** until C2 (10+ real assessment notices collected) —
 so headroom itself cannot be produced for any real listing yet, by design, never smoothed
 into a partial figure. `PLAN_TRACKER.md` Phase C.

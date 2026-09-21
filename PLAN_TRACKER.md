@@ -711,6 +711,8 @@ broken down by real cause:
   code)
 - 3 — malformed or unrecognised location strings
 
+> **CORRECTION (21 Sep 2026, Prompt 36 Stage 1):** this figure was measured by script over a complete export (not the app's runtime, and not affected by the 1,000-row cap of debt #68), and is stale as a description of today's data. Re-measured against the full yard list: **176 of 211 real sightings matched (83.4%)**; per-network numbers and the composition of the gap are in `PLAN_TRACKER.md` §4.31. Then/now for the unmatched: bid.cars platform unresolved 18 → 6; manual 11 → 11; vendor-sheet coverage 27 → 15 (12 yards); malformed/non-US 3 → 3.
+
 Cross-platform leakage (a Copart listing resolving to an IAAI yard) proven absent: 0 of 112
 matches. The "Mobile" vs "Mobile South" ambiguity case the prompt anticipated does not occur
 in real data — confirmed directly against Copart's own live facility pages, which always
@@ -1672,6 +1674,267 @@ the full yard list: exactly 1 sighting changes (`unmatched → matched`, the Yar
 1,000 of 1,740 rows. Fixed for all four call sites and guarded with a completeness check. **Verified in the real UI:** the Yaris now shows "Yard match: matched" and **Trucking $475**, from "Dallas/Ft Worth, Texas -> FREEPORT (roro), Inland Towing, eff. 2025-11-01", equal to the rate in the database. Landed cost still
 withholds a total (missing: auction fees, shipping, duty - trucking is now real). Not yet deployed to production: this rides the next push.
 
+### 4.31 Prompt 36: Phase 0 close-out — Stages 1-5 done except as listed (21 Sep 2026)
+
+#### Stage 1 — the real yard match rate
+
+**Method.** The real matcher module (`yardMatchingService.ts`) run inside the app over every real sighting (211: sightings on soft-deleted test assets excluded), twice: against the **full** yard list (`listActiveYardKeys`, all 531 distinct yards from 1,740
+rate rows) and against the list the app actually used before debt #68 (a bare select, 1,000 rows). Matched = a yard name matched; it does not mean a rate exists for a given port.
+
+| Network (how the sighting resolves) | Sightings | Matched, full list | Rate | Matched, app's old 1,000-row list |
+|---|---|---|---|---|
+| Copart (direct capture) | 27 | 24 | 88.9% | 24 |
+| Copart (via bid.cars) | 101 | 92 | 91.1% | 92 |
+| IAAI (direct capture) | 3 | 3 | 100% | 3 |
+| IAAI (via bid.cars) | 63 | 57 | 90.5% | **18** |
+| bid.cars, auction house unresolved | 6 | 0 | 0% | 0 |
+| manual entries | 11 | 0 | 0% | 0 |
+| Manheim / ADESA | 0 | - | - | - |
+| **All** | **211** | **176** | **83.4%** | **137 (64.9%)** |
+
+**The figure on record (65.5%, 112/171, Prompt 20) was not caused by truncation.** It, and the Prompt 22 regression check's 70.7% (167 sightings, "1740 real yard rows"), were measured by script over a complete export. The 1,000-row cap
+affected only what the *app* did: it cost **39 sightings, every one IAAI-via-bid.cars** (IAAI 18 of 63 matched instead of 57), taking the app from 83.4% to 64.9%. Manheim and ADESA were entirely invisible to the app, but no sighting has ever come from either network, so it cost
+zero matches - it will matter the day one is captured. The two ~65% numbers are a coincidence of different causes.
+
+**The gap that is left (35 of 211), by kind - most of it is not vendor coverage:**
+- **11 - manual entries with no location.** Not a yard question at all; there is nothing to match.
+- **6 - bid.cars lots whose auction house cannot be resolved** (no Lot prefix in the page text: Albany NY x2, New Orleans, Rancho Cucamonga, Richmond VA, San Jose). Capture-side; the house is not guessed (`DECISIONS.md` 16.2).
+- **3 - not a yard:** Copart `Offsite`, `Dream Rides ()`, and a non-US location (`ON - COOKSTOWN`).
+- **15 sightings on 12 yards - absent from the vendor sheet (procurement, not code)**, listed below.
+
+**Then vs now, unmatched by cause:** bid.cars platform unresolved 18 → 6 · manual 11 → 11 · vendor coverage 27 → 15 · malformed 3 → 3. It improved because captures and labels improved (the #61 relabel put IAAI lots against the IAAI list; extension fixes), not because of the cap.
+
+**Procurement list - yards to ask the trucking vendor for, by real sightings affected:**
+
+| # | Yard | Network | Sightings |
+|---|---|---|---|
+| 1 | Cedar Rapids, IA | Copart | 2 |
+| 1 | Napa, CA | Copart | 2 |
+| 1 | Honolulu, HI | IAAI | 2 |
+| 4 | Akron, OH | Copart | 1 |
+| 4 | Anchorage, AK | Copart | 1 |
+| 4 | Spanaway, WA | Copart | 1 |
+| 4 | Windham, ME (`ME - WINDHAM`) | Copart | 1 |
+| 4 | Santa Clarita, CA | IAAI | 1 |
+| 4 | Staten Island, NY | IAAI | 1 |
+| - | *Not proven to be naming variants, so left unmatched (the matcher never collapses a numeric or directional suffix):* `Salt Lake City 2, UT` (vendor has `Salt Lake City`) · `Washington, MD` (vendor has `Dc - Washington Dc`) · `Minneapolis South, MN` (vendor has `Minneapolis/St. Paul`, `RICE`) | Copart / Copart / IAAI | 1 each |
+
+#### Stage 2 — every Supabase read audited (21 Sep 2026)
+
+**Method.** Every `.from(...)` / `.rpc(...)` in `src/`, `supabase/functions/` and `chrome-extension/`, found by a scripted scan (210 `.from` chains: 136 reads, 74 writes - insert/update/upsert/delete, out of scope for a row cap) and then read one by one. `scripts/` has no live reads (they work on JSON exports made with `supabase db query`, i.e. direct SQL, which the API cap does not touch). The extension has no direct database access at all. **Test applied: future growth, not today's row count.** Tables that grow with captures: `sightings` (221), `assets` (189 live), `research_run_listings` (201), `auction_history` (164), `trucking_rates` (1,740), `vehicle_reference_models` (1,135), `cost_rates` (6), `email_log` (4).
+
+**The one helper.** `supabase/functions/_shared/paginatedRead.ts` (`fetchAllPages`, `assertComplete`, `fetchAllVerified`) - no imports, so the same file serves Deno Edge Functions and the Vite frontend. The private paging copy that `searchTruckingYards` carried was **deleted**; there is one helper, not two. `fetchAllVerified` pages with a stable `.order(...).order('id')`, then runs a `count: exact, head: true` query with the *same* filters and throws `"<label> incomplete: loaded N of M rows"` if they differ. A count error also throws - it never passes silently. Per-parent reads that come back in one request use `assertComplete` against the `count` returned by that same request.
+
+**The audit** (`OK` = filtered to a small set that is bounded by what the row is keyed on, reason stated - not paginated needlessly):
+
+| Location | Table | Filtered? | Max plausible rows | Bounded? | Verdict |
+|---|---|---|---|---|---|
+| `src/contexts/AuthContext.tsx` · session load | memberships | `user_id` = caller | ≤ ~10 (roles per user) | Yes - per user | OK |
+| `truckingRatesService` · `listActiveYardKeys` | trucking_rates | org, active | **1,740 today, grows with every vendor sheet** | Was not (debt #68) | **FIXED** - paged + count-verified (debt #68); 1,740 → 1,740 rows, 531 distinct yards |
+| `truckingRatesService` · `searchTruckingYards` | trucking_rates | org | as above | Was paged, private copy | **FIXED** - moved onto the shared helper (the second copy is gone) |
+| `truckingRatesService` · yard lookup (by platform+city+state) | trucking_rates | org, platform, yard | ≤ tens (one yard × ports × methods) | Yes - keyed | OK |
+| `truckingRatesService` · rate lookup (yard+port+method) | trucking_rates | org, platform, yard, port, method | ≤ a few (one live rate, plus superseded history) | Yes - keyed | OK |
+| `bidHeadroomService` · `fetchAuctionFeeRows` | auction_fee_brackets | org, platform, member account, title status, tier, live | 324 rows in the whole table across schedules; one schedule ≤ ~100 | Yes - one schedule | OK |
+| `bidHeadroomService` · flat-fee/cost-rate lookups (×2) | cost_rates | org, category, label(s), live | ≤ a handful | Yes - keyed | OK |
+| `bidHeadroomService` · trucking component | trucking_rates | org, platform, yard, port, method | ≤ a few | Yes - keyed | OK |
+| `costRatesService` · `listCostRates` | cost_rates | org | 6 today; a dated ledger - grows with every rate change, never edited in place | Was not | **FIXED** - paged + count-verified; 6 → 6, same set and sort keys |
+| `costDocumentExtractionsService` · `listExtractions` | cost_document_extractions | org (+ optional status) | 3 today; one row per uploaded document | Was not | **FIXED** - paged + count-verified; 3 → 3, identical order |
+| `costDocumentExtractionsService` · asset-for-extraction | assets | `id` | 1 | Yes - single row | OK |
+| `costDocumentExtractionsService` · asset search | assets | live, unmerged, text match | - | Yes - explicit `.limit(10)`: a type-ahead, meant to be a top-10 | OK (deliberate) |
+| `researchService` · `listRuns` | research_runs | org, live | 40 today; one per client research request | Was not | **FIXED** - paged + count-verified; 40 → 40, identical order |
+| `researchService` · `listRuns` approvals marker | research_run_listings | was `run_id IN (every run id)`, approved | grows with approvals | Was not (and the id list grew the URL with the run count) | **FIXED** - org-scoped, paged, count-verified; 1 approved run before and after |
+| `researchService` · `findRunIdsByVin` (3 reads) | assets → sightings → research_run_listings | VIN → its assets → their sightings → their listings | a few per VIN | Yes - keyed by one VIN | OK (verified 5 real VINs span 2-3 runs each, Prompt 23) |
+| `researchService` · `getRun` | research_runs | `id` | 1 | Yes | OK |
+| `researchService` · `listClients` | clients | org, live | 8 today | Was not | **FIXED** - paged + count-verified; 8 → 8, identical order |
+| `researchService` · `listClientBriefs` | client_briefs | org, live (+ optional client) | 14 today | Was not | **FIXED** - paged + count-verified; 14 → 14, identical order |
+| `researchService` · client/brief delete-guard counts (×2) | client_briefs, research_runs | `client_id`, live, `head` count | - | Yes - a count, no rows | OK |
+| `researchService` · `listDeletedClients` / `listDeletedClientBriefs` / `listDeletedRuns` | clients, client_briefs, research_runs | org, deleted in the last 30 days | 14 / 25 / 15 today; a 30-day window of deletions | Was not | **FIXED** - paged + count-verified (the window bounds it today, not by construction) |
+| `researchService` · `deleteSighting` remaining-check | sightings | `asset_id`, `.limit(1)` | 1 | Yes - existence test | OK |
+| `researchService` · `listAuctionHistoryForAssets` | auction_history | `asset_id IN (a run's assets)` | a few per asset | Per-run | **FIXED (check only)** - `count: exact` + `assertComplete` on the same request; behaviour identical |
+| `researchService` · `listVinDecodesForVins` | vin_decodes | `vin IN (a run's VINs)`, success | ≤ one per VIN | Per-run | **FIXED (check only)** - as above |
+| `researchService` · `listRunListings` | research_run_listings (+ sightings, assets embedded) | `run_id` | dozens per run (staff-curated) | Per-run | **FIXED (check only)** - `count: exact` + `assertComplete` |
+| `researchService` · run-listing helpers: max position, first approved, add-listing checks (×3) | research_run_listings | `run_id`, `.limit(1)` / single | 1 | Yes | OK |
+| `researchService` · `addSightingToRun` reads | research_runs, sightings | `id` | 1 each | Yes | OK |
+| `researchService` · `storeImagesForRun` listing ids; image-status read | research_run_listings | `run_id` | dozens per run | Per-run, human-curated | OK - **accepted risk:** a run with >1,000 listings is not plausible; not count-checked (batch job, would fail visibly on the missing images) |
+| `researchService` · `listAvailableSightings` | sightings ⨝ assets | org, asset live | **211 today; grows with every capture - the biggest growth table in the app** | Was not: read *everything*, then filtered and sliced client-side | **FIXED** - paged + count-verified; 211 → 211, same set. **Note:** it still loads the whole set and slices in memory (as before); the paging makes that correct, it does not make it cheap - see remaining list |
+| `storageService` · `getStoredSales` (Overview, All Records, dashboards) | sightings ⨝ assets | none beyond RLS | **221 today; grows with every capture** | Was not | **FIXED** - paged + count-verified; 221 → 221, same set and same sort-key sequence (see note on tie order below) |
+| `vehicleReferenceService` · `listTieredMakes` | vehicle_reference_makes | none | 406 today; grows as makes are seeded | Was not | **FIXED** - paged + count-verified; 406 → 406, identical order |
+| `vehicleReferenceService` · `traded_make_counts()` | rpc: distinct traded makes | none | ≤ the makes table (406) | Yes - an aggregate by make | OK (bounded by the makes list, itself now checked) |
+| `vehicleReferenceService` · make resolve; `set_make_demoted` | vehicle_reference_makes | `ilike name` / rpc | 1 | Yes | OK |
+| `vehicleReferenceService` · `listReferenceModels` cached-years check | vehicle_reference_models | make, year set | up to models × 8 years - **can exceed 1,000 for a big make** | Was not | **FIXED** - paged + count-verified |
+| `vehicleReferenceService` · `listReferenceModels` models | vehicle_reference_models | make, optional year range | 1,135 rows in the table; per make × range can exceed 1,000 | Was not | **FIXED** - paged + count-verified; ordering gains an `id` tiebreak |
+| `orgSettingsService` (×2) | org_settings | org | 1 | Yes | OK |
+| `wonVehicleService` · won vehicle by id; listings/sighting/run/client lookups for promote (×6) | won_vehicles, research_run_listings, sightings, research_runs, clients | `id` | 1 each | Yes | OK |
+| `wonVehicleService` · `listWonVehiclesForBrief` | won_vehicles | `brief_id`, live | a handful per brief | Per-parent | OK |
+| `wonVehicleService` · run/sighting hydrate (`IN (ids)`) (×2) | research_run_listings, sightings | `id IN (a brief's won vehicles' ids)` | = the won vehicles for one brief | Per-parent | OK |
+| `wonVehicleService` · status history | won_vehicle_status_history | `won_vehicle_id` | ~10 (one per status) | Per-vehicle | OK |
+| `wonVehicleService` · documents | won_vehicle_documents | `won_vehicle_id`, live | tens per vehicle | Per-vehicle | OK |
+| `wonVehicleService` · paired cost documents | cost_document_extractions | `asset_id` | a few per asset | Per-asset | OK |
+| `wonVehicleService` · invoice issuances; winning bids; destinations (×3) | won_vehicle_invoice_issuances, won_vehicle_winning_bids, won_vehicle_destinations | `won_vehicle_id` | a few (append-only ledgers, one live row) | Per-vehicle | OK |
+| `wonVehicleService` · email log | email_log | `related_id`, `related_table`, `.limit(10)` | a few per vehicle (4 in the whole table); explicit limit | Per-vehicle + limit | OK |
+| `wonVehicleService` · `destination_options()` | rpc: distinct destinations | none | tens (distinct ports) | Yes - a `DISTINCT` | OK |
+| Edge `extract-cost-document`, `won-vehicle-promote`, `-documents`, `-notify`, `-status`, `-winning-bid`, `-invoices`, `-destination`, `vin-decode`, `vehicle-reference-seed`, `vehicle-reference-make-probe`, `asset-merge-candidates`, `asset-merge-confirm`, `app-ingest`, `extract-vehicle-vision`, `sightings-platform-relabel` · caller role check (16 reads) | memberships | `user_id` | ≤ ~10 | Per user | OK |
+| Edge `won-vehicle-tracking` | won_vehicles; won_vehicle_status_history | share token (single); `won_vehicle_id` (~10) | 1; ~10 | Yes | OK |
+| Edge `public-run` | research_runs; research_run_listings (×3) | share token; `run_id` (+ included / approved / `id`) | 1; dozens per run | Per-run, human-curated | OK - **accepted risk:** not count-checked (public, customer-facing; deploying it for a hypothetical >1,000-listing run is not worth the exposure). Recorded, not silent |
+| Edge `won-vehicle-documents` / `-notify` / `-winning-bid` / `-invoices` / `-destination` · row lookups | won_vehicles, won_vehicle_documents, clients, won_vehicle_winning_bids, won_vehicle_invoice_issuances, won_vehicle_destinations | `id` (single) or `won_vehicle_id` + `voided_at IS NULL` + `.limit(1)` | 1 | Yes | OK |
+| Edge `won-vehicle-destination` · "is this port quotable" | trucking_rates | org, port, method, live, `.limit(1)` | 1 (existence test) | Yes | OK |
+| Edge `vehicle-reference-models-ondemand` (×2) | vehicle_reference_makes; vehicle_reference_models | `ilike name`; `make_id` + `model_year` | 1; models for one make-year (≤ ~200) | Yes - one make-year | OK |
+| Edge `vehicle-reference-make-probe` (×2) | vehicle_reference_makes | pending filter, ordered, `.limit(batchSize)`; `head` count | one batch by design; a count | Yes - a deliberate batch | OK (deliberate) |
+| Edge `list-active-runs` | research_runs | org, live, ordered, `.limit(100)` | 100 by design - a run picker for the extension | Yes - deliberate limit | OK (deliberate; newest 100 runs) |
+| Edge `asset-merge-candidates` · assets | assets | live | **grows with every distinct vehicle** | Was not | **FIXED** - paged + count-verified. *Needs a deploy - not yet deployed* |
+| Edge `asset-merge-candidates` · per pair (×4) | sightings, auction_history | `asset_id` | a few per asset | Per-asset | OK |
+| Edge `research-capture` · asset lookups by fingerprint / VIN-less hash (×3) | assets | `fingerprint_hash` / `vinless_identity_hash`, live | 0-1; a few | Yes - keyed on a hash | OK |
+| Edge `research-capture` · existing sighting; listing existence; max position (×3) | sightings; research_run_listings | asset + lot + platform; `run_id` + `sighting_id`; `run_id` `.limit(1)` | 0-1 | Yes | OK |
+| Edge `app-ingest` · asset by fingerprint | assets | `fingerprint_hash` | 0-1 | Yes | OK |
+| Edge `store-images`, `upload-images` · sighting by id | sightings | `id` | 1 | Yes | OK |
+| Edge `sightings-platform-relabel` | sightings | `source_platform = 'bidcars'` | **grows with every bid.cars capture** (was `.limit(5000)`, which PostgREST silently capped at 1,000) | Was not | **FIXED** - paged + count-verified. *Needs a deploy - not yet deployed* (a one-shot backfill, already applied; 171 rows today, so the cap was not reached) |
+| Edge `intake-brief` (×2) | client_briefs; clients | share token; `id` | 1 | Yes | OK |
+| `chrome-extension/*` | - | no direct database reads; every call goes through an Edge Function (`list-active-runs`, `research-capture`, `upload-images`) | - | n/a | OK - covered by the Edge rows |
+| `scripts/*.mjs` | - | no live reads: they run over JSON exports made with `supabase db query`, which is direct SQL and is **not** subject to the API row cap | - | n/a | OK |
+
+**Result: 16 unbounded reads over growable tables fixed in this stage** (`getStoredSales`, `listAvailableSightings`, `listRuns` and its approvals read, `listClients`, `listClientBriefs`, the three recycle-bin lists, `listCostRates`, `listExtractions`, `listTieredMakes`, both `vehicle_reference_models` reads, and the Edge `asset-merge-candidates` and `sightings-platform-relabel`; the two `trucking_rates` loaders were fixed earlier under debt #68 and moved onto the shared helper here), **3 more got the completeness check only** (`listRunListings`, `listAuctionHistoryForAssets`, `listVinDecodesForVins`), and every remaining read is bounded by a key or a deliberate `LIMIT`, with the reason in the table. **Nothing currently exceeds 1,000 apart from `trucking_rates` and `vehicle_reference_models`** - so apart from those, these fixes remove a failure that has not happened yet. That is the point: `trucking_rates` was silent until it did.
+
+**Before / after, on the real data** (each fixed loader against the plain query it replaced; app signed in as the org, 21 Sep 2026):
+
+| Read | Old plain query | New loader | Server count | Same rows? |
+|---|---|---|---|---|
+| `getStoredSales` | 221 | 221 | 221 | same set; same `captured_at` sequence (tie order now deterministic) |
+| `listAvailableSightings` | 211 | 211 | - | same set |
+| `listRuns` | 40 | 40 | 40 | identical order; approved-run markers 1 → 1 |
+| `listClients` | 8 | 8 | 8 | identical order |
+| `listClientBriefs` | 14 | 14 | 14 | identical order |
+| `listCostRates` | 6 | 6 | 6 | same set; same sort-key sequence |
+| `listExtractions` | 3 | 3 | 3 | identical order |
+| `listTieredMakes` | 406 | 406 | 406 | identical order |
+| recycle bin: runs / clients / briefs | - | 15 / 14 / 25 | - | - |
+| `listActiveYardKeys` | 1,000 of 1,740 rows (before debt #68) | 1,740 rows → 531 yards | 1,740 | the fix that started this |
+
+Row counts are the same today, as expected: none of these tables is over the cap yet. **No behaviour change on complete reads.** One deliberate difference: ties in the sort key (e.g. sightings captured in the same second) used to come back in an arbitrary order and now break on `id`; the sort-key sequence is identical in every case checked. The Overview, All Records, Research Runs, Clients and Cost Rates screens were loaded in the running app after the change with no console errors.
+
+**Proof the completeness check fires** (`node --experimental-strip-types scripts/testPaginatedRead.mts`, committed; and live against the real table). It has no live positives by construction - a complete read simply passes - so it is exercised against readings that come up short:
+
+| Case | Result |
+|---|---|
+| Live: one plain query on the real `trucking_rates` (the old behaviour) | **throws** `trucking rates incomplete: loaded 1000 of 1740 rows` |
+| Live: 500-row short pages on the real `trucking_rates` | **throws** `loaded 500 of 1740 rows` |
+| Live: correct paged read on the real table | passes, 1,740 rows (531 distinct yards) |
+| Synthetic: server caps at 1,000, table has 1,740 (the debt #68 case) | throws |
+| Synthetic: rows added mid-read | throws |
+| Synthetic: page error / count-query error | throws (a failed check never passes silently) |
+| Synthetic: 2,500 rows over three pages; exact 2,000-row boundary; empty table | pass with the right row counts |
+
+A caveat found while testing, recorded because it is the kind of thing that recurs: a page builder that **ignores** `from`/`to` (returns the same 1,000 rows for every page) never terminates - `fetchAllPages` assumes the builder honours the range. All shipped callers use `.range(from, to)`; the test that hit this was mine.
+
+**Not done, and why.** (1) The two Edge Function changes (`asset-merge-candidates`, `sightings-platform-relabel`) are in the repo but **not deployed** - a deploy needs confirmation, and `deno` is not installed here so they were not type-checked locally (the helper is import-free and the pattern is identical to the frontend's). (2) `public-run` and `storeImagesForRun` per-run reads are recorded as accepted risk, not count-checked. (3) `listAvailableSightings` still loads the whole sightings set and slices it in memory; it is now correct, not cheap - a server-side pager belongs to a later prompt (no new features here).
+
+#### Stage 3 — the debt register reconciled against the code (21 Sep 2026)
+
+**Method.** Each of debts #35-#68 was read in full and its claim checked against what exists *today*: the repo (grep / file reads), the deployed function list (`supabase functions list`), and the live database (row counts and contents, read-only). "Closed" means the code or data now does the thing; "Partly closed" states what is left; nothing is marked closed on the register's own say-so. Five rows needed a dated correction note in place (marked below).
+
+| # | Real status | Checked against | What remains |
+|---|---|---|---|
+| 35 | **Open** | No ocean-freight rate exists anywhere (`cost_rates` holds 6 rows, none ocean freight); the RoRo figure in `DECISIONS.md` §3 is unchanged | A real `agent_quote` for RoRo/container to a Nigerian port (and, for the Yaris, Freeport). **Waiting on Bashir → freight agent** |
+| 36 | **Open**, precondition now met | `auction_fee_brackets` = 324 rows, **all Copart** (216 Non-Licensed, 108 White Nexus); no IAAI row. A real IAAI invoice now exists (§4.29) but reconciles only partly | Itemised fee lines from a real IAAI invoice, or the High-Volume schedule (e.g. through Document Extraction), so `getAuctionFeeComponent` can be extended. **Waiting on Bashir** (data), then Claude Code. *Correction note added* **RECONCILED 21 Sep 2026 (Prompt 36 Stage 3):** the precondition this row set - "store once a real IAAI invoice exists" - is now met: the first real IAAI invoice (the Yaris) arrived 20 Sep and is analysed in §4.29. Still nothing IAAI is stored (`auction_fee_brackets` is 324 rows, all Copart) because the invoice reconciles only partly: the flat fees match, but the buyer-fee schedule is inferred, not read. Status: open, waiting on itemised fee data from Bashir |
+| 37 | **Open** | 108 White Nexus rows are Non-Clean only | Only if a Clean-title High-Volume purchase is ever made. **Waiting on external data**; low priority |
+| 38 | **Open** | Secured rows stored as `official_tariff`; no invoice has priced Secured | Same question as #43. **Waiting on Copart** |
+| 39 | **Open** - register partly wrong | No storage component in `bidHeadroomService.ts`. But one `Storage` row (**$10, `actual_paid`**) *is* in `cost_rates`, from the Prompt 22 extraction verification - a single observed line, not a rate, and nothing reads it | A decision on how to treat per-day escalating storage. **Waiting on Bashir**. *Correction note added* **RECONCILED 21 Sep 2026 (Prompt 36 Stage 3):** "not stored anywhere" is not quite true: one `Storage` row ($10, `actual_paid`) has been in `cost_rates` since the Prompt 22 extraction verification. It is a single observed line, not a rate, and no code reads it. The substance stands - no storage component exists in `bidHeadroomService.ts` and per-day escalation is unresolved |
+| 40 | **Open** | Late Payment ($50) is in `cost_rates`; `bidHeadroomService.ts` never references it | A policy call on contingent fees. **Waiting on Bashir** |
+| 41 | **Closed** (a recorded finding; no work implied) | - | - |
+| 42 | **Closed** | `DEFAULT_MEMBER_ACCOUNT` = Jamilu Danmusa Danmusa (Copart Non-Licensed), `bidHeadroomService.ts:136` | - |
+| 43 | **Open** | `copart_payment_tier` is an `org_settings` value (migration 034), default `unsecured`; no invoice contradicts it | Copart's answer on what confers Secured. **Waiting on external data** |
+| 44 | **Closed** | The "Default to 'NGN' if ambiguous" instruction is gone; the only remaining match is a comment in `extract-cost-document` explaining why it is not used | - |
+| 45 | **Closed** (convention, adopted since by #44 / #53 / #56 / #57) | - | - |
+| 46 | **Closed**, one residual | `merge_assets()` + symmetric VIN-less probe deployed; both real split pairs merged. Live evidence in `sightings.raw_payload.asset_fingerprint_outcome`: exactly **1** row (`upgraded_vinless_asset`); the symmetric *attach* path has **no live occurrence** | The register's own outstanding item stands: one real extension capture that exercises the attach path. **Waiting on Bashir's browser**. *Correction note added* **RECONCILED 21 Sep 2026 (Prompt 36 Stage 3):** live evidence checked: `raw_payload.asset_fingerprint_outcome` is present on exactly one sighting (`upgraded_vinless_asset`). The symmetric attach path from Prompt 32 Stage 3 has no live occurrence, so it rests on the synthetic proof alone, as the row already says |
+| 47 | **Closed** | `_shared/soldGroup.ts` is imported by both `ResearchRunDetail.tsx` and `public-run` | - |
+| 48 | **Closed** as a named ambiguity | `classifySaleConfirmation()` in `soldGroup.ts` | The display distinction was deliberately not built (Bashir, 10 Sep); unchanged |
+| 49 | **Closed** | `api_import` in `ENTRY_METHODS_WITHOUT_MECHANISM` | - |
+| 50 | **Closed** | Same shared module | - |
+| 51 | **Partly closed** | A make/model *vocabulary* now exists (`vehicle_reference_makes` 406, `vehicle_reference_models` 1,135 rows) and feeds the brief form; `trimMatches` also uses VIN-decode data. Trim/generation matching is still pattern-based | A real trim/generation taxonomy remains a large, separate build. **Not scheduled** |
+| 52 | **Closed** (by decision: disclose, never exclude) | §4.17 | - |
+| 53 | **Closed** | No "default to NGN" instruction remains in `src/` or `supabase/functions/` beyond a comment | - |
+| 54 | **Open - accepted risk** | Model returned `null` for a blurred trim; human review in `BulkImport.tsx` is the backstop | Nothing unless a wrong value is ever seen reaching the database. **No action** |
+| 55 | **Closed** | `research-capture` writes the flat shape (`...cf`); the readers handle both. **175** historical rows still nested (the register said 176) | - |
+| 56 | **Closed by removal** | `daily-sniper` source deleted (Prompt 32 Stage 1) and absent from the deployed list | - |
+| 57 | **Closed** | The "use 'Base'" instruction is gone from `geminiService.ts` | - |
+| 58 | **Closed** (the register row was already corrected; the "known stale" note is itself stale) | One `classifyTitleStatus` in `_shared/specVocabulary.ts:445`, wrapped by `bidHeadroomService.ts:71` | - |
+| 59 | **Closed by removal** | As #56 | - |
+| 60 | **Closed** | Migration 049, `won-vehicle-winning-bid` deployed (v1) | The real Yaris winning bid and bid method need Bashir (data entry, not code) |
+| 61 | **Closed** | Server-derived house in `research-capture` (`_shared/bidcarsLot.ts`), 62 rows relabelled, ingest path verified live (§4.29) | - |
+| 62 | **Open** | `partialReason` at `bidHeadroomService.ts:242` makes the gap visible (PARTIAL, blocks a landed total); the underlying fact - does Copart charge a bid fee at Clean/Unsecured - is unknown | A Clean-title Unsecured invoice. **Waiting on external data / Bashir** |
+| 63 | **Open** | Re-counted: **8 inline copies** still present (`ClientsList.tsx` ×4 incl. one differently spaced, `ResearchRuns.tsx` ×2, `ResearchRunDetail.tsx` ×1, `researchService.ts` ×1); only the run card uses the shared `briefReference()` | Switch the 8 to the shared function. **Claude Code** - small, same shape as #47 / #58 |
+| 64 | **Partly closed** | `mercedes` -> `MERCEDES-BENZ` is in `specVocabulary.ts:105` | The rest is deliberate: `avatr` stays free text, `i` is junk, `range rover` is a model. Aliasing it to `LAND ROVER` would be Bashir's call |
+| 65 | **Closed** | 134 makes hidden by the reversible demote flag on Bashir's review; all still searchable | - |
+| 66 | **Partly closed** -> **Stage 4 below closes `MIAMI PORT`** | Four typos aliased (§4.28) | After Stage 4: only the deliberately left-alone labels remain, each with its reason recorded **RECONCILED 21 Sep 2026 (Prompt 36 Stage 4):** `MIAMI PORT` -> `MIAMI` merged on Bashir's call (12 Copart RoRo rows; raw text preserved; no duplicate created). `GA-RINCON`, `DAVISVILLE` and the regional labels `CALIFORNIA` / `TEXAS` / `NEW JERSEY` are deliberately left, each with its reason in §4.31 Stage 4. Nothing further is owed on this debt |
+| 67 | **Partly closed** -> **Stage 4 records the rest** | Hyphen fold and leading "IAA " strip shipped; the matcher is otherwise unchanged | After Stage 4: procurement items (Bashir -> vendor) and the capture-side `Dream Rides ()` issue **RECONCILED 21 Sep 2026 (Prompt 36 Stage 4):** `Minneapolis South` is recorded as a vendor gap (the sheet has `Minneapolis/St. Paul` and `RICE`; nothing links them), `Dream Rides ()` as a capture-side data-quality issue (not a yard; the matcher abstaining is correct). The remaining item is procurement - Honolulu (2 sightings), Santa Clarita (1), Staten Island (1) and the other absent yards - for Bashir to take to the trucking vendor |
+| 68 | **Closed** | Shared helper, completeness check, all 531 yards visible. *Correction note added:* its claim that only one other table exceeds 1,000 rows is superseded by the Stage 2 audit | - **RECONCILED 21 Sep 2026 (Prompt 36 Stage 3):** the sentence "only one other table exceeds 1,000 rows ... every read of it is filtered" is superseded: the Stage 2 audit (§4.31) found `vehicle_reference_models` reads that *could* exceed the cap for a wide make/year range, and paged those and 14 other reads over growable tables (16 in all) |
+
+**What genuinely remains - the list Phase 1 starts from** (ordered by what it unblocks):
+
+*Claude Code can do now (no external input):*
+1. **Deploy the two Edge Functions changed in Stage 2** (`asset-merge-candidates`, `sightings-platform-relabel`) - needs a confirmation.
+2. **Debt #63** - replace the 8 inline brief-reference strings with `briefReference()`.
+3. **`listAvailableSightings`** loads every sighting to slice a page in memory; correct now, but it should page on the server before `sightings` grows large (the run-builder picker is the first screen that will feel it).
+4. Phase 1 itself (admin consolidation, rates architecture) - needs its own prompt.
+
+*Waiting on Bashir:*
+1. **IAAI fee data (#36)** and the real Yaris **bid method** (proxy or live) and **winning bid** (#60) - unlocks exact IAAI landed cost.
+2. **Policy calls:** contingent fees (#40) and storage (#39).
+3. **One real file upload through the UI** (Stage 5 below) and **one real extension capture** for the #46 attach path - both need his browser.
+4. **Trucking-vendor quotes** for the yards absent from the sheet (§4.31 Stage 1 procurement list; Stage 4 gives the sighting counts).
+5. Optional: `range rover` -> `LAND ROVER` alias (#64).
+
+*Waiting on external data:*
+1. **Copart's answer on Secured status (#43 / #38)** - up to ~$375 a vehicle on the three invoices checked.
+2. **A real ocean-freight quote (#35)** - no ocean-freight rate exists at all, so no landed total can be complete.
+3. **A Clean-title Unsecured Copart invoice (#62)**, and Clean-title High-Volume brackets (#37) only if such a purchase happens.
+4. **IAA's official fee tables** - published as images behind bot protection; not bypassed.
+
+#### Stage 4 — yard and port naming decisions (21 Sep 2026)
+
+**`MIAMI PORT` merged into `MIAMI` (Bashir's call).** One line added to the importer's reviewed `PORT_ALIASES` (`scripts/lib/truckingRatesParser.mjs`); the existing rows corrected with the same statement `scripts/relabelTruckingPorts.mjs` prints: `UPDATE trucking_rates SET destination_port_normalized = 'MIAMI' WHERE destination_port_normalized = 'MIAMI PORT'`. `destination_port_raw` is untouched (§5.8).
+
+| Check | Before | After |
+|---|---|---|
+| Live rates, all | 1,740 | 1,740 |
+| Copart RoRo rows normalised `MIAMI PORT` | 12 (12 Florida yards) | 0 - now `MIAMI` |
+| Copart RoRo rows `MIAMI` | 0 | 12 |
+| IAAI container rows `MIAMI` | 12 | 12 (unchanged) |
+| Rows whose raw text is still `MIAMI PORT` | 12 | 12 (preserved) |
+| Duplicate groups (same platform + yard + port + method, live) | 2 | 2 - **the same two, none new** |
+| Distinct yards | 531 | 531 |
+
+**No duplicate created.** The two duplicate groups both pre-date this and are both vendor-supplied multiple quotes for `NEW JERSEY` container (Copart *International Offsite Auction, MA* at $450 and $525; Copart *Buffalo, NY* at $525 and $525). The cost view already prices these as "cheapest of N current quotes" and says so, so they are left as they are.
+
+**Recorded honestly: I did not observe the "before" state at the moment of the update.** My earlier read (same session) showed 12 rows as `MIAMI PORT`. When the confirmed statement ran, it matched 0 rows because the 12 rows were already `MIAMI`; something had applied the change between those two reads and I do not know what (nothing this session ran an `UPDATE` - the alias script only prints SQL - so the likeliest cause is the printed SQL being run by someone else). The end state is exactly the state that was authorised and was verified independently afterwards (table above; `pg_stat_user_tables` shows 20 lifetime updates on `trucking_rates`, consistent with the 7 earlier typo corrections plus these 12 plus 1 other). The before column is from my earlier read.
+
+**The match rate does not move, and that is correct.** The prompt expected the yard match rate to move "by exactly the Miami rows". It cannot: the matcher matches a *sighting to a yard*; the port is a property of the rate, not the yard. Re-run on all 211 real sightings after the merge: **176 matched, 35 unmatched - identical to Stage 1.** What the merge changes is what is *quotable*: a `MIAMI` destination by RoRo now finds 12 Copart Florida yards where it found none, and the destination list no longer offers a phantom `MIAMI PORT`. Real effect today: 2 of the 211 sightings sit on those 12 yards (West Palm Beach, Miami North).
+
+**Left alone, with the reason recorded (the matcher and the alias table are otherwise unchanged; `git diff` of `yardMatchingService.ts` is empty):**
+
+| Case | Live rates carrying it | Why it is left |
+|---|---|---|
+| `GA-RINCON` | 1 (Copart container) | Rincon GA is a distinct inland Georgia location, plausibly Savannah-area but not provable from the data. Abstaining is correct |
+| `DAVISVILLE` | 1 (Copart RoRo) | A real port (Davisville, RI), not a typo |
+| `CALIFORNIA` | 18 (all four networks) | The vendor's own regional label. Naming a specific port from a state is guessing - exactly what the rate ledger exists to prevent |
+| `TEXAS` | 202 | As above |
+| `NEW JERSEY` | 225 | As above. Note how much of the rate list uses these labels: they are not stray typos, they are how the vendor prices those regions |
+| `Minneapolis South (MN)` (IAAI, 1 sighting) | - | The vendor sheet has `Minneapolis/St. Paul` and `RICE` for IAAI. Nothing in the data links the sighting's name to either, so it is a vendor gap, not a naming variant |
+| `Dream Rides ()` (IAAI, 1 sighting) | - | **Not a yard.** A capture-side data-quality issue: it should never have been stored as a yard location. The matcher abstaining on it is correct behaviour; the fix is at capture, not in the matcher |
+
+**Procurement items for Bashir (yards absent from the vendor sheet, with real sighting counts).** The full list of 12 yards / 15 sightings is in Stage 1; the three named in this prompt: **Honolulu, HI (IAAI) - 2 sightings; Santa Clarita, CA (IAAI) - 1; Staten Island, NY (IAAI) - 1.** Ranked highest by sightings: Cedar Rapids IA (Copart) 2, Napa CA (Copart) 2, Honolulu HI (IAAI) 2.
+
+**Matcher not loosened.** No change to `yardMatchingService.ts`; one reviewed alias added to the importer's table, on Bashir's explicit decision and with the collision check above.
+
+#### Stage 5 — the upload path, and what was raised while testing it (21 Sep 2026)
+
+**Tested vs untested, stated plainly.**
+- *Proven server-side earlier (Prompt 34 Stage 4), through the service function:* type filing, wrong-MIME rejection, unknown type, soft-deleted / unknown vehicle, empty file, no token (401), soft delete keeps the stored file.
+- *Proven by Bashir through the real file picker, 21 Sep 2026:* an **epub is rejected**, and a **15 MB image is rejected** (the 8 MB limit). Both went through the real `<input type=file>`, the real `onChange` handler and the real error display - the part the automation could not reach.
+- *Not confirmed:* the **happy path through the picker** (one real PDF, accepted and listed) was not reported in this session's test. It is proven only through the service function. Listed as outstanding rather than claimed.
+- *Note on what the rejections prove:* the 15 MB rejection fires in the browser before any request is sent, so the server's own 413 path is still unexercised. The epub rejection is either the dialog's `accept` filter or the server's "Unsupported file type" - the report does not say which. Both end in a refusal; neither was distinguished.
+
+**Raised during that test: the popup lags.** Measured cause: 12 full-size photos (2576x1879, ~222 MB decoded) rendered into 80px tiles. Fixed with client-side thumbnails (`src/utils/thumbnail.ts`, `WonVehicleDetail.tsx`): gallery memory ~222 MB -> 3.4 MB, scroll frame time p95 27 ms -> 17.6 ms. See `docs/SOLVED.md` topic 44. **Not** verified on Bashir's own machine; the measurement was in the in-app browser. The list thumbnail in `ClientsList.tsx` (one full-size image per won vehicle) still decodes at full size and was left alone.
+
 ---
 
 ## 5. Phase B — coverage
@@ -1699,6 +1962,7 @@ quality until this build.
 - Regression check against all existing Copart/bid.cars data (167 real sightings, 1740 real
   yard rows): 70.7% matched, 0 cross-platform leaks — consistent with the Prompt 20 baseline
   of 65.5%, confirming the IAAI parser addition caused no shared-code regression.
+  > **Note (21 Sep 2026, Prompt 36 Stage 1):** that check ran over a complete export ("1740 real yard rows") - like every figure on record - while the app itself, until debt #68 was fixed, matched against only the first 1,000 rows. See §4.31.
 - Live end-to-end capture confirmed unaffected by this session's shared-code changes: one
   real Copart lot and one real bid.cars lot captured through the actual extension after the
   yard-matcher change, both landing with correct platform-specific fields (`location`,
@@ -1967,7 +2231,7 @@ as evidence (public link renders the fix live).
 | 29 | Make/model stay free text on the intake form (Prompt 18 Phase 6) | The Google Form's nine-make dropdown is a Forms limitation that forces "Other, please specify" onto everything else — not worth reproducing. Real dropdowns wait for the vehicle database (E-series estimator work) |
 | 30 | Intake form has no literal "I confirm these details are correct" confirmation (Prompt 18 Phase 6) | The review-then-submit flow serves the same practical purpose, but the source form's exact confirmation copy/checkbox was not reproduced — a parity gap, not a functional one |
 | 31 | The critical-block checklist has no server-side or stored representation (Prompt 19 Phase 1/3) | It is computed client-side in `ResearchRunDetail.tsx` on every render and is only ever consumed to gate the share toggle before `share_enabled` is written. `public-run` and the new client-approval path can therefore only enforce `share_enabled`/`deleted_at` — neither recomputes the checklist. **The gate is enforced at the moment of sharing, not continuously:** a run that was legitimately shared and later develops a block — a re-captured lot changing `lot_state`, new `auction_history` arriving, a brief edited after sharing — stays shareable and approvable until a staff member reopens the run and the client-side checklist re-evaluates. Fixing this means persisting the checklist result or recomputing it in the Edge Function — its own piece of work, and it spans the rule layer this prompt is deliberately fenced off from |
-| 32 | Yard matching is name-based and will miss (Prompt 20 Phase 5) | `src/services/yardMatchingService.ts` matches on exact normalised platform + city + state text — no geocoding, no distance tolerance, no fuzzy matching (deliberately, per `PROJECT_CHARTER.md` §5.1 — an approximate match is worse than an honest non-match). A sighting whose location text doesn't exactly match a `trucking_rates` yard name is unmatched, not nearest-matched. Measured baseline: 65.5% matched, 34.5% unmatched, 0% ambiguous, across all 171 live sightings |
+| 32 | Yard matching is name-based and will miss (Prompt 20 Phase 5) | `src/services/yardMatchingService.ts` matches on exact normalised platform + city + state text — no geocoding, no distance tolerance, no fuzzy matching (deliberately, per `PROJECT_CHARTER.md` §5.1 — an approximate match is worse than an honest non-match). A sighting whose location text doesn't exactly match a `trucking_rates` yard name is unmatched, not nearest-matched. Measured baseline: 65.5% matched, 34.5% unmatched, 0% ambiguous, across all 171 live sightings | **CORRECTED 21 Sep 2026 (Prompt 36 Stage 1):** the 65.5% baseline is stale; re-measured against the full list it is **83.4% (176/211)**. The gap that remains is mostly not vendor coverage (11 manual entries with no location, 6 bid.cars lots with no resolvable auction house, 3 non-yard locations, 15 sightings on 12 yards absent from the vendor sheet) - see §4.31 |
 | 33 | 27 sightings resolve platform + location cleanly but sit at yards this vendor's file doesn't cover (Prompt 20 Phase 5) | This is a rate-sheet coverage gap, not a matcher weakness — e.g. `ME - WINDHAM` is a real Copart yard per the sighting, simply absent from the "Inland Towing" vendor's price list. Closes by importing more vendors' rate sheets through the same importer, never by loosening the matcher's exactness |
 | 34 | Port-name normalisation (`PORT_ALIASES`) and state-name normalisation (`STATE_NAME_ALIASES`) are small explicit alias tables, not general fuzzy correction (Prompt 20 Phase 3/5) | Only two port variants (`JACKSONVILLE YARD`, `LOS ANGELOS` sic) and one state variant (`New Hamphire` sic, present unfixed in `trucking_rates.yard_state` since the raw+normalised treatment was only built for ports) are handled today. A future vendor file will have its own spelling quirks — extend the tables in `scripts/lib/truckingRatesParser.mjs` and `src/services/yardMatchingService.ts` as they're found; never guess at a correction that isn't explicitly listed |
 | 35 | `DECISIONS.md` §3's RoRo figure ($1,500–1,800) may be stale against the current market (Prompt 20 Phase 6, research only) | External marketing-page quotes gathered 8 Sep 2026 (AuctionExport, ShipIt, All Transport Depot — none a real quote request) suggest the floor may now run closer to $1,295, with container costs trending toward $2,800 rather than "$2,000+". These are not quotes and were deliberately not used to correct the documented figure or seed any rate row — flagged only as needing a real `agent_quote` before `DECISIONS.md` §3 is updated |
@@ -2003,4 +2267,4 @@ as evidence (public link renders the fix live).
 | 65 | The make tier-2 list is 317 of 406 makes; the year probe cannot narrow it (found 20 Sep 2026) | See §4.22 Stage 3. Options for Bashir: rank tier 2 by model breadth (a column for the model count), hide specific makes with the existing flag, or leave it — every make stays searchable either way | **MEASURED 20 Sep 2026 — model breadth is NOT a usable separator; do not build it** (see `docs/SOLVED.md` 40). Across all 330 current makes, breadth ranks legitimate brands low (`FIAT` 1, `JAGUAR` 1, `FISKER` 1, `DODGE` 2, `INFINITI` 2, `LOTUS` 2, `LUCID` 2, `POLESTAR` 3, `RIVIAN` 4, `MINI` 3, `BUICK` 4) and heavy-truck/fire-apparatus makers high (`FREIGHTLINER` 35, `KENWORTH` 29, `INTERNATIONAL` 26, `PETERBILT` 17, `OSHKOSH` 15, `PIERCE MANUFACTURING` 14). A breadth threshold would hide real brands and keep trucks. Open options: (a) measure the per-vehicle-type split (car/MPV vs truck-only) — untested hypothesis, (b) a reviewed bulk use of the existing demote flag for clear non-car makers (sweepers, fire apparatus, coach builders, `ZZKNOWN`), (c) leave tier 2 as is — every make is searchable regardless | **RESOLVED 20 Sep 2026 (Bashir's call):** he reviewed the hide candidates and approved **both** lists (133 makes: heavy trucks, buses, fire/emergency apparatus, sweepers, equipment, coach builders, custom/kit/hot-rod builders and unidentifiable names), reasoning that no client would ask for them. Hidden with the reversible demote flag (reason recorded on each row); all still searchable. With AC Propulsion that is 134 hidden; the default picker now lists 14 traded + 183 current makes (was 14 + ~316). `SEAGRAVE ` is stored with a trailing space in the NHTSA data, so it needed a `btrim` match |
 | 66 | `trucking_rates.destination_port_normalized` still carries vendor typos (found 20 Sep 2026) | `BATIMORE` (2 rates), `PROVDIENCE` (3), `WILLMINGTON` (1), `MD-BALTIMORE` (1), `GA-RINCON` (1), and `MIAMI` beside `MIAMI PORT` are stored as "normalized" values alongside the correct `BALTIMORE`, `PROVIDENCE`, `WILMINGTON`. A destination saved as a typo variant would match only those few rates. Not corrected: `destination_port_raw` preserves what the vendor sent (§5.8) and fixing the importer's normalisation needs a decision about the canonical set. Mitigation shipped: `destination_options()` reports a rate count so the real ports lead and typo variants are visibly minor | **PARTLY RESOLVED 20 Sep 2026** — see §4.28: the four unambiguous typos (`BATIMORE`, `PROVDIENCE`, `WILLMINGTON`, `MD-BALTIMORE`) are now aliased in the importer's `PORT_ALIASES` and 7 rows corrected. **Still open, deliberately, for Bashir:** `MIAMI PORT` vs `MIAMI` (probably one port; never collide today), `GA-RINCON` (Rincon GA is a distinct inland location, not proven to be Savannah), `DAVISVILLE` (a real port town), and the vendor's regional labels `CALIFORNIA`/`TEXAS`/`NEW JERSEY` |
 | 67 | The yard matcher misses IAAI yards on naming quirks, and the vendor list lacks some IAAI yards (found 20 Sep 2026, after debt #61's relabel) | Of the 62 IAAI-labelled bid.cars lots, 9 remain unmatched: **3 are matcher naming gaps** (`IAA Dallas/Ft Worth (TX)` carries a leading "IAA " the matcher does not strip; `Chicago-North` and `Houston-South` are hyphenated where the vendor list has `Chicago North` and `Houston South`, while the same list writes `Chicago-West` and `Houston-North` hyphenated), **1** is probably an alias (`Minneapolis South` vs the vendor's `Minneapolis/St. Paul`), **3 are yards absent from the vendor sheet** (Honolulu, Santa Clarita, Staten Island), and **1 is not a yard** (`Dream Rides ()`). Not fixed here: the Prompt 20 matcher is deliberately strict (fuzzy matching is how false yard matches get made); any fix should be an explicit reviewed alias/normalisation, not inferred. The Yaris is one of the three naming gaps | **PARTLY RESOLVED 20 Sep 2026:** the hyphen-vs-space cases (`Chicago-North`, `Houston-South`) are fixed by folding a hyphen to a space on both sides in `normalizeCity` (punctuation, within the matcher's own stated rule). Measured on all 202 real sightings: 0 collisions between distinct yards, all 175 existing matches keep the identical yard, exactly 2 new matches (now 177 matched / 25 unmatched). **Still open, deliberately, for Bashir's call:** the leading vendor code in `IAA Dallas/Ft Worth (TX)` (the Yaris; stripping it is a decision about what a name means, and the code leaves the similar `ACE - Perris` prefix unmatched on purpose), the probable alias `Minneapolis South` vs `Minneapolis/St. Paul`, the 3 yards absent from the vendor sheet (Honolulu, Santa Clarita, Staten Island), and the non-yard `Dream Rides ()` | **LEADING "IAA " RESOLVED 20 Sep 2026** (see §4.30): for the IAAI network only, `IAA Dallas/Ft Worth (TX)` now matches the branch `Dallas/Ft Worth`, on the evidence of IAA's own buyer invoice (its Branch column) and the vendor sheet; no IAAI yard begins with "IAA" so nothing can collide; exactly one sighting changes (the Yaris) and all 179 existing matches keep the identical yard. **Still open for Bashir:** `Minneapolis South`, the 3 yards absent from the vendor sheet (Honolulu, Santa Clarita, Staten Island), and the non-yard `Dream Rides ()`; other vendor codes such as `ACE - ` are deliberately not stripped (no evidence yet)
-| 68 | Every unpaginated read of `trucking_rates` silently returned only the first 1,000 of 1,740 active rows (found 20 Sep 2026, while making the Yaris's trucking resolve) | PostgREST caps each response at 1,000 rows and a client-side `.limit(2000)` does not lift it. Four call sites loaded the yard list with a bare select - `bidHeadroomService.getInlandTruckingComponent` (every listing's cost panel), `WonVehicleCosts`, `ListingCostBreakdown`, and `searchTruckingYards` - so the yard matcher saw ~57% of the yards (738 of 742 Copart rows, 262 of 588 IAAI, **no Manheim or ADESA**) and a yard in the missing part read as "no yard found", indistinguishable from a real absence. It undermined debt #61/#67 verification (my Node tests used the complete list, the app did not) and probably part of Prompt 20's "~1/3 of yards abstain". **RESOLVED 20 Sep 2026:** one paginated, stably-ordered helper `listActiveYardKeys` (plus paging in `searchTruckingYards`), with a completeness check that fails loudly if fewer rows load than the server counts. The app now sees all 531 distinct yards (208 Copart, 187 IAAI, 77 Manheim, 59 ADESA). Only one other table exceeds 1,000 rows, `vehicle_reference_models` (1,135), and every read of it is filtered per make/year. **Watch:** any future unfiltered read of a table that grows past 1,000 rows has the same failure mode |
+| 68 | Every unpaginated read of `trucking_rates` silently returned only the first 1,000 of 1,740 active rows (found 20 Sep 2026, while making the Yaris's trucking resolve) | PostgREST caps each response at 1,000 rows and a client-side `.limit(2000)` does not lift it. Four call sites loaded the yard list with a bare select - `bidHeadroomService.getInlandTruckingComponent` (every listing's cost panel), `WonVehicleCosts`, `ListingCostBreakdown`, and `searchTruckingYards` - so the yard matcher saw ~57% of the yards (738 of 742 Copart rows, 262 of 588 IAAI, **no Manheim or ADESA**) and a yard in the missing part read as "no yard found", indistinguishable from a real absence. It undermined debt #61/#67 verification (my Node tests used the complete list, the app did not) and - **CORRECTED 21 Sep 2026: this is NOT true of Prompt 20's 65.5% figure**, which (like every figure on record) was measured by script over a complete export and was never affected by the cap; the cap affected only what the *app* did (137/211 = 64.9% matched instead of 176/211 = 83.4%, see §4.31). **RESOLVED 20 Sep 2026:** one paginated, stably-ordered helper `listActiveYardKeys` (plus paging in `searchTruckingYards`), with a completeness check that fails loudly if fewer rows load than the server counts. The app now sees all 531 distinct yards (208 Copart, 187 IAAI, 77 Manheim, 59 ADESA). Only one other table exceeds 1,000 rows, `vehicle_reference_models` (1,135), and every read of it is filtered per make/year. **Watch:** any future unfiltered read of a table that grows past 1,000 rows has the same failure mode |

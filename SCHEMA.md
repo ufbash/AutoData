@@ -429,6 +429,8 @@ city/state, with an unmatched or ambiguous result surfaced as "not quotable" rat
 approximation. Measured baseline: 65.5% matched, 34.5% unmatched, 0% ambiguous across all
 171 live sightings (`PLAN_TRACKER.md` §4.9/debt #32-34).
 
+> CORRECTION (21 Sep 2026, Prompt 36 Stage 1): this figure was measured by script over a complete export (not the app's runtime, and not affected by the 1,000-row cap of debt #68), and is stale as a description of today's data. Re-measured against the full yard list: 176 of 211 real sightings matched (83.4%); per-network numbers and the composition of the gap are in `PLAN_TRACKER.md` §4.31.
+
 **IAAI capture** (`chrome-extension/content-iaai.js`, Prompt 22 Stage 2/B1) reads a single
 source: `document.getElementById('ProductDetailsVM')`, a `<script type="application/json">`
 block IAAI embeds on every lot page regardless of login state — no DOM scraping. Location comes
