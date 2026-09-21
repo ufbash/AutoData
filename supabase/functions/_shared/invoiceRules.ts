@@ -57,9 +57,11 @@ export function deriveInvoice(input: InvoiceInput): Derived {
     if (typeof l.description !== 'string' || l.description.trim() === '') errors.push(`Line ${i + 1}: a description is required`);
     if (typeof l.amount_usd !== 'number' || !Number.isFinite(l.amount_usd) || l.amount_usd < 0) errors.push(`Line ${i + 1}: the amount must be a number of dollars, zero or more`);
     if (l.origin !== 'computed' && l.origin !== 'staff_entered') errors.push(`Line ${i + 1}: origin must be computed or staff_entered`);
-    // A computed zero is what a silently zeroed, abstaining component looks like. A real zero (a fee waived) is
-    // staff-entered with its basis.
-    if (l.origin === 'computed' && Number(l.amount_usd) === 0) errors.push(`Line ${i + 1}: a computed figure of zero is refused - a component with no real figure is excluded, not zeroed`);
+    // A zero is what a silently zeroed, abstaining component looks like. Only a brokerage fee can be a real zero (waived),
+    // and then it is staff-entered with its basis; any other component that costs nothing is EXCLUDED with a reason.
+    // A computed figure must say where it came from.
+    if (Number(l.amount_usd) === 0 && !(l.kind === 'brokerage_fee' && l.origin === 'staff_entered')) errors.push(`Line ${i + 1}: a zero amount is refused - a component with no real figure is excluded with a reason, not zeroed (only a waived brokerage fee may be zero, with its basis)`);
+    if (l.origin === 'computed' && (!l.source_ref || String(l.source_ref).trim() === '')) errors.push(`Line ${i + 1}: a computed figure must carry the source it was computed from`);
     if (l.origin === 'staff_entered' && (!l.basis || l.basis.trim() === '')) errors.push(`Line ${i + 1}: a figure entered by staff must state what it rests on (a quote, an agreement, an invoice)`);
     return { ...l, description: String(l.description ?? '').trim(), amount_usd: cents(Number(l.amount_usd)), client_visible: l.client_visible !== false };
   });

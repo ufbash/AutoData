@@ -77,9 +77,9 @@ const ClientRelationship: React.FC<{
   if (loading) return <div className="max-w-5xl mx-auto">{back}<div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-[#a58039]" /></div></div>;
   if (error || !data) return <div className="max-w-5xl mx-auto">{back}<div className="p-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg" data-testid="relationship-error">{error}</div></div>;
 
-  const { client, briefs, runs, wonVehicles, documents, invoices, payments, receipts, emails, pendingSchema } = data;
+  const { client, briefs, runs, wonVehicles, removedVehicles, documents, invoices, payments, receipts, emails, pendingSchema } = data;
   const briefById = new Map(briefs.map(b => [b.id, b]));
-  const vehicleName = new Map(wonVehicles.map(v => [v.id, heading(v)]));
+  const vehicleName = new Map<string, string>([...wonVehicles.map(v => [v.id, heading(v)] as [string, string]), ...removedVehicles.map(v => [v.id, `${heading(v)} (removed)`] as [string, string])]);
   const invoiceNumber = new Map(invoices.map(i => [i.id, i.invoice_number || 'Invoice']));
   const paymentById = new Map<string, RelPayment>();
   payments.forEach(p => paymentById.set(p.id, p));
@@ -175,7 +175,7 @@ const ClientRelationship: React.FC<{
                 {i.generated && i.hat && <Badge>{i.hat}</Badge>}
                 {i.generated && i.scope && <Badge tone={i.scope === 'partial' ? 'amber' : 'gray'}>{i.scope}</Badge>}
               </div>
-              {i.generated && i.balance && (
+              {i.generated && i.balance && !i.voided_at && (
                 <div className="text-xs text-gray-500 mt-1">
                   Paid {money(i.balance.paid, i.currency)} · Outstanding {money(i.balance.outstanding, i.currency)}
                 </div>

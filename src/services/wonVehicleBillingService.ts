@@ -116,7 +116,10 @@ const fromComponent = (kind: RequiredKind, c: CostComponent | null, describe: st
   if (!c || c.status !== 'available' || c.amountUsd === null) return { kind, label, state: 'needs_figure', amountUsd: null, description: describe, reason: c?.reason ?? 'not calculated', sourceRef: null };
   if (c.partialReason) return { kind, label, state: 'needs_figure', amountUsd: null, description: describe, reason: `partial: ${c.partialReason}`, sourceRef: null };
   if (!exactOnly.ok) return { kind, label, state: 'needs_figure', amountUsd: null, description: describe, reason: exactOnly.why, sourceRef: null };
-  return { kind, label, state: 'real', amountUsd: c.amountUsd, description: describe, reason: null, sourceRef };
+  // A computed line must say what it was computed from: the source rows the cost service itself reported.
+  const ref = sourceRef ?? c.sourceRows.map(r => `${r.label} (${r.source}, effective ${r.effectiveFrom})`).join('; ');
+  if (!ref) return { kind, label, state: 'needs_figure', amountUsd: null, description: describe, reason: 'the figure has no traceable source', sourceRef: null };
+  return { kind, label, state: 'real', amountUsd: c.amountUsd, description: describe, reason: null, sourceRef: ref };
 };
 
 export const computeInvoicePrefill = async (

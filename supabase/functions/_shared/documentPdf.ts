@@ -95,8 +95,8 @@ export async function renderInvoicePdf(lib: PdfLib, d: InvoicePdfInput): Promise
   c.para(`Vehicle: ${d.vehicle}`, c.M, right - c.M);
   c.y -= 2;
   c.para(d.hat === 'brokerage'
-    ? 'Issued by Caplimo as your agent. Costs are passed through and shown line by line, with our fee disclosed.'
-    : 'Vehicle supplied by Caplimo at the all-inclusive price below.', c.M, right - c.M, 9, c.font, c.grey);
+    ? `Issued by ${d.orgName} as your agent. Costs are passed through and shown line by line, with our fee disclosed.`
+    : `Vehicle supplied by ${d.orgName} at the all-inclusive price below.`, c.M, right - c.M, 9, c.font, c.grey);
   c.y -= 6; c.rule();
 
   c.text('Description', c.M, 9, c.bold, c.grey); c.rightText(`Amount (${d.currency})`, right, 9, c.bold, c.grey); c.y -= 14;
@@ -120,7 +120,7 @@ export async function renderInvoicePdf(lib: PdfLib, d: InvoicePdfInput): Promise
     c.ensure(60);
     c.para('PARTIAL INVOICE - the total above is NOT the full cost of this vehicle. It does not include:', c.M, right - c.M, 10, c.bold, c.red, 4);
     for (const e of d.excluded) c.para(`- ${e.label}: ${e.reason}`, c.M + 10, right - c.M - 10, 9.5);
-    c.para('Each item above will be invoiced separately when its figure is known.', c.M, right - c.M, 9, c.font, c.grey);
+    c.para('Each excluded item that applies to this vehicle will be invoiced separately.', c.M, right - c.M, 9, c.font, c.grey);
   }
   if (d.notes) { c.y -= 4; c.para(d.notes, c.M, right - c.M, 9, c.font, c.grey); }
   c.y = 40;
@@ -141,7 +141,7 @@ export async function renderReceiptPdf(lib: PdfLib, d: ReceiptPdfInput): Promise
   c.text(`Date paid: ${d.paidOn}   Method: ${d.method.replace(/_/g, ' ')}${d.reference ? `   Reference: ${d.reference}` : ''}`, c.M, 9.5, c.font, c.grey); c.y -= 18;
   c.text(`Against invoice ${d.invoiceNumber}`, c.M, 10, c.bold); c.y -= 14;
   c.text('Invoice total', c.M); c.rightText(money(d.invoiceTotal, d.currency), right); c.y -= 13;
-  c.text('Paid to date (this receipt included)', c.M); c.rightText(money(d.paidToDate, d.currency), right); c.y -= 13;
+  c.text('Paid to date at the time of issue', c.M); c.rightText(money(d.paidToDate, d.currency), right); c.y -= 13;
   c.text('Outstanding', c.M, 10, c.bold); c.rightText(money(d.outstanding, d.currency), right, 10, c.bold); c.y -= 22;
   c.para('The outstanding figure is the balance of the invoice named above at the time this receipt was issued. It does not include any item that invoice states it excludes.', c.M, right - c.M, 9, c.font, c.grey);
   c.y = 40;

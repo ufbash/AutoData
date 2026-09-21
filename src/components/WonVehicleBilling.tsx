@@ -17,6 +17,8 @@ import type { Hat, InvoiceCurrency, LineInput, ExcludedInput, RequiredKind } fro
 
 const money = (n: number, cur: string) => `${cur} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().slice(0, 10);
+// A blank field is NOT zero: Number('') is 0, which would silently become a $0 line.
+const amt = (v: string) => (v.trim() === '' ? NaN : Number(v));
 
 type Choice = 'line' | 'excluded';
 interface Row { kind: RequiredKind; choice: Choice; amount: string; basis: string; reason: string; computed: boolean; sourceRef: string | null; description: string }
@@ -57,13 +59,13 @@ const Builder: React.FC<{
     const ls: LineInput[] = []; const ex: ExcludedInput[] = [];
     if (hat === 'brokerage') {
       for (const r of rows) {
-        if (r.choice === 'line') ls.push({ kind: r.kind, description: r.description, amount_usd: Number(r.amount), origin: r.computed ? 'computed' : 'staff_entered', basis: r.computed ? null : r.basis, source_ref: r.sourceRef });
+        if (r.choice === 'line') ls.push({ kind: r.kind, description: r.description, amount_usd: amt(r.amount), origin: r.computed ? 'computed' : 'staff_entered', basis: r.computed ? null : r.basis, source_ref: r.sourceRef });
         else ex.push({ kind: r.kind, reason: r.reason });
       }
     } else {
-      ls.push({ kind: 'all_inclusive_price', description: 'Vehicle supplied, all-inclusive', amount_usd: Number(retailPrice), origin: 'staff_entered', basis: retailBasis });
+      ls.push({ kind: 'all_inclusive_price', description: 'Vehicle supplied, all-inclusive', amount_usd: amt(retailPrice), origin: 'staff_entered', basis: retailBasis });
       // the real components are kept as INTERNAL cost lines - stored, never shown to the client
-      for (const r of rows) if (r.choice === 'line' && r.computed) ls.push({ kind: r.kind, description: r.description, amount_usd: Number(r.amount), origin: 'computed', client_visible: false, source_ref: r.sourceRef });
+      for (const r of rows) if (r.choice === 'line') ls.push({ kind: r.kind, description: r.description, amount_usd: amt(r.amount), origin: r.computed ? 'computed' : 'staff_entered', basis: r.computed ? null : r.basis, client_visible: false, source_ref: r.sourceRef });
     }
     return { lines: ls, excluded: ex };
   }, [rows, hat, retailPrice, retailBasis]);

@@ -27,6 +27,7 @@ export interface ClientRelationshipData {
   briefs: RelBrief[];
   runs: RelRun[];
   wonVehicles: RelWonVehicle[];
+  removedVehicles: RelWonVehicle[];   // labelled only: their invoices, payments and receipts still belong to the client
   documents: RelDocument[];
   invoices: RelInvoice[];
   payments: RelPayment[];
@@ -125,7 +126,10 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
   const briefs = allBriefs.filter(b => !b.deleted_at);
   const liveVehicles = allVehicles.filter(v => !v.deleted_at);
   const vehicleIds = liveVehicles.map(v => v.id);
-  const vehicleIdSet = new Set(vehicleIds);
+  // Money records follow ALL of the client's vehicles, including removed ones: an invoice or payment is still the client's
+  // financial record when the vehicle has been taken off the live list.
+  const vehicleIdSet = new Set(allVehicles.map(v => v.id));
+  const statusVehicleIdSet = new Set(vehicleIds);
   const briefIdsAll = allBriefs.map(b => b.id);
   const vehicleIdsAll = allVehicles.map(v => v.id);
 
@@ -136,17 +140,17 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
     readChunked<{ won_vehicle_id: string; status: string; changed_at: string }>('won vehicle status history', 'won_vehicle_status_history',
       'id, won_vehicle_id, status, changed_at', vehicleIds, (q, c) => q.in('won_vehicle_id', c), [{ col: 'changed_at' }, { col: 'id' }]),
     readChunked<RelDocument>('won vehicle documents', 'won_vehicle_documents',
-      'id, org_id, won_vehicle_id, document_type, original_filename, uploaded_at', vehicleIds,
+      'id, org_id, won_vehicle_id, document_type, original_filename, uploaded_at', vehicleIdsAll,
       (q, c) => byVehicle(q, c).is('deleted_at', null), [{ col: 'uploaded_at', asc: false }, { col: 'id' }]),
-    readChunked<any>('invoice issuances', 'won_vehicle_invoice_issuances', '*', vehicleIds, byVehicle, [{ col: 'issued_at', asc: false }, { col: 'id' }]),
+    readChunked<any>('invoice issuances', 'won_vehicle_invoice_issuances', '*', vehicleIdsAll, byVehicle, [{ col: 'issued_at', asc: false }, { col: 'id' }]),
     optional('won_vehicle_payments', () => readChunked<RelPayment>('won vehicle payments', 'won_vehicle_payments',
-      'id, org_id, won_vehicle_id, issuance_id, amount, currency, paid_at, method, reference, recorded_at, voided_at, void_reason', vehicleIds,
+      'id, org_id, won_vehicle_id, issuance_id, amount, currency, paid_at, method, reference, recorded_at, voided_at, void_reason', vehicleIdsAll,
       byVehicle, [{ col: 'paid_at', asc: false }, { col: 'id' }])),
     optional('won_vehicle_receipts', () => readChunked<RelReceipt>('won vehicle receipts', 'won_vehicle_receipts',
-      'id, org_id, won_vehicle_id, payment_id, document_id, receipt_number, issued_at, voided_at, void_reason', vehicleIds,
+      'id, org_id, won_vehicle_id, payment_id, document_id, receipt_number, issued_at, voided_at, void_reason', vehicleIdsAll,
       byVehicle, [{ col: 'issued_at', asc: false }, { col: 'id' }])),
     optional('won_vehicle_invoice_balances', () => readChunked<any>('invoice balances', 'won_vehicle_invoice_balances',
-      'issuance_id, org_id, won_vehicle_id, invoice_amount, paid, outstanding', vehicleIds, byVehicle, [{ col: 'issuance_id' }], 'issuance_id')),
+      'issuance_id, org_id, won_vehicle_id, invoice_amount, paid, outstanding', vehicleIdsAll, byVehicle, [{ col: 'issuance_id' }], 'issuance_id')),
     // email_log has no client column: a client's mail is found through its briefs and won vehicles (deleted ones included).
     readChunked<any>('email history (briefs)', 'email_log',
       'id, org_id, purpose, recipient_email, subject, related_table, related_id, status, created_at', briefIdsAll,
@@ -156,7 +160,7 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
       (q, c) => q.eq('org_id', orgId).eq('related_table', 'won_vehicles').in('related_id', c), [{ col: 'created_at', asc: false }, { col: 'id' }]),
   ]);
 
-  assertVehicles('status history', history, vehicleIdSet);
+  assertVehicles('status history', history, statusVehicleIdSet);
   assertOrg('document', documents, orgId); assertVehicles('document', documents, vehicleIdSet);
   assertOrg('invoice', issuances, orgId); assertVehicles('invoice', issuances, vehicleIdSet);
   assertOrg('payment', payments, orgId); assertVehicles('payment', payments, vehicleIdSet);
@@ -192,6 +196,7 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
     briefs,
     runs,
     wonVehicles: liveVehicles.map(v => ({ ...v, currentStatus: latestStatus.get(v.id) ?? null })),
+    removedVehicles: allVehicles.filter(v => v.deleted_at).map(v => ({ ...v, currentStatus: null })),
     documents,
     invoices: issuances.map((i: any): RelInvoice => ({
       id: i.id, org_id: i.org_id, won_vehicle_id: i.won_vehicle_id, document_id: i.document_id ?? null, invoice_number: i.invoice_number ?? null,

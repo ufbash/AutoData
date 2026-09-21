@@ -76,6 +76,13 @@ serve(async (req: Request) => {
       return row.id as string;
     };
     const retireDocument = (id: string) => supabase.from('won_vehicle_documents').update({ deleted_at: new Date().toISOString(), deleted_by: user.id }).eq('id', id);
+    const sha256 = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))).map(b => b.toString(16).padStart(2, '0')).join('');
+    // After a failure, was the invoice / receipt in fact committed (the database call succeeded and only the reply failed)?
+    // If so its PDF must NOT be retired and its number must not be abandoned.
+    const numberIssued = async (numberId: string) => {
+      const { data } = await supabase.from('document_numbers').select('status, ref_id').eq('id', numberId).maybeSingle();
+      return data?.status === 'issued' ? (data.ref_id as string) : null;
+    };
     const abandon = (numberId: string, note: string) => supabase.rpc('mark_document_number', { p_id: numberId, p_status: 'abandoned', p_ref: null, p_note: note });
 
     // ============================================================ issue_invoice
@@ -89,14 +96,30 @@ serve(async (req: Request) => {
       const notes = typeof payload.notes === 'string' && payload.notes.trim() ? payload.notes.trim().slice(0, 1000) : null;
       const idem = typeof payload.idempotencyKey === 'string' && payload.idempotencyKey.trim() ? payload.idempotencyKey.trim().slice(0, 120) : null;
 
+      const requestHash = await sha256(JSON.stringify({ hat, currency, lines, excluded: excluded ?? [], recipient, notes }));
+      const returnExisting = (e: { id: string; invoice_number: string; document_id: string; scope: string; amount: number | string; currency: string }) =>
+        json({ success: true, alreadyIssued: true, issuanceId: e.id, invoiceNumber: e.invoice_number, documentId: e.document_id, scope: e.scope, total: Number(e.amount), currency: e.currency });
       if (idem) {
         const { data: existing } = await supabase.from('won_vehicle_invoice_issuances')
-          .select('id, invoice_number, document_id, scope, amount, currency').eq('org_id', vehicle.org_id).eq('idempotency_key', idem).maybeSingle();
-        if (existing) return json({ success: true, alreadyIssued: true, issuanceId: existing.id, invoiceNumber: existing.invoice_number, documentId: existing.document_id, scope: existing.scope, total: Number(existing.amount), currency: existing.currency });
+          .select('id, invoice_number, document_id, scope, amount, currency, request_hash').eq('org_id', vehicle.org_id).eq('idempotency_key', idem).maybeSingle();
+        if (existing) {
+          // The same key with DIFFERENT content is a conflict, never a silent return of the earlier invoice.
+          if (existing.request_hash && existing.request_hash !== requestHash) return json({ error: `The idempotency key was already used for a different invoice (${existing.invoice_number}). Nothing was issued.` }, 409);
+          return returnExisting(existing);
+        }
       }
 
       const derived = deriveInvoice({ hat, currency, lines: Array.isArray(lines) ? lines : [], excluded: Array.isArray(excluded) ? excluded : [] });
       if (derived.ok === false) return json({ error: derived.errors.join('; '), errors: derived.errors }, 400);
+
+      // A computed VEHICLE PRICE is checkable here: it must be the vehicle's current, un-voided winning bid, at that amount.
+      // (Other computed lines come from the browser's cost services and cannot be recomputed server-side; they carry their source.)
+      for (const l of derived.lines.filter(x => x.kind === 'vehicle_price' && x.origin === 'computed')) {
+        const { data: bid } = await supabase.from('won_vehicle_winning_bids').select('id, amount_usd, voided_at').eq('id', l.source_ref ?? '').eq('won_vehicle_id', vehicle.id).maybeSingle();
+        if (!bid || bid.voided_at || Math.round(Number(bid.amount_usd) * 100) !== Math.round(l.amount_usd * 100)) {
+          return json({ error: 'A computed vehicle price must be this vehicle\'s recorded winning bid at that exact amount. Record the bid, or enter the price as a staff figure with its basis.' }, 400);
+        }
+      }
 
       // Currency frozen ONCE: an NGN invoice takes a live rate now and records it; there is no fallback rate.
       let fx: { rate: number; date: string; source: string } | null = null;
@@ -139,19 +162,22 @@ serve(async (req: Request) => {
         const { data: issuanceId, error: issueErr } = await supabase.rpc('issue_generated_invoice', {
           p_org: vehicle.org_id, p_vehicle: vehicle.id, p_document: docId, p_number_id: number.id, p_hat: hat, p_scope: derived.scope,
           p_excluded: derived.excluded, p_currency: currency, p_fx_rate: fx?.rate ?? null, p_fx_date: fx?.date ?? null, p_fx_source: fx?.source ?? null,
-          p_recipient: recipient, p_channel: channel, p_notes: notes, p_idem: idem, p_user: user.id, p_lines: fullLines,
+          p_recipient: recipient, p_channel: channel, p_notes: notes, p_idem: idem, p_user: user.id, p_lines: fullLines, p_hash: requestHash,
         });
         if (issueErr) {
           // The same request raced itself and lost at the database (unique idempotency key): return the winner.
           if ((issueErr as { code?: string }).code === '23505' && idem) {
             await retireDocument(docId); await abandon(number.id, 'lost a race for the same idempotency key');
             const { data: winner } = await supabase.from('won_vehicle_invoice_issuances').select('id, invoice_number, document_id, scope, amount, currency').eq('org_id', vehicle.org_id).eq('idempotency_key', idem).maybeSingle();
-            if (winner) return json({ success: true, alreadyIssued: true, issuanceId: winner.id, invoiceNumber: winner.invoice_number, documentId: winner.document_id, scope: winner.scope, total: Number(winner.amount), currency: winner.currency });
+            if (winner) return returnExisting(winner);
           }
           throw issueErr;
         }
         return json({ success: true, issuanceId, invoiceNumber: number.number_text, documentId: docId, scope: derived.scope, total: totalCents / 100, totalUsd: totalUsdCents / 100, currency, fx });
       } catch (e) {
+        // If the invoice DID commit (only the reply failed), keep its PDF and number and say so.
+        const committed = await numberIssued(number.id);
+        if (committed) return json({ success: true, issuanceId: committed, invoiceNumber: number.number_text, documentId: docId, scope: derived.scope, currency, recovered: true });
         if (docId) await retireDocument(docId);
         await abandon(number.id, `issue failed: ${(e as Error).message}`.slice(0, 300));
         return json({ error: (e as Error).message }, 400);
@@ -186,8 +212,9 @@ serve(async (req: Request) => {
       if (rowErr) throw rowErr;
       if (!row || !canAccessOrg(row.org_id)) return json({ error: "Not found" }, 404);
       if (row.voided_at) return json({ error: "Already voided" }, 409);
-      const { error } = await supabase.from(table).update({ voided_at: new Date().toISOString(), voided_by: user.id, void_reason: reason }).eq('id', id).is('voided_at', null);
+      const { data: done, error } = await supabase.from(table).update({ voided_at: new Date().toISOString(), voided_by: user.id, void_reason: reason }).eq('id', id).is('voided_at', null).select('id');
       if (error) return json({ error: error.message }, 400);
+      if (!done || done.length === 0) return json({ error: "Already voided" }, 409);
       return json({ success: true });
     }
 
@@ -223,8 +250,13 @@ serve(async (req: Request) => {
         if (recErr) throw recErr;
         return json({ success: true, receiptId, receiptNumber: number.number_text, documentId: docId });
       } catch (e) {
+        const committed = await numberIssued(number.id);
+        if (committed) return json({ success: true, receiptId: committed, receiptNumber: number.number_text, documentId: docId, recovered: true });
         if (docId) await retireDocument(docId);
         await abandon(number.id, `issue failed: ${(e as Error).message}`.slice(0, 300));
+        // Two receipts for one payment raced and this one lost: return the winner instead of an error.
+        const { data: winner } = await supabase.from('won_vehicle_receipts').select('id, receipt_number').eq('payment_id', pay.id).is('voided_at', null).maybeSingle();
+        if (winner) return json({ success: true, alreadyIssued: true, receiptId: winner.id, receiptNumber: winner.receipt_number });
         return json({ error: (e as Error).message }, 400);
       }
     }
