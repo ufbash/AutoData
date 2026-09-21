@@ -627,3 +627,26 @@ reintroduce the bug; and it leaves one definition instead of two that can drift 
 **Why 16.2:** the old code mapped `2` to IAAI with no observation behind it. A guessed label is worse than none: a null abstains visibly, a wrong label prices an IAAI car under Copart's schedule and quotes a Copart yard's trucking.
 
 **Why 16.4:** correcting history with a second copy of the mapping in SQL would recreate the divergence. Dry run first means the change was seen and matched to independent measurements before any row was written.
+
+---
+
+## 17. The rates architecture (Prompt 37 Phase 1)
+
+| # | Decision | Status |
+|---|---|---|
+| 17.1 | **The auction house is a key, not a hardcoded label.** A flat fee is "the `environmental` fee for house X under tier Y", never the string `Copart Environmental Fee`; the code asks for a fee *role* against a house and gets whatever the data says | LOCKED |
+| 17.2 | **The three rate tables are unified by convention, not merged.** They have different grains (yard x port x method, price bands, flat amounts); one table would be mostly nulls with special cases in every query. Currency, effective dating, source, org scoping, provenance and the append-only rule are identical across all three | LOCKED |
+| 17.3 | **A fee tier is named as the house publishes it, never after a person or company.** The holder and member number are facts on the *account*, not part of the schedule's name | LOCKED |
+| 17.4 | **Payment tier (Secured/Unsecured) is per account per house**, not one org-wide setting | LOCKED |
+| 17.5 | **A house with no account, or a tier with no schedule, abstains and states why.** "No schedule" is never a zero; a *partial* fee (a sub-part missing) never feeds a total or a headroom figure as complete | LOCKED |
+| 17.6 | **Rate rows are never edited or deleted by the app.** The database, not application code, refuses it: API roles may only close a live row. Direct SQL by the admin role stays possible - it is the human-confirmed path - and is logged | LOCKED |
+| 17.7 | **Loading a schedule is a data operation.** Through Document Extraction (the reviewer chooses the official tier) or `scripts/loadFeeSchedule.mjs` (prints SQL, never runs it). Adding IAAI must never need a TypeScript edit - proven with a synthetic schedule and an empty source diff | LOCKED |
+| 17.8 | **A schedule that does not vary by title or payment method is stored once** (`any`), not four times | LOCKED |
+| 17.9 | **Existing Copart figures do not move.** A frozen copy of the old arithmetic is kept as a regression oracle (`scripts/feeRegression/`); the refactor is accepted only at zero differences over every bracket boundary | LOCKED |
+| 17.10 | **Asset Merges records the negative decision** ("not the same car"): append-only, voidable, remembered - so it matches Document Extraction's confirm/reject pattern | LOCKED |
+
+**Why 17.6:** the Prompt 36 Miami update matched 0 rows because something unattributed had already applied it. The investigation could not identify who, and found that any org member could rewrite any rate row through the API while the charter rule lived only in application code. A rule that lives only in the app is a habit, not a guarantee.
+
+**Why 17.5:** the project's recurring failure is a missing value indistinguishable from a real zero. An empty schedule that priced as $0 would be the same failure at the point where a client sees a number.
+
+**Open (Bashir):** whether the Gate Fee, labelled "Non-Clean Title", is really charged on clean titles (it is added today; debt #70); which of two live duplicate trucking quotes is current (debt #69).

@@ -829,3 +829,31 @@ not used (`source_platform` already names the house). The Chrome extension **no 
 idempotent. Applied 20 Sep 2026: 62 rows (50 `copart`→`iaai`, 12 `NULL`→`iaai`); 100 already-correct Copart rows and 7 rows with no Lot line untouched.
 
 **Readers** (both take the column as truth): `yardMatchingService.resolveEffectivePlatform` and `bidHeadroomService.resolveEffectivePlatform` (two separate copies of the resolver — an older, unaddressed divergence).
+
+---
+
+## 25. The rates architecture: houses, tiers, accounts, roles and the shared conventions (migrations 051-055, Prompt 37 Phase 1)
+
+**The three rate tables keep their own grains and are not merged**: `trucking_rates` is yard x port x method, `auction_fee_brackets` is price bands per schedule, `cost_rates` is flat amounts and percentages. What is unified is the *convention*, stated once so a future rate table follows it:
+
+| Convention | Rule | Enforced by |
+|---|---|---|
+| Dated rows | A rate is valid from `effective_from`; a superseded rate is **closed** (`effective_to` set once, never earlier than `effective_from`) and a replacement inserted. Never edited, never deleted | Database trigger `rate_table_guard` (051) for API roles; the admin role is allowed but logged |
+| Source | `official_tariff` / `agent_quote` / `actual_paid`, set by a human, never a model | CHECK on all three |
+| Org scoping | `org_id` on every row, read through RLS; INSERT and UPDATE policies are `is_superadmin()`, there is no DELETE policy | RLS (051) |
+| Provenance | `created_at`, `created_by`; **every** later write is in `rate_change_log` (who, role, `auth.uid()`, application, old and new row) | Trigger (051); `auction_accounts` is logged by 056 |
+| Currency | `currency` + `amount_usd` / `fx_rate` / `fx_rate_date` frozen when a human confirmed the row; a reader asks `usdAmount(row, value)` (`_shared/rateConventions.ts`), never reads a raw figure of a non-USD row as dollars | CHECK `*_currency_conversion_shape` (033); the shared reader |
+| One live row per key | A duplicate live row is summed or double-counted silently, so it is refused: `cost_rates` per (org, house, fee role) and `auction_fee_brackets` per schedule cell. **`trucking_rates` has no such index yet** - two live duplicate groups exist (debt #69) | Partial unique indexes |
+
+**New tables**
+- `auction_houses (auction_platform PK, display_name, location_prefixes text[])` - copart, iaai, manheim, adesa. `location_prefixes` replaces the hardcoded IAA-yard regex: a lot labelled house X whose location starts with a *different* house's prefix is contradictory and abstains. `auction_platform` on the fee and trucking tables is now a foreign key to this table (the CHECK lists are gone), so a house is data.
+- `auction_fee_tiers (auction_platform, fee_tier PK, eligibility, source_url, notes, sort_order)` - a house's **official** fee tiers named as the house publishes them, never after a person. Copart: `Copart U.S. Non-Licensed`, `Copart U.S. Licensed - Low Volume`, `Copart U.S. Licensed - High Volume` (the two Licensed names are shorthand for Copart's two criteria paths; the verbatim criteria are stored in `eligibility`). IAAI: `IAA U.S. Public`, `IAA U.S. Non-Licensed`, `IAA U.S. Licensed`.
+- `auction_accounts (id, org_id, auction_platform, fee_tier, holder_name, member_number, payment_tier, is_default, ...)` - a buying account an org holds: which tier it is on, its own Secured/Unsecured `payment_tier` (NULL where a house has no such distinction), the holder and member number as descriptive facts, one default per (org, house). Replaces `DEFAULT_MEMBER_ACCOUNT` and `org_settings.copart_payment_tier`.
+- `rate_change_log (id, changed_at, table_name, row_id, op, caller_role, session_user_name, auth_uid, application_name, old_row, new_row)` - superadmin-readable, no API writes.
+- `asset_merge_decisions` - append-only ledger of "these two are not the same car" (`decision = 'dismissed'`), voidable with a reason, never edited or deleted (SCHEMA 12's pattern; only writer is the `asset-merge-dismiss` Edge Function).
+
+**Changed tables (all additive; nothing renamed or dropped until the 057 cleanup)**
+- `auction_fee_brackets`: `fee_tier` (backfilled from `member_account`, which is now nullable and to be dropped); `title_status` and `payment_tier` accept **`any`** - a schedule that does not vary by title or payment method is stored once. Lookup rule: rows for the specific title/payment win over `any`; two equally specific partitions is ambiguous and abstains; an unclassifiable title can only match `any` rows.
+- `cost_rates`: `auction_platform`, `fee_role` (lower_snake_case), `fee_applies` (`always` = added to the fee total, `contingent` = shown but not added). A flat auction fee is "the environmental fee for house X", not the string `Copart Environmental Fee`.
+
+**Bracket boundaries.** A price exactly on a shared boundary (500 in 100-500 / 500-1000) matches two brackets; the **lower** bracket wins, deterministically (`findBracket` sorts by `bracket_min`). The pre-Phase-1 code took whichever row the database returned first.
