@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, AlertTriangle, GitMerge, RefreshCw, Check } from 'lucide-react';
-import { listMergeCandidates, confirmMerge, MergeCandidate, AssetSide } from '../services/assetMergeService';
+import { Loader2, AlertTriangle, GitMerge, Check, X } from 'lucide-react';
+import ReviewQueueShell from './ReviewQueueShell';
+import { supabase } from '../services/supabaseClient';
+import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
+import { listMergeCandidates, confirmMerge, dismissMergeCandidate, restoreMergeCandidate, listDismissals, MergeDismissal, MergeCandidate, AssetSide } from '../services/assetMergeService';
 
 // PROMPT 32 Stage 2 (debt #46) - the review screen. Nothing here merges anything without an
 // explicit click on a specific, named pair, after seeing both records in full. A doNotMerge
@@ -70,7 +73,22 @@ const CandidateCard: React.FC<{
 }> = ({ candidate, onMerged }) => {
   const [confirming, setConfirming] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissReason, setDismissReason] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // The negative decision: these are two different cars. Recorded (who, when, why); the pair stops reappearing.
+  const handleDismiss = async () => {
+    setMerging(true);
+    setError(null);
+    try {
+      await dismissMergeCandidate(candidate.survivor.asset.id, candidate.orphanCandidate.asset.id, dismissReason);
+      onMerged();
+    } catch (e: any) {
+      setError(e?.message || 'The decision could not be recorded.');
+      setMerging(false);
+    }
+  };
 
   const handleMerge = async () => {
     setMerging(true);
@@ -145,7 +163,17 @@ const CandidateCard: React.FC<{
 
       {error && <div className="mb-3 text-sm text-[#ba3b46]">{error}</div>}
 
-      {!confirming ? (
+      {dismissing ? (
+        <div className="flex flex-wrap items-center gap-3 bg-gray-50 border border-gray-200 rounded-lg p-3" data-testid="dismiss-confirm">
+          <span className="text-sm text-gray-700">Record that these are two different cars? They will not be offered again (you can restore the pair later).</span>
+          <input value={dismissReason} onChange={e => setDismissReason(e.target.value)} placeholder="Reason (optional)" className="border border-gray-300 rounded px-2 py-1 text-sm flex-1 min-w-[12rem]" />
+          <button onClick={handleDismiss} disabled={merging} className="px-3 py-1.5 bg-[#403f4c] text-white rounded font-bold text-sm hover:bg-[#2d2c35] disabled:opacity-50 flex items-center gap-1">
+            {merging ? <Loader2 className="w-3 h-3 animate-spin" /> : null} Confirm: different cars
+          </button>
+          <button onClick={() => setDismissing(false)} disabled={merging} className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded font-bold text-sm hover:bg-gray-200">Cancel</button>
+        </div>
+      ) : !confirming ? (
+        <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={() => setConfirming(true)}
           disabled={candidate.doNotMerge}
@@ -153,6 +181,14 @@ const CandidateCard: React.FC<{
         >
           <GitMerge className="w-4 h-4" /> Merge these two records
         </button>
+        <button
+          onClick={() => setDismissing(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg font-bold hover:bg-gray-50"
+          data-testid="dismiss-button"
+        >
+          <X className="w-4 h-4" /> Not the same car
+        </button>
+        </div>
       ) : (
         <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
           <span className="text-sm text-amber-800">
@@ -179,17 +215,45 @@ const CandidateCard: React.FC<{
   );
 };
 
+interface AssetBrief { id: string; vin: string | null; make: string; model: string; year: number | null; merged_into_asset_id: string | null; merged_at: string | null }
+const assetLabel = (a?: AssetBrief) => a ? `${a.year ?? ''} ${a.make} ${a.model}${a.vin ? ` · ${a.vin}` : ''}`.trim() : 'unknown asset';
+
 const AssetMergeReview: React.FC = () => {
-  const [candidates, setCandidates] = useState<MergeCandidate[] | null>(null);
+  const [tab, setTab] = useState<'pending' | 'dismissed' | 'merged'>('pending');
+  const [candidates, setCandidates] = useState<MergeCandidate[]>([]);
+  const [dismissals, setDismissals] = useState<MergeDismissal[]>([]);
+  const [merged, setMerged] = useState<AssetBrief[]>([]);
+  const [labels, setLabels] = useState<Record<string, AssetBrief>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [restoreReason, setRestoreReason] = useState('');
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await listMergeCandidates();
-      setCandidates(result);
+      const [cands, dis, mergedRows] = await Promise.all([
+        listMergeCandidates(),
+        listDismissals(),
+        fetchAllVerified<AssetBrief>(
+          'merged assets',
+          (from, to) => supabase.from('assets').select('id, vin, make, model, year, merged_into_asset_id, merged_at').not('merged_into_asset_id', 'is', null).order('merged_at', { ascending: false }).order('id').range(from, to),
+          () => supabase.from('assets').select('id', { count: 'exact', head: true }).not('merged_into_asset_id', 'is', null),
+        ),
+      ]);
+      setCandidates(cands);
+      setDismissals(dis);
+      setMerged(mergedRows);
+      // Names for the assets a dismissal or merge points at (a few dozen at most; fetched in chunks).
+      const ids = Array.from(new Set([...dis.flatMap(d => [d.survivor_asset_id, d.orphan_asset_id]), ...mergedRows.map(m => m.merged_into_asset_id!)]));
+      const found: Record<string, AssetBrief> = {};
+      for (let i = 0; i < ids.length; i += 50) {
+        const { data, error: e } = await supabase.from('assets').select('id, vin, make, model, year, merged_into_asset_id, merged_at').in('id', ids.slice(i, i + 50));
+        if (e) throw new Error(e.message);
+        (data || []).forEach((a: any) => { found[a.id] = a; });
+      }
+      setLabels(found);
     } catch (e: any) {
       setError(e?.message || 'Failed to load merge candidates.');
     } finally {
@@ -199,48 +263,73 @@ const AssetMergeReview: React.FC = () => {
 
   useEffect(() => { void load(); }, []);
 
+  const restore = async (id: string) => {
+    setError(null);
+    try {
+      await restoreMergeCandidate(id, restoreReason);
+      setRestoringId(null);
+      setRestoreReason('');
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Could not restore the pair.');
+    }
+  };
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-[#403f4c]">Asset Merge Review</h2>
-          <p className="text-sm text-gray-500">
-            Two assets whose canonical fingerprints match are candidates - nothing merges until you confirm one below.
-          </p>
-        </div>
-        <button onClick={load} disabled={loading} className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
-      </div>
-
-      {loading && (
-        <div className="flex items-center justify-center py-12 text-gray-400">
-          <Loader2 className="w-6 h-6 animate-spin" />
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-[#ba3b46]/10 border border-[#ba3b46]/30 text-[#ba3b46] rounded-lg p-4 mb-4">
-          {error}
-        </div>
-      )}
-
-      {!loading && !error && candidates && candidates.length === 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center text-gray-500">
-          No merge candidates found.
+    <ReviewQueueShell
+      testId="merge-queue"
+      title="Asset Merges"
+      description="Two assets whose canonical fingerprints match are candidates - nothing merges until you confirm one below, and a pair you say is two different cars is remembered and not offered again."
+      tabs={[
+        { key: 'pending', label: 'Pending review', count: candidates.length },
+        { key: 'dismissed', label: 'Dismissed', count: dismissals.length },
+        { key: 'merged', label: 'Merged', count: merged.length },
+      ]}
+      activeTab={tab}
+      onTab={k => setTab(k as 'pending' | 'dismissed' | 'merged')}
+      onRefresh={load}
+      loading={loading}
+      error={error}
+      empty={tab === 'pending' ? 'No merge candidates found.' : tab === 'dismissed' ? 'No pairs have been dismissed.' : 'No assets have been merged.'}
+      isEmpty={(tab === 'pending' ? candidates : tab === 'dismissed' ? dismissals : merged).length === 0}
+    >
+      {tab === 'pending' && (
+        <div className="space-y-6">
+          {candidates.map(c => (
+            <CandidateCard key={`${c.survivor.asset.id}-${c.orphanCandidate.asset.id}`} candidate={c} onMerged={load} />
+          ))}
         </div>
       )}
-
-      <div className="space-y-6">
-        {candidates?.map((c) => (
-          <CandidateCard
-            key={`${c.survivor.asset.id}-${c.orphanCandidate.asset.id}`}
-            candidate={c}
-            onMerged={load}
-          />
-        ))}
-      </div>
-    </div>
+      {tab === 'dismissed' && (
+        <div className="space-y-2">
+          {dismissals.map(d => (
+            <div key={d.id} className="bg-white border border-gray-200 rounded-lg p-3 text-sm" data-testid="dismissal-row">
+              <div className="font-bold text-[#403f4c]">{assetLabel(labels[d.survivor_asset_id])} <span className="font-normal text-gray-400">and</span> {assetLabel(labels[d.orphan_asset_id])}</div>
+              <div className="text-xs text-gray-500">Dismissed {new Date(d.decided_at).toLocaleString()}{d.reason ? ` - ${d.reason}` : ''}</div>
+              {restoringId === d.id ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input value={restoreReason} onChange={e => setRestoreReason(e.target.value)} placeholder="Why restore this pair? (required)" className="border border-gray-300 rounded px-2 py-1 text-sm flex-1 min-w-[12rem]" />
+                  <button onClick={() => restore(d.id)} disabled={!restoreReason.trim()} className="px-3 py-1 bg-[#403f4c] text-white rounded text-sm font-bold disabled:opacity-40">Restore</button>
+                  <button onClick={() => setRestoringId(null)} className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm font-bold">Cancel</button>
+                </div>
+              ) : (
+                <button onClick={() => { setRestoringId(d.id); setRestoreReason(''); }} className="mt-2 text-xs font-bold text-[#a58039] hover:underline">Restore - offer this pair again</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {tab === 'merged' && (
+        <div className="space-y-2">
+          {merged.map(m => (
+            <div key={m.id} className="bg-white border border-gray-200 rounded-lg p-3 text-sm" data-testid="merged-row">
+              <div className="font-bold text-[#403f4c]">{assetLabel(m)}</div>
+              <div className="text-xs text-gray-500">Merged {m.merged_at ? new Date(m.merged_at).toLocaleString() : ''} into {assetLabel(labels[m.merged_into_asset_id!])}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </ReviewQueueShell>
   );
 };
 

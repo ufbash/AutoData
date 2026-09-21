@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
 
 // PROMPT 32 Stage 2 (debt #46) - reviewed asset merge. Detection and confirmation are two
 // separate calls on purpose: listing candidates never merges anything by itself, and the
@@ -95,3 +96,42 @@ export const confirmMerge = async (survivorId: string, orphanId: string): Promis
   if (result.error) throw new Error(result.error);
   return result.result;
 };
+
+export interface MergeDismissal {
+  id: string;
+  survivor_asset_id: string;
+  orphan_asset_id: string;
+  reason: string | null;
+  decided_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+const postDismiss = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const { token, projectUrl } = await getAuthedFetchArgs();
+  const response = await fetch(`${projectUrl}/functions/v1/asset-merge-dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.error) throw new Error(result.error || 'The decision could not be recorded.');
+  return result;
+};
+
+// "These two are NOT the same car" - recorded (who, when, why) and the pair stops being offered.
+export const dismissMergeCandidate = (survivorId: string, orphanId: string, reason?: string) =>
+  postDismiss({ mode: 'dismiss', survivorId, orphanId, reason });
+
+// A mistaken dismissal is voided with a reason (never deleted), and the pair is offered again.
+export const restoreMergeCandidate = (decisionId: string, reason: string) =>
+  postDismiss({ mode: 'restore', decisionId, reason });
+
+// Live dismissals, newest first. Read through RLS.
+export const listDismissals = (): Promise<MergeDismissal[]> => fetchAllVerified<MergeDismissal>(
+  'merge dismissals',
+  (from, to) => supabase.from('asset_merge_decisions')
+    .select('id, survivor_asset_id, orphan_asset_id, reason, decided_at, voided_at, void_reason')
+    .is('voided_at', null).order('decided_at', { ascending: false }).order('id').range(from, to),
+  () => supabase.from('asset_merge_decisions').select('id', { count: 'exact', head: true }).is('voided_at', null),
+);

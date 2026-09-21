@@ -107,10 +107,18 @@ serve(async (req: Request) => {
     const vinLessByHash = new Map<string, AssetRow>();
     for (const a of vinLess) vinLessByHash.set(a.fingerprint_hash, a);
 
+    // Pairs a human has already said are NOT the same car (asset_merge_decisions, live = not voided) are not offered again.
+    const dismissed = await fetchAllVerified<{ survivor_asset_id: string; orphan_asset_id: string }>(
+      'merge dismissals',
+      (from, to) => supabase.from('asset_merge_decisions').select('survivor_asset_id, orphan_asset_id').is('voided_at', null).order('id').range(from, to),
+      () => supabase.from('asset_merge_decisions').select('id', { count: 'exact', head: true }).is('voided_at', null),
+    );
+    const dismissedPairs = new Set(dismissed.flatMap(d => [`${d.survivor_asset_id}|${d.orphan_asset_id}`, `${d.orphan_asset_id}|${d.survivor_asset_id}`]));
+
     const candidatePairs: { survivor: AssetRow; orphanCandidate: AssetRow }[] = [];
     for (const vb of vinBearing) {
       const match = vinLessByHash.get(vinlessFingerprint(vb));
-      if (match && match.org_id === vb.org_id) {
+      if (match && match.org_id === vb.org_id && !dismissedPairs.has(`${vb.id}|${match.id}`)) {
         candidatePairs.push({ survivor: vb, orphanCandidate: match });
       }
     }

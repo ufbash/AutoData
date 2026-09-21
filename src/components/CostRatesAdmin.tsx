@@ -10,8 +10,9 @@ import {
   CostRateUnit,
   CostRateSource,
   NewCostRateInput,
+  FeeApplies,
 } from '../services/costRatesService';
-import { getPaymentTier, setPaymentTier as savePaymentTier, PaymentTier } from '../services/orgSettingsService';
+import { listAuctionHouses, AuctionHouse } from '../services/auctionAccountsService';
 import { Loader2, Plus, RefreshCw, History } from 'lucide-react';
 
 const CATEGORY_LABELS: Record<CostCategory, string> = {
@@ -19,6 +20,7 @@ const CATEGORY_LABELS: Record<CostCategory, string> = {
   ocean_freight: 'Ocean Freight',
   duty_component: 'Duty Component',
   service_fee: 'Service Fee',
+  auction_fee: 'Auction Fee (flat)',
 };
 
 const BASIS_LABELS: Record<CostRateBasis, string> = {
@@ -73,6 +75,8 @@ interface RateFormProps {
 // edit-in-place path exists anywhere in this component, by design.
 const RateForm: React.FC<RateFormProps> = ({ initial, submitLabel, onCancel, onSubmit }) => {
   const [form, setForm] = useState<NewCostRateInput>(initial);
+  const [houses, setHouses] = useState<AuctionHouse[]>([]);
+  useEffect(() => { listAuctionHouses().then(setHouses).catch(() => setHouses([])); }, []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,6 +88,10 @@ const RateForm: React.FC<RateFormProps> = ({ initial, submitLabel, onCancel, onS
     }
     if (!form.effective_from) {
       setError('Effective-from date is required.');
+      return;
+    }
+    if (form.cost_category === 'auction_fee' && (!form.auction_platform || !form.fee_role?.trim() || !form.fee_applies)) {
+      setError('An auction fee needs its auction house, a role (e.g. environmental) and whether it always applies.');
       return;
     }
     if (!(form.rate_value >= 0)) {
@@ -111,7 +119,7 @@ const RateForm: React.FC<RateFormProps> = ({ initial, submitLabel, onCancel, onS
             value={form.cost_category}
             onChange={e => {
               const cost_category = e.target.value as CostCategory;
-              setForm(f => ({ ...f, cost_category, basis: cost_category === 'duty_component' ? f.basis : null }));
+              setForm(f => ({ ...f, cost_category, basis: cost_category === 'duty_component' ? f.basis : null, ...(cost_category === 'auction_fee' ? {} : { auction_platform: null, fee_role: null, fee_applies: null }) }));
             }}
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
           >
@@ -130,6 +138,44 @@ const RateForm: React.FC<RateFormProps> = ({ initial, submitLabel, onCancel, onS
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
           />
         </div>
+
+        {form.cost_category === 'auction_fee' && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Auction house</label>
+              <select
+                value={form.auction_platform ?? ''}
+                onChange={e => setForm(f => ({ ...f, auction_platform: e.target.value || null }))}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              >
+                <option value="">Select house...</option>
+                {houses.map(h => <option key={h.auction_platform} value={h.auction_platform}>{h.display_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fee role <span className="text-gray-400">(what it is, lower_snake_case)</span></label>
+              <input
+                type="text"
+                value={form.fee_role ?? ''}
+                onChange={e => setForm(f => ({ ...f, fee_role: e.target.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') }))}
+                placeholder="environmental, title_pickup, service, storage..."
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Charged</label>
+              <select
+                value={form.fee_applies ?? ''}
+                onChange={e => setForm(f => ({ ...f, fee_applies: (e.target.value || null) as FeeApplies | null }))}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              >
+                <option value="">Select...</option>
+                <option value="always">On every purchase (added to the fee total)</option>
+                <option value="contingent">Only in some cases (late payment, storage - not added)</option>
+              </select>
+            </div>
+          </>
+        )}
 
         {form.cost_category === 'duty_component' && (
           <div>
@@ -238,22 +284,12 @@ const CostRatesAdmin: React.FC = () => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [supersedingId, setSupersedingId] = useState<string | null>(null);
 
-  // PROMPT 29 Stage 4 - payment tier as configuration, not a hardcoded constant
-  // (bidHeadroomService.ts used to hardcode PAYMENT_TIER = 'unsecured'). No evidence supports
-  // Secured today (PLAN_TRACKER.md debt #43) - this control exists so a real answer from
-  // Copart becomes a settings change, not a code change and redeploy. Default unchanged.
-  const [paymentTier, setPaymentTierState] = useState<PaymentTier>('unsecured');
-  const [savingTier, setSavingTier] = useState(false);
-  const [tierSavedAt, setTierSavedAt] = useState<number | null>(null);
-
   const load = async () => {
     if (!orgId) return;
     setLoading(true);
     setError(null);
     try {
-      const [rateRows, tier] = await Promise.all([listCostRates(orgId), getPaymentTier(orgId)]);
-      setRates(rateRows);
-      setPaymentTierState(tier);
+      setRates(await listCostRates(orgId));
     } catch (err: any) {
       setError(err.message || 'Failed to load cost rates.');
     } finally {
@@ -263,20 +299,6 @@ const CostRatesAdmin: React.FC = () => {
 
   useEffect(() => { load(); }, [orgId]);
 
-  const handleTierChange = async (tier: PaymentTier) => {
-    if (!orgId || !user || tier === paymentTier) return;
-    setSavingTier(true);
-    setError(null);
-    try {
-      await savePaymentTier(orgId, user.id, tier);
-      setPaymentTierState(tier);
-      setTierSavedAt(Date.now());
-    } catch (err: any) {
-      setError(err.message || 'Failed to save payment tier.');
-    } finally {
-      setSavingTier(false);
-    }
-  };
 
   if (role !== 'superadmin') {
     return (
@@ -310,30 +332,9 @@ const CostRatesAdmin: React.FC = () => {
         </button>
       </div>
 
-      {/* PROMPT 29 Stage 4 - this screen is already superadmin-only end to end (the gate
-          above), so nothing further is needed to satisfy "editable by superadmin." */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
-        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">Copart Payment Tier</h2>
-        <p className="text-xs text-gray-500 mb-3">
-          Which bracket schedule auction-fee calculations read (both are already stored, 153 Secured / 171 Unsecured rows).
-          All three real Copart invoices seen priced Unsecured — no evidence supports Secured today (PLAN_TRACKER.md debt #43).
-          Change this only on a direct answer from Copart about the $400 deposit on file.
-        </p>
-        <div className="flex items-center gap-3">
-          <select
-            value={paymentTier}
-            disabled={savingTier}
-            onChange={e => handleTierChange(e.target.value as PaymentTier)}
-            className="border border-gray-300 rounded-md px-3 py-2 text-sm font-medium disabled:opacity-50"
-          >
-            <option value="unsecured">Unsecured (default)</option>
-            <option value="secured">Secured</option>
-          </select>
-          {savingTier && <Loader2 className="w-4 h-4 text-[#a58039] animate-spin" />}
-          {!savingTier && tierSavedAt !== null && Date.now() - tierSavedAt < 4000 && (
-            <span className="text-xs text-green-700">Saved</span>
-          )}
-        </div>
+      <div className="mb-6 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3">
+        Each auction house's buying accounts, official fee tiers and payment tiers (Secured / Unsecured) now live under
+        <strong> Admin &rsaquo; Rates &rsaquo; Fee schedules and accounts</strong>. This screen keeps the flat rates, including each house's flat auction fees.
       </div>
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
@@ -389,12 +390,18 @@ const CostRatesAdmin: React.FC = () => {
                       </div>
                       <div className="text-xs text-gray-400 mt-1">Effective from {rate.effective_from}</div>
                     </div>
+                    {rate.currency !== 'usd' ? (
+                      <span className="text-[11px] text-gray-400 max-w-[11rem] text-right" title="A non-USD rate carries a frozen exchange rate; a replacement must be confirmed through Document Extraction, where the currency is chosen and the rate frozen.">
+                        {rate.currency.toUpperCase()} rate — replace it via Document Extraction
+                      </span>
+                    ) : (
                     <button
                       onClick={() => { setSupersedingId(rate.id); setShowAddForm(false); }}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-bold text-[#a58039] border border-[#a58039]/40 rounded-lg hover:bg-[#a58039]/10 whitespace-nowrap"
                     >
                       <RefreshCw className="w-3.5 h-3.5" /> Supersede
                     </button>
+                    )}
                   </div>
 
                   {supersedingId === rate.id && (
@@ -409,6 +416,9 @@ const CostRatesAdmin: React.FC = () => {
                           rate_value_max: rate.rate_value_max,
                           source: rate.source,
                           effective_from: todayIso(),
+                          auction_platform: rate.auction_platform,
+                          fee_role: rate.fee_role,
+                          fee_applies: rate.fee_applies,
                         }}
                         submitLabel="Supersede Rate"
                         onCancel={() => setSupersedingId(null)}

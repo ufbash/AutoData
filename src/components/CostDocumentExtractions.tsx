@@ -17,7 +17,9 @@ import {
   AssetSearchResult,
 } from '../services/costDocumentExtractionsService';
 import { CostRateSource } from '../services/costRatesService';
+import { listAuctionHouses, listFeeTiers, AuctionHouse, AuctionFeeTier } from '../services/auctionAccountsService';
 import { Upload, Loader2, FileText, Check, X, AlertTriangle } from 'lucide-react';
+import ReviewQueueShell from './ReviewQueueShell';
 
 // PROMPT 22 Phase 4 — the review/confirm screen. Editing before confirming is the point
 // (the AI's output is a draft); nothing here writes to a rate table until a human explicitly
@@ -44,9 +46,9 @@ const SOURCE_LABELS: Record<CostRateSource, string> = {
 };
 
 const TABLE_FIELD_ORDER: Record<TargetRateTable, string[]> = {
-  cost_rates: ['cost_category', 'label', 'basis', 'rate_unit', 'rate_value', 'rate_value_max'],
+  cost_rates: ['cost_category', 'label', 'basis', 'rate_unit', 'rate_value', 'rate_value_max', 'auction_platform', 'fee_role', 'fee_applies'],
   trucking_rates: ['vendor', 'auction_platform', 'yard_state', 'yard_city', 'yard_street', 'destination_port_raw', 'shipping_method', 'price'],
-  auction_fee_brackets: ['auction_platform', 'member_account', 'fee_type', 'title_status', 'payment_tier', 'bid_method', 'bracket_min', 'bracket_max', 'fee_unit', 'fee_value'],
+  auction_fee_brackets: ['auction_platform', 'fee_tier', 'fee_type', 'title_status', 'payment_tier', 'bid_method', 'bracket_min', 'bracket_max', 'fee_unit', 'fee_value'],
 };
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -264,6 +266,9 @@ const ReviewDetail: React.FC<{
   onDone: () => void;
   onRefresh: () => void;
 }> = ({ extraction, orgId, userId, onDone, onRefresh }) => {
+  const [houses, setHouses] = useState<AuctionHouse[]>([]);
+  const [tiers, setTiers] = useState<AuctionFeeTier[]>([]);
+  useEffect(() => { listAuctionHouses().then(setHouses).catch(() => setHouses([])); listFeeTiers().then(setTiers).catch(() => setTiers([])); }, []);
   const [docUrl, setDocUrl] = useState<string | null>(null);
   const [targetTable, setTargetTable] = useState<TargetRateTable>(
     extraction.extracted_rows[0]?.suggested_target_table || 'cost_rates'
@@ -415,20 +420,30 @@ const ReviewDetail: React.FC<{
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {TABLE_FIELD_ORDER[targetTable].map(field => {
+                  {TABLE_FIELD_ORDER[targetTable].filter(field => targetTable !== 'cost_rates' || !['auction_platform', 'fee_role', 'fee_applies'].includes(field) || state.values.cost_category === 'auction_fee').map(field => {
                     const f = row.fields[field];
+                    const platform = String(state.values.auction_platform ?? '').trim().toLowerCase();
+                    const setValue = (v: string) => setRowStates(rs => rs.map((r, j) => j === i ? { ...r, values: { ...r.values, [field]: v } } : r));
+                    const options: { value: string; label: string }[] | null =
+                      field === 'auction_platform' ? houses.map(h => ({ value: h.auction_platform, label: h.display_name }))
+                      : field === 'fee_tier' ? tiers.filter(t => !platform || t.auction_platform === platform).map(t => ({ value: t.fee_tier, label: t.fee_tier }))
+                      : field === 'fee_applies' ? [{ value: 'always', label: 'always (added to the fee total)' }, { value: 'contingent', label: 'contingent (not added)' }]
+                      : null;
                     return (
                       <div key={field}>
                         <label className="block text-[10px] text-gray-500">
                           {field}
                           {f && <StatusBadge status={f.status} />}
+                          {field === 'fee_tier' && row.fields.member_account?.value ? <span className="ml-1 text-gray-400">(document names account: {String(row.fields.member_account.value)})</span> : null}
                         </label>
-                        <input
-                          type="text"
-                          value={state.values[field] ?? ''}
-                          onChange={e => setRowStates(rs => rs.map((r, j) => j === i ? { ...r, values: { ...r.values, [field]: e.target.value } } : r))}
-                          className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                        />
+                        {options ? (
+                          <select value={state.values[field] ?? ''} onChange={e => setValue(e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1 text-xs">
+                            <option value="">Select...</option>
+                            {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </select>
+                        ) : (
+                          <input type="text" value={state.values[field] ?? ''} onChange={e => setValue(e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1 text-xs" />
+                        )}
                       </div>
                     );
                   })}
@@ -459,9 +474,10 @@ const CostDocumentExtractions: React.FC = () => {
   const [tab, setTab] = useState<ExtractionStatus>('pending_review');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const load = async () => {
+  // `silent` refreshes in place: swapping the list for a spinner would unmount an open review and lose unsaved edits.
+  const load = async (silent = false) => {
     if (!orgId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       setExtractions(await listExtractions(orgId));
@@ -484,77 +500,64 @@ const CostDocumentExtractions: React.FC = () => {
   }
 
   const filtered = extractions.filter(e => e.extraction_status === tab);
+  const count = (t: ExtractionStatus) => extractions.filter(e => e.extraction_status === t).length;
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-[#403f4c]">Cost Document Extraction</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Upload a customs quote, shipping quote, trucking quote, or assessment notice. AI stages a draft;
-          nothing reaches cost_rates, trucking_rates, or auction_fee_brackets until you review and confirm it here.
-        </p>
-      </div>
-
-      {orgId && <UploadPanel orgId={orgId} onUploaded={load} />}
-
-      {error && <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
-
-      <div className="flex gap-2 mb-4">
-        {(['pending_review', 'confirmed', 'rejected'] as ExtractionStatus[]).map(t => (
-          <button
-            key={t}
-            onClick={() => { setTab(t); setExpandedId(null); }}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === t ? 'bg-[#a58039] text-white' : 'bg-gray-100 text-gray-600'}`}
-          >
-            {t === 'pending_review' ? 'Pending review' : t === 'confirmed' ? 'Confirmed' : 'Rejected'}
-            {' '}({extractions.filter(e => e.extraction_status === t).length})
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-[#a58039] animate-spin" /></div>
-      ) : filtered.length === 0 ? (
-        <p className="text-gray-400 italic">Nothing here yet.</p>
-      ) : (
-        <div className="space-y-3">
-          {filtered.map(extraction => (
-            <div key={extraction.id} className="bg-white border border-gray-200 rounded-lg p-4">
-              <div className="flex items-center justify-between cursor-pointer" onClick={() => setExpandedId(id => id === extraction.id ? null : extraction.id)}>
-                <div className="flex items-center gap-3">
-                  <FileText className="w-5 h-5 text-gray-400" />
-                  <div>
-                    <div className="font-bold text-[#403f4c]">{extraction.original_filename || 'Untitled document'}</div>
-                    <div className="text-xs text-gray-500">
-                      {DOCUMENT_TYPE_LABELS[extraction.document_type]} · {extraction.extracted_rows.length} row(s) extracted
-                      {extraction.extraction_error && <span className="text-red-600"> · extraction failed: {extraction.extraction_error}</span>}
-                    </div>
+    <ReviewQueueShell
+      testId="extraction-queue"
+      title="Document Extraction"
+      description={<>Upload a customs quote, shipping quote, trucking quote, invoice or assessment notice. AI stages a draft; nothing reaches cost_rates, trucking_rates, or auction_fee_brackets until you review and confirm it here.</>}
+      tabs={[
+        { key: 'pending_review', label: 'Pending review', count: count('pending_review') },
+        { key: 'confirmed', label: 'Confirmed', count: count('confirmed') },
+        { key: 'rejected', label: 'Rejected', count: count('rejected') },
+      ]}
+      activeTab={tab}
+      onTab={k => { setTab(k as ExtractionStatus); setExpandedId(null); }}
+      onRefresh={() => load(true)}
+      loading={loading}
+      error={error}
+      headerExtra={orgId ? <UploadPanel orgId={orgId} onUploaded={() => load(true)} /> : null}
+      empty="Nothing here yet."
+      isEmpty={filtered.length === 0}
+    >
+      <div className="space-y-3">
+        {filtered.map(extraction => (
+          <div key={extraction.id} className="bg-white border border-gray-200 rounded-lg p-4">
+            <div className="flex items-center justify-between cursor-pointer" onClick={() => setExpandedId(id => id === extraction.id ? null : extraction.id)}>
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-gray-400" />
+                <div>
+                  <div className="font-bold text-[#403f4c]">{extraction.original_filename || 'Untitled document'}</div>
+                  <div className="text-xs text-gray-500">
+                    {DOCUMENT_TYPE_LABELS[extraction.document_type]} · {extraction.extracted_rows.length} row(s) extracted
+                    {extraction.extraction_error && <span className="text-red-600"> · extraction failed: {extraction.extraction_error}</span>}
                   </div>
                 </div>
-                {extraction.extraction_status === 'confirmed' && (
-                  <span className="text-xs px-2 py-1 bg-green-50 text-green-700 border border-green-100 rounded">
-                    Confirmed into {extraction.target_rate_table} ({extraction.confirmed_row_ids?.length || 0} row(s))
-                  </span>
-                )}
-                {extraction.extraction_status === 'rejected' && (
-                  <span className="text-xs px-2 py-1 bg-gray-100 text-gray-500 rounded">Rejected</span>
-                )}
               </div>
-
-              {expandedId === extraction.id && extraction.extraction_status === 'pending_review' && orgId && user && (
-                <ReviewDetail
-                  extraction={extraction}
-                  orgId={orgId}
-                  userId={user.id}
-                  onDone={() => { setExpandedId(null); load(); }}
-                  onRefresh={load}
-                />
+              {extraction.extraction_status === 'confirmed' && (
+                <span className="text-xs px-2 py-1 bg-green-50 text-green-700 border border-green-100 rounded">
+                  Confirmed into {extraction.target_rate_table} ({extraction.confirmed_row_ids?.length || 0} row(s))
+                </span>
+              )}
+              {extraction.extraction_status === 'rejected' && (
+                <span className="text-xs px-2 py-1 bg-gray-100 text-gray-500 rounded">Rejected</span>
               )}
             </div>
-          ))}
-        </div>
-      )}
-    </div>
+
+            {expandedId === extraction.id && extraction.extraction_status === 'pending_review' && orgId && user && (
+              <ReviewDetail
+                extraction={extraction}
+                orgId={orgId}
+                userId={user.id}
+                onDone={() => { setExpandedId(null); load(true); }}
+                onRefresh={() => load(true)}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </ReviewQueueShell>
   );
 };
 
