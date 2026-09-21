@@ -1088,9 +1088,12 @@ export async function listAvailableSightings(
   limit = 60,
   offset = 0
 ): Promise<AvailableSighting[]> {
-  const data = await fetchAllVerified<any>(
-    'available sightings',
-    (from, to) => supabase
+  // One server-side page: newest first, with the sightings already in the run left out in the
+  // query itself so `offset` counts only sightings that could be offered. (It used to read the
+  // whole table, drop the excluded ones and slice in memory.) `id` is the tiebreak so a page
+  // boundary never repeats or skips a sighting captured in the same instant. The exclusion list
+  // is one run's own listings - dozens - so it stays a short URL.
+  let query = supabase
     .from('sightings')
     .select(`
       id,
@@ -1107,7 +1110,6 @@ export async function listAvailableSightings(
       lot_state,
       sale_confirmed,
       current_bid_usd,
-      raw_payload,
       assets!inner (
         id,
         make,
@@ -1119,17 +1121,20 @@ export async function listAvailableSightings(
     `)
     .eq('org_id', orgId)
     // Sightings of a soft-deleted asset (Prompt 35 follow-up, migration 046) are not offered.
-    .is('assets.deleted_at', null)
+    .is('assets.deleted_at', null);
+  if (excludeSightingIds.length > 0) {
+    query = query.not('id', 'in', `(${excludeSightingIds.join(',')})`);
+  }
+  const { data, error } = await query
     .order('captured_at', { ascending: false })
     .order('id')
-    .range(from, to),
-    () => supabase.from('sightings').select('id, assets!inner(id)', { count: 'exact', head: true }).eq('org_id', orgId).is('assets.deleted_at', null),
-  );
+    .range(offset, offset + limit - 1);
 
-  const excludeSet = new Set(excludeSightingIds);
+  if (error) {
+    throw new Error(`Failed to list available sightings: ${error.message}`);
+  }
+
   const available = (data || [])
-    .filter((row: any) => !excludeSet.has(row.id))
-    .slice(offset, offset + limit)
     .map((row: any) => {
       const asset = Array.isArray(row.assets) ? row.assets[0] : (row.assets || {});
       return {

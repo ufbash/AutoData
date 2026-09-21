@@ -1756,7 +1756,7 @@ zero matches - it will matter the day one is captured. The two ~65% numbers are 
 | `researchService` · run-listing helpers: max position, first approved, add-listing checks (×3) | research_run_listings | `run_id`, `.limit(1)` / single | 1 | Yes | OK |
 | `researchService` · `addSightingToRun` reads | research_runs, sightings | `id` | 1 each | Yes | OK |
 | `researchService` · `storeImagesForRun` listing ids; image-status read | research_run_listings | `run_id` | dozens per run | Per-run, human-curated | OK - **accepted risk:** a run with >1,000 listings is not plausible; not count-checked (batch job, would fail visibly on the missing images) |
-| `researchService` · `listAvailableSightings` | sightings ⨝ assets | org, asset live | **211 today; grows with every capture - the biggest growth table in the app** | Was not: read *everything*, then filtered and sliced client-side | **FIXED** - paged + count-verified; 211 → 211, same set. **Note:** it still loads the whole set and slices in memory (as before); the paging makes that correct, it does not make it cheap - see remaining list |
+| `researchService` · `listAvailableSightings` | sightings ⨝ assets | org, asset live, run's own listings excluded | **211 today; grows with every capture - the biggest growth table in the app** | Was not: read *everything*, then filtered and sliced client-side | **FIXED twice.** Stage 2: paged + count-verified. **Then (Phase 1, 21 Sep 2026) replaced by one server-side page** (`range(offset, offset+limit-1)`, newest first, `id` tiebreak, exclusions in the query, unused `raw_payload` dropped) - see §4.32 |
 | `storageService` · `getStoredSales` (Overview, All Records, dashboards) | sightings ⨝ assets | none beyond RLS | **221 today; grows with every capture** | Was not | **FIXED** - paged + count-verified; 221 → 221, same set and same sort-key sequence (see note on tie order below) |
 | `vehicleReferenceService` · `listTieredMakes` | vehicle_reference_makes | none | 406 today; grows as makes are seeded | Was not | **FIXED** - paged + count-verified; 406 → 406, identical order |
 | `vehicleReferenceService` · `traded_make_counts()` | rpc: distinct traded makes | none | ≤ the makes table (406) | Yes - an aggregate by make | OK (bounded by the makes list, itself now checked) |
@@ -1825,7 +1825,7 @@ Row counts are the same today, as expected: none of these tables is over the cap
 
 A caveat found while testing, recorded because it is the kind of thing that recurs: a page builder that **ignores** `from`/`to` (returns the same 1,000 rows for every page) never terminates - `fetchAllPages` assumes the builder honours the range. All shipped callers use `.range(from, to)`; the test that hit this was mine.
 
-**Not done, and why.** (1) The two Edge Function changes (`asset-merge-candidates` v5, `sightings-platform-relabel` v2) were **deployed 21 Sep 2026** after confirmation and smoke-tested read-only in the signed-in app: the merge scan returned `{candidates: []}` and the relabel dry run examined 171 bid.cars sightings (the paged, count-verified path) and would change 0. `deno` is not installed here, so they were not type-checked locally - the deploy compiling and running is the check. (2) `public-run` and `storeImagesForRun` per-run reads are recorded as accepted risk, not count-checked. (3) `listAvailableSightings` still loads the whole sightings set and slices it in memory; it is now correct, not cheap - a server-side pager belongs to a later prompt (no new features here).
+**Not done, and why.** (1) The two Edge Function changes (`asset-merge-candidates` v5, `sightings-platform-relabel` v2) were **deployed 21 Sep 2026** after confirmation and smoke-tested read-only in the signed-in app: the merge scan returned `{candidates: []}` and the relabel dry run examined 171 bid.cars sightings (the paged, count-verified path) and would change 0. `deno` is not installed here, so they were not type-checked locally - the deploy compiling and running is the check. (2) `public-run` and `storeImagesForRun` per-run reads are recorded as accepted risk, not count-checked. (3) `listAvailableSightings` still loaded the whole sightings set and sliced it in memory; correct, not cheap. **Done afterwards in Phase 1 (§4.32).**
 
 #### Stage 3 — the debt register reconciled against the code (21 Sep 2026)
 
@@ -1873,7 +1873,7 @@ A caveat found while testing, recorded because it is the kind of thing that recu
 *Claude Code can do now (no external input):*
 1. **Deploy the two Edge Functions changed in Stage 2** (`asset-merge-candidates`, `sightings-platform-relabel`) - needs a confirmation.
 2. **Debt #63** - replace the 8 inline brief-reference strings with `briefReference()`.
-3. **`listAvailableSightings`** loads every sighting to slice a page in memory; correct now, but it should page on the server before `sightings` grows large (the run-builder picker is the first screen that will feel it).
+3. ~~**`listAvailableSightings`** loads every sighting to slice a page in memory~~ **Done 21 Sep 2026 (§4.32).**
 4. Phase 1 itself (admin consolidation, rates architecture) - needs its own prompt.
 
 *Waiting on Bashir:*
@@ -1934,6 +1934,23 @@ A caveat found while testing, recorded because it is the kind of thing that recu
 - *Note on what the rejections prove:* the 15 MB rejection fires in the browser before any request is sent, so the server's own 413 path is still unexercised. The epub rejection is either the dialog's `accept` filter or the server's "Unsupported file type" - the report does not say which. Both end in a refusal; neither was distinguished.
 
 **Raised during that test: the popup lags.** Measured cause: 12 full-size photos (2576x1879, ~222 MB decoded) rendered into 80px tiles. Fixed with client-side thumbnails (`src/utils/thumbnail.ts`, `WonVehicleDetail.tsx`): gallery memory ~222 MB -> 3.4 MB, scroll frame time p95 27 ms -> 17.6 ms. See `docs/SOLVED.md` topic 44. **Confirmed smooth on Bashir's own machine, 21 Sep 2026** (the measurement above was in the in-app browser). The list thumbnail in `ClientsList.tsx` (one full-size image per won vehicle) still decodes at full size and was left alone.
+
+### 4.32 Phase 1, first items: debt #63 and server-side paging for the run-builder picker (21 Sep 2026)
+
+**Debt #63** - all eight inline copies of the brief-reference string now call the shared `briefReference()` (commit `d1e68e0`). Detail on the debt row.
+
+**`listAvailableSightings` paged on the server.** The "Add captures" picker used to read every offerable sighting (with the wide `raw_payload` column, which nothing read), drop the ones already in the run, and slice 60 in memory - correct after Stage 2's paging, but the cost grew with every capture. It is now one request per page: `.range(offset, offset + limit - 1)`, newest first with `id` as the tiebreak (so a page boundary can never repeat or skip a sighting captured in the same instant), the run's own listings excluded *in the query* so `offset` counts only sightings that can be offered, and `raw_payload` no longer selected. The caller (`AddCapturesModal.tsx`) is unchanged.
+
+**Proved on the real data (211 sightings), against the old read-everything-then-slice behaviour:**
+
+| Check | Result |
+|---|---|
+| Pages identical to the old behaviour - no exclusions, 5 excluded from the top, 40 excluded scattered; limits 60 / 25 / 1; offsets 0-240 | identical id sequence in every case |
+| Walking every page (limit 60) returns each offerable sighting exactly once | 211 / 206 / 171 unique ids = the expected counts, no duplicates or omissions |
+| The real modal, sold-comps run, "Load more" until it disappears | 4 pages, **143 rows = the 143 eligible sightings** computed independently |
+| Console errors | none |
+
+**Known limit, recorded.** The exclusion list travels in the URL. It is one run's own listings (5 today; dozens is normal) - 200 exclusions still worked - and a URL that ever grew too long would fail loudly (an HTTP error), never silently. **Two pre-existing behaviours are unchanged and are not this fix's to change:** eligibility (sold / active) is applied client-side to each 60-row page, so a page can show fewer than 60 (page 1 shows 40 of 60 for a sold-comps run), and the picker's search box filters only the pages already loaded.
 
 ---
 
