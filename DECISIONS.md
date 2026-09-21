@@ -650,3 +650,32 @@ reintroduce the bug; and it leaves one definition instead of two that can drift 
 **Why 17.5:** the project's recurring failure is a missing value indistinguishable from a real zero. An empty schedule that priced as $0 would be the same failure at the point where a client sees a number.
 
 **Open (Bashir):** whether the Gate Fee, labelled "Non-Clean Title", is really charged on clean titles (it is added today; debt #70); which of two live duplicate trucking quotes is current (debt #69).
+
+---
+
+## 18. Numbering, invoices, payments, receipts and the client view (Prompt 37 Phase 2)
+
+Bashir delegated these; they are hard to change later, so they are settled and recorded.
+
+| # | Decision | Status |
+|---|---|---|
+| 18.1 | **Numbering is per org, separate for invoices and receipts** (`INV-000001`, `REC-000001`). A **voided document keeps its number** and a number is **never reused**; every gap is explained by a status (`voided`, `abandoned`, `allocated`). Uniqueness is enforced by the database, and allocation serialises on the org's counter row | LOCKED |
+| 18.2 | **An invoice is line-item and staff-authored.** Lines are pre-filled only from a component that **computes for real**; a component that abstains, is partial, or is an approximation is never pre-filled and never a zero | LOCKED |
+| 18.3 | **A total is never presented as complete while a component is missing.** Each of the six cost components is a line with a real figure or is *excluded with a stated reason*; any exclusion makes the invoice **partial**, printed on its face with the list of exclusions. Shipping and duty therefore appear only when a real figure exists. The database refuses an invoice that is silent about one | LOCKED |
+| 18.4 | **Two hats are recorded on every invoice and never blurred.** Brokerage itemises every line (a disclosed fee on transparent costs). Retail shows one all-inclusive price; the underlying costs are stored internally and never rendered | LOCKED |
+| 18.5 | **Currency is frozen at issuance.** An NGN invoice takes a live rate once, with **no fallback rate**, records rate, date and source, and each line's naira figure is computed once by the database. Never recomputed on read. If a live rate cannot be fetched the invoice is refused, not issued on a guess | LOCKED |
+| 18.6 | **Payments are append-only, in the invoice's own currency, and the balance is derived, never stored.** A payment is voided with a reason, never edited or deleted; overpayment is refused by the database | LOCKED |
+| 18.7 | **A receipt is issued against a recorded payment**, in its own numbered sequence; one live receipt per payment | LOCKED |
+| 18.8 | **An invoice extends the existing issuance record** (which already ties an invoice to a stored document and is append-only); it does not create a parallel invoice table. **This amends 15.6**: amounts on a *generated* invoice are still staff-authored, but the header amount is now required to equal the sum of its confirmed lines | LOCKED |
+| 18.9 | **The brokerage fee is staff-entered with its basis, never pre-filled.** Its schedule (7% / 5% / 3% tiers, $500 floor, VAT 7.5% on the fee) is still PROVISIONAL (2.5); it enters code only when adopted, and then as data (`service_fee` rate rows), never as a constant | LOCKED |
+| 18.10 | **The client relationship view is staff-only and doubly scoped**: every read carries both the org and the client (or that client's vehicle ids) and the result is asserted afterwards. RLS alone is not relied on (`research_runs` has a permissive policy - debt #76) | LOCKED |
+
+**Why 18.3:** the won-vehicle landed-cost view already refuses to total while a component is missing, but its component list omits the winning bid and the service fee - an invoice that copied that list would look complete without them. An invoice is what a client sees and may pay, so the refusal is stricter here: not just "do not total" but "say what is not in it".
+
+**Why 18.5:** `currencyService.fetchExchangeRates` silently falls back to a hard-coded NGN rate on any failure. Stamping a "frozen" rate that was never fetched would be a false precision; an unfetchable rate stops the invoice instead.
+
+**Open (Bashir):** how a paid deposit or commitment fee is credited against an invoice - nothing in the documents says (credit, offset or refund), so no invoice does it (debt #74); adoption of the brokerage fee schedule (debt #75).
+
+### 18.11 What the database can and cannot enforce about a "computed" figure (added after the Phase 2 verifier)
+
+**Decision.** The database refuses a zero line (except a stated, waived brokerage fee) and a computed line with no stated source; the Edge Function additionally checks a computed vehicle price against the vehicle's recorded winning bid. It does **not** re-derive computed auction-fee, trucking or freight figures, because those cost cores live in frontend code. **Why.** The verifier showed that leaving a component out was refused but zeroing it was not - the exact failure this design exists to prevent - and that "computed" was a self-declared label. **Consequence.** A session holder can still label a wrong figure "computed" if they name a source; closing that means moving the cost cores into `_shared` and recomputing in the function (debt #79). The design's honest claim is therefore: an invoice cannot silently omit or zero a component, and every computed figure names what it came from; it is not "every computed figure is proven".

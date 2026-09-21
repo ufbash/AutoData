@@ -857,3 +857,33 @@ idempotent. Applied 20 Sep 2026: 62 rows (50 `copart`→`iaai`, 12 `NULL`→`iaa
 - `cost_rates`: `auction_platform`, `fee_role` (lower_snake_case), `fee_applies` (`always` = added to the fee total, `contingent` = shown but not added). A flat auction fee is "the environmental fee for house X", not the string `Copart Environmental Fee`.
 
 **Bracket boundaries.** A price exactly on a shared boundary (500 in 100-500 / 500-1000) matches two brackets; the **lower** bracket wins, deterministically (`findBracket` sorts by `bracket_min`). The pre-Phase-1 code took whichever row the database returned first.
+
+---
+
+## 26. Numbering, generated invoices, payments and receipts (migrations 058-059, Prompt 37 Phase 2)
+
+An invoice is the **existing** `won_vehicle_invoice_issuances` record (section 21: append-only, void with a reason, tied to a stored `won_vehicle_documents` PDF), **extended, not paralleled**. Legacy issuances (a hand-typed amount against an uploaded PDF) keep working unchanged (`generated = false`); a generated invoice adds the columns below and line items.
+
+**Numbering (058).**
+- `document_sequences (org_id, kind, last_seq)` - one counter per org and kind (`invoice`, `receipt`).
+- `document_numbers (id, org_id, kind, seq, number_text, status, allocated_by, allocated_at, ref_id, note)` - **every number ever allocated**, with `UNIQUE (org_id, kind, seq)` and `UNIQUE (org_id, kind, number_text)`. Status moves only forward: `allocated -> issued | abandoned`, `issued -> voided`. Identity columns can never change; a row can never be deleted or truncated (trigger, all roles).
+- `allocate_document_number(org, kind, user)` increments the counter with an `UPDATE ... RETURNING`, which **locks the org's counter row**, so two concurrent allocations queue and get consecutive numbers. `INV-000001`, `REC-000001`. Only `service_role` may execute it.
+- A voided document **keeps its number** and a number is **never reused**. A gap is always explicable: `voided` (the document was voided), `abandoned` (allocated, but issuing failed - with a note), or `allocated` (in flight or interrupted).
+
+**Generated invoices (059).** New columns on `won_vehicle_invoice_issuances`: `generated`, `number_seq`, `hat` (`brokerage`|`retail`), `scope` (`complete`|`partial`), `excluded_components` (jsonb `[{kind, reason}]`), `amount_usd`, `fx_rate`, `fx_rate_date`, `fx_source`, `idempotency_key`. Unique: `(org_id, invoice_number)` for generated invoices; `(org_id, idempotency_key)` - the same request issued twice is **refused by the database**. The immutability guard now freezes every new column too.
+
+`won_vehicle_invoice_lines (issuance_id, position, kind, description, amount, amount_usd, client_visible, origin, basis, source_ref)` - append-only. `kind` is one of the six cost components (`vehicle_price`, `auction_fees`, `inland_trucking`, `ocean_freight`, `duty`, `brokerage_fee`), `all_inclusive_price` or `other`. `origin` is `computed` or `staff_entered`; a staff-entered figure **must** state its `basis`.
+
+**The rules the database enforces at commit** (`check_generated_invoice`, a deferred constraint trigger - the failure this phase must not commit is a total presented as complete while a component is missing):
+- the header `amount` / `amount_usd` equal the sum of the client-visible lines;
+- **brokerage** - every line visible, none an all-inclusive price; each of the six components is a line **or** listed in `excluded_components` with a reason; any exclusion makes the scope `partial`; `complete` needs all six as lines; a component cannot be both;
+- **retail** - exactly one client-visible line, the all-inclusive price; cost and margin lines are stored `client_visible = false` and never rendered; scope `complete`, nothing excluded;
+- **currency** - USD: every line's `amount = amount_usd`; NGN: `amount = round(amount_usd * fx_rate, 2)` and `fx_rate`, `fx_rate_date`, `fx_source` are set together. `convert_invoice_lines()` does that conversion **in the database**, so the figure a PDF prints and the figure stored can never disagree by a cent.
+
+`issue_generated_invoice()` records number, invoice and lines in one transaction (`SECURITY DEFINER`, `service_role` only).
+
+**Payments and receipts (059).** `won_vehicle_payments` (append-only, void with a reason; amount in the invoice's **own currency**) - a `BEFORE INSERT` trigger **locks the invoice row** and refuses a payment on a voided invoice, in another currency, or that exceeds the outstanding balance, so two concurrent payments cannot both pass. An invoice with live payments cannot be voided. `won_vehicle_receipts` (append-only, void with a reason) - one **live** receipt per payment (partial unique index), refused for a voided payment, and a payment with a live receipt cannot be voided first. **The balance is never stored**: `won_vehicle_invoice_balances` (a `security_invoker` view) derives `paid` and `outstanding`.
+
+**Access.** All new tables are SELECT-only for staff (`org_id IN user_org_ids() OR is_superadmin()`); the only writer is the `won-vehicle-billing` Edge Function. Nothing here is reachable through a share token.
+
+**Migration 060 - integrity fixes from the independent verifier (applied 21 Sep 2026).** (a) `check_generated_invoice` now refuses any zero-amount line except a staff-entered `brokerage_fee` (a waived fee, with its basis), and any `computed` line with no `source_ref` - so "a component with no real figure is excluded with a reason, not zeroed" is a database rule, not only a JavaScript one. (b) `won_vehicle_invoice_lines_seal_trg`: a line can be inserted only in the transaction that inserts its invoice (the parent's `recorded_at = now()`), so an issued invoice cannot gain lines. (c) `won_vehicle_invoice_issuances_ledger_trg`: a generated invoice must use an `allocated` ledger number of its own org, kind, sequence and text. (d) The receipts guard checks the payment's org and vehicle and the ledger number. (e) `won_vehicle_documents_referenced_guard_trg`: a document a live invoice or receipt points at cannot be soft-deleted. (f) `*_no_truncate_trg` + `REVOKE TRUNCATE` on lines, payments, receipts, issuances and `document_sequences`. (g) `request_hash` on issuances (part of the frozen tuple) and `issue_generated_invoice` now takes `p_hash` (18 arguments; the 17-argument form is dropped). Not a database rule: the *figure* on a computed fee, trucking or freight line - only that it names a source (debt #79).
