@@ -5,8 +5,9 @@ import { listClients, createClient, updateClient, softDeleteClient, listClientBr
 import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon, ImageOff } from 'lucide-react';
 import { listTieredMakes, listReferenceModels, TieredMake, ReferenceModel } from '../services/vehicleReferenceService';
 import MakeCombobox from './MakeCombobox';
-import { listWonVehiclesForBrief, getWonVehicleThumbnails, WonVehicle } from '../services/wonVehicleService';
+import { listWonVehiclesForBrief, getWonVehicleThumbnails, getWonVehicle, WonVehicle } from '../services/wonVehicleService';
 import WonVehicleDetail from './WonVehicleDetail';
+import ClientRelationship from './ClientRelationship';
 
 // PROMPT 33 Stage 3 - make/model as vocabulary selections, with an explicit "not listed" free-text
 // fallback. A vocabulary that blocks a real car the client wants is worse than the free-text
@@ -326,6 +327,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   // PROMPT 34 Stage 2 - won vehicles under the currently-selected brief.
   const [wonVehicles, setWonVehicles] = useState<WonVehicle[]>([]);
   const [viewingWonVehicle, setViewingWonVehicle] = useState<WonVehicle | null>(null);
+  const [relationshipOpen, setRelationshipOpen] = useState(false);
   const [wonVehiclesLoading, setWonVehiclesLoading] = useState(false);
   const [wonThumbs, setWonThumbs] = useState<Record<string, string | null>>({});
   const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set());
@@ -1060,9 +1062,14 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                   <div className="text-sm text-gray-500 mt-1">{[selectedClient.email, selectedClient.phone].filter(Boolean).join(' · ')}</div>
                 )}
               </div>
-              <button onClick={() => setEditingClient(true)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
-                <Edit2 className="w-4 h-4" /> Edit
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setRelationshipOpen(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[#403f4c] text-white text-sm rounded-lg font-bold hover:bg-[#2d2c35] transition-colors" data-testid="open-relationship">
+                  Full relationship
+                </button>
+                <button onClick={() => setEditingClient(true)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-bold hover:bg-gray-200 transition-colors">
+                  <Edit2 className="w-4 h-4" /> Edit
+                </button>
+              </div>
             </div>
 
             <div className="p-6 flex justify-between items-center border-b border-gray-100">
@@ -1268,6 +1275,17 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {relationshipOpen && selectedClient && orgId && (
+        <div className="fixed inset-0 z-40 bg-[#F0EDDE] overflow-y-auto p-6" data-testid="relationship-overlay">
+          <ClientRelationship
+            clientId={selectedClient.id}
+            orgId={orgId}
+            onBack={() => setRelationshipOpen(false)}
+            onOpenWonVehicle={async (id) => { const wv = await getWonVehicle(id); if (wv) setViewingWonVehicle(wv); }}
+          />
         </div>
       )}
 

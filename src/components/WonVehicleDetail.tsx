@@ -10,6 +10,7 @@ import { makeThumbnail } from '../utils/thumbnail';
 import WonVehicleCosts from './WonVehicleCosts';
 import WonVehicleDocuments from './WonVehicleDocuments';
 import WonVehicleInvoices from './WonVehicleInvoices';
+import WonVehicleBilling from './WonVehicleBilling';
 import WonVehicleNotify from './WonVehicleNotify';
 import WonVehicleWinningBid from './WonVehicleWinningBid';
 import { X, Loader2, CheckCircle2, Circle, ExternalLink, Copy, AlertTriangle, ImageOff } from 'lucide-react';
@@ -329,7 +330,12 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onClose: () => void; 
               </div>
 
               <div>
-                <SectionTitle>Invoice</SectionTitle>
+                <SectionTitle>Invoices, payments and receipts</SectionTitle>
+                <WonVehicleBilling wonVehicle={wonVehicle} context={context} winningBid={currentWinningBid(winningBids)} destination={currentDestination(destinations)} />
+              </div>
+
+              <div>
+                <SectionTitle>Invoice records (uploaded PDFs)</SectionTitle>
                 <WonVehicleInvoices wonVehicle={wonVehicle} />
               </div>
 
