@@ -151,19 +151,27 @@ export interface RunListing {
   won_at?: string | null;
 }
 
+// PROMPT 40 Stage 4 - research_runs.notes moved to research_runs_staff_notes (debt #84); flatten the
+// PostgREST embed back onto the shape staff screens already expect.
+const flattenRunNotes = (row: any) => {
+  const staff = Array.isArray(row.research_runs_staff_notes) ? row.research_runs_staff_notes[0] : row.research_runs_staff_notes;
+  const { research_runs_staff_notes: _omit, ...rest } = row;
+  return { ...rest, notes: staff?.notes ?? null };
+};
+
 export const listRuns = async (orgId: string): Promise<ResearchRun[]> => {
   const runs = await fetchAllVerified<any>(
     'research runs',
     (from, to) => supabase
       .from('research_runs')
-      .select('*, research_run_listings(count), client:clients(*), client_brief:client_briefs(*)')
+      .select('*, research_run_listings(count), client:clients(*), client_brief:client_briefs(*), research_runs_staff_notes(notes)')
       .eq('org_id', orgId)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .order('id')
       .range(from, to),
     () => supabase.from('research_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).is('deleted_at', null),
-  );
+  ).then(rows => rows.map(flattenRunNotes));
 
   // A single extra query for the at-a-glance marker, rather than embedding a filtered
   // count per row - PostgREST embedding doesn't cleanly express "count where approved_at
@@ -275,7 +283,6 @@ export const createRun = async (orgId: string, input: {
     org_id: orgId,
     client_name: input.client_name,
     run_type: input.run_type,
-    notes: input.notes || null,
     target_spec: input.target_spec || null,
     client_id: input.client_id || null,
     client_brief_id: input.client_brief_id || null,
@@ -299,13 +306,20 @@ export const createRun = async (orgId: string, input: {
     throw new Error(`Failed to create research run: ${error.message}`);
   }
 
-  return data;
+  // PROMPT 40 Stage 4 - research_runs.notes moved off the client-readable table (debt #84) into
+  // research_runs_staff_notes, which has no client RLS policy at all.
+  if (input.notes) {
+    const { error: notesErr } = await supabase.from('research_runs_staff_notes').insert({ run_id: data.id, org_id: orgId, notes: input.notes });
+    if (notesErr) throw new Error(`The run was created but its notes could not be saved: ${notesErr.message}`);
+  }
+
+  return { ...data, notes: input.notes || null };
 };
 
 export const getRun = async (runId: string): Promise<ResearchRun> => {
-  const { data, error } = await supabase
+  const { data: raw, error } = await supabase
     .from('research_runs')
-    .select('*, client:clients(*), client_brief:client_briefs(*)')
+    .select('*, client:clients(*), client_brief:client_briefs(*), research_runs_staff_notes(notes)')
     .eq('id', runId)
     .is('deleted_at', null)
     .single();
@@ -313,18 +327,29 @@ export const getRun = async (runId: string): Promise<ResearchRun> => {
   if (error) {
     throw new Error(`Failed to fetch run: ${error.message}`);
   }
+  const data = flattenRunNotes(raw);
 
   return data;
 };
 
 // --- Clients and Briefs API ---
 
+// PROMPT 40 Stage 4 - clients.notes/assigned_agent moved off the client-readable table (debt #84) into
+// client_staff_notes, which has no client RLS policy at all. `client_staff_notes(assigned_agent, notes)` is a
+// PostgREST embed of that 1:1 companion (FK on client_staff_notes.client_id) - staff still see exactly what they
+// saw before, this file just has to flatten the embed back onto the Client shape.
+const flattenClientRow = (row: any): Client => {
+  const staff = Array.isArray(row.client_staff_notes) ? row.client_staff_notes[0] : row.client_staff_notes;
+  const { client_staff_notes: _omit, ...rest } = row;
+  return { ...rest, assigned_agent: staff?.assigned_agent ?? null, notes: staff?.notes ?? null };
+};
+
 export const listClients = async (orgId: string): Promise<Client[]> => {
-  return fetchAllVerified<Client>(
+  const rows = await fetchAllVerified<any>(
     'clients',
     (from, to) => supabase
       .from('clients')
-      .select('*')
+      .select('*, client_staff_notes(assigned_agent, notes)')
       .eq('org_id', orgId)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
@@ -332,17 +357,24 @@ export const listClients = async (orgId: string): Promise<Client[]> => {
       .range(from, to),
     () => supabase.from('clients').select('id', { count: 'exact', head: true }).eq('org_id', orgId).is('deleted_at', null),
   );
+  return rows.map(flattenClientRow);
 };
 
-export const createClient = async (orgId: string, client: Partial<Client>): Promise<Client> => {
+export const createClient = async (orgId: string, client: Partial<Client>, userId?: string): Promise<Client> => {
+  const { assigned_agent, notes, ...clientFields } = client;
   const { data, error } = await supabase
     .from('clients')
-    .insert({ ...client, org_id: orgId })
+    .insert({ ...clientFields, org_id: orgId })
     .select('*')
     .single();
 
   if (error) throw new Error(`Failed to create client: ${error.message}`);
-  return data;
+  if (assigned_agent || notes) {
+    const { error: notesErr } = await supabase.from('client_staff_notes')
+      .insert({ client_id: data.id, org_id: orgId, assigned_agent: assigned_agent || null, notes: notes || null, updated_by: userId ?? null });
+    if (notesErr) throw new Error(`Client was created but the notes/agent could not be saved: ${notesErr.message}`);
+  }
+  return { ...data, assigned_agent: assigned_agent ?? null, notes: notes ?? null };
 };
 
 export const listClientBriefs = async (orgId: string, clientId?: string): Promise<ClientBrief[]> =>
@@ -403,16 +435,25 @@ export const createBriefWithIntakeLink = async (orgId: string, clientId: string)
   return data;
 };
 
-export const updateClient = async (clientId: string, patch: Partial<Client>): Promise<Client> => {
-  const { data, error } = await supabase
-    .from('clients')
-    .update(patch)
-    .eq('id', clientId)
-    .select('*')
-    .single();
-
-  if (error) throw new Error(`Failed to update client: ${error.message}`);
-  return data;
+export const updateClient = async (clientId: string, patch: Partial<Client>, userId?: string): Promise<Client> => {
+  const { assigned_agent, notes, ...clientFields } = patch;
+  let data: any;
+  if (Object.keys(clientFields).length > 0) {
+    const { data: d, error } = await supabase.from('clients').update(clientFields).eq('id', clientId).select('*').single();
+    if (error) throw new Error(`Failed to update client: ${error.message}`);
+    data = d;
+  } else {
+    const { data: d, error } = await supabase.from('clients').select('*').eq('id', clientId).single();
+    if (error) throw new Error(`Failed to load client: ${error.message}`);
+    data = d;
+  }
+  if (assigned_agent !== undefined || notes !== undefined) {
+    const { error: notesErr } = await supabase.from('client_staff_notes')
+      .upsert({ client_id: clientId, org_id: data.org_id, assigned_agent: assigned_agent || null, notes: notes || null, updated_by: userId ?? null, updated_at: new Date().toISOString() }, { onConflict: 'client_id' });
+    if (notesErr) throw new Error(`The client was updated but the notes/agent could not be saved: ${notesErr.message}`);
+  }
+  const { data: staff } = await supabase.from('client_staff_notes').select('assigned_agent, notes').eq('client_id', clientId).maybeSingle();
+  return { ...data, assigned_agent: staff?.assigned_agent ?? null, notes: staff?.notes ?? null };
 };
 
 // Same generation as research_runs' share_token (createRun/rotateShareToken above) - reused
@@ -527,11 +568,11 @@ export const listDeletedClients = async (orgId: string): Promise<Client[]> => {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const cutoff = thirtyDaysAgo.toISOString();
 
-  return fetchAllVerified<Client>(
+  const rows = await fetchAllVerified<any>(
     'deleted clients',
     (from, to) => supabase
       .from('clients')
-      .select('*')
+      .select('*, client_staff_notes(assigned_agent, notes)')
       .eq('org_id', orgId)
       .not('deleted_at', 'is', null)
       .gte('deleted_at', cutoff)
@@ -540,6 +581,7 @@ export const listDeletedClients = async (orgId: string): Promise<Client[]> => {
       .range(from, to),
     () => supabase.from('clients').select('id', { count: 'exact', head: true }).eq('org_id', orgId).not('deleted_at', 'is', null).gte('deleted_at', cutoff),
   );
+  return rows.map(flattenClientRow);
 };
 
 export const restoreClient = async (clientId: string): Promise<void> => {
@@ -579,18 +621,24 @@ export const restoreClientBrief = async (briefId: string): Promise<void> => {
 };
 
 export const updateRun = async (runId: string, patch: Partial<Pick<ResearchRun, 'client_name' | 'notes' | 'status' | 'share_enabled' | 'run_type'>>): Promise<ResearchRun> => {
-  const { data, error } = await supabase
-    .from('research_runs')
-    .update(patch)
-    .eq('id', runId)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to update research run: ${error.message}`);
+  const { notes, ...runFields } = patch;
+  let data: any;
+  if (Object.keys(runFields).length > 0) {
+    const { data: d, error } = await supabase.from('research_runs').update(runFields).eq('id', runId).select().single();
+    if (error) throw new Error(`Failed to update research run: ${error.message}`);
+    data = d;
+  } else {
+    const { data: d, error } = await supabase.from('research_runs').select().eq('id', runId).single();
+    if (error) throw new Error(`Failed to load research run: ${error.message}`);
+    data = d;
   }
-
-  return data;
+  if (notes !== undefined) {
+    const { error: notesErr } = await supabase.from('research_runs_staff_notes')
+      .upsert({ run_id: runId, org_id: data.org_id, notes: notes || null, updated_at: new Date().toISOString() }, { onConflict: 'run_id' });
+    if (notesErr) throw new Error(`The run was updated but its notes could not be saved: ${notesErr.message}`);
+  }
+  const { data: staff } = await supabase.from('research_runs_staff_notes').select('notes').eq('run_id', runId).maybeSingle();
+  return { ...data, notes: staff?.notes ?? null };
 };
 
 export const deleteSighting = async (sightingId: string, assetId: string): Promise<void> => {
@@ -1239,7 +1287,7 @@ export const listDeletedRuns = async (orgId: string): Promise<ResearchRun[]> => 
     'deleted research runs',
     (from, to) => supabase
       .from('research_runs')
-      .select('*, research_run_listings(count)')
+      .select('*, research_run_listings(count), research_runs_staff_notes(notes)')
       .eq('org_id', orgId)
       .not('deleted_at', 'is', null)
       .gte('deleted_at', cutoff)
@@ -1250,7 +1298,7 @@ export const listDeletedRuns = async (orgId: string): Promise<ResearchRun[]> => 
   );
 
   return rows.map((row: any) => ({
-    ...row,
+    ...flattenRunNotes(row),
     listing_count: row.research_run_listings?.[0]?.count || 0,
   }));
 };

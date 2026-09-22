@@ -743,6 +743,25 @@ const MainDashboard: React.FC = () => {
   );
 };
 
+// PROMPT 41 Stage 0 - a signed-in account with no membership at all (role is null once loading settles, never
+// a transient state - see AuthContext) must never fall through to MainDashboard. Before this existed, that
+// fallthrough was exactly the bug: Bashir signed in as Mohammed's own (pre-existing, unprovisioned) account and
+// landed inside the staff shell, which then failed loudly inside ResearchRuns.tsx ("No organization membership
+// — contact an administrator") while still showing every staff nav element around it.
+const NoMembershipScreen: React.FC = () => {
+  const { signOut, user } = useAuth();
+  return (
+    <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center p-6">
+      <div className="bg-white rounded-xl shadow-sm border border-[#e8e2d0] p-8 max-w-md text-center">
+        <h1 className="text-lg font-bold text-[#403f4c] mb-2">Your account isn't set up yet</h1>
+        <p className="text-sm text-gray-600 mb-1">{user?.email} is signed in, but no organisation has linked this account yet.</p>
+        <p className="text-sm text-gray-600 mb-6">If you're expecting access, ask the team you're working with to set it up - then sign in again.</p>
+        <button onClick={() => void signOut()} className="text-sm px-4 py-2 bg-[#a58039] text-white rounded font-bold">Sign out</button>
+      </div>
+    </div>
+  );
+};
+
 const AuthGate: React.FC = () => {
   const { session, loading, role, orgLoading } = useAuth();
 
@@ -763,6 +782,12 @@ const AuthGate: React.FC = () => {
   // (memberships_select's `user_id = auth.uid()` arm), so this cannot be forged by a client session.
   if (role === 'client') {
     return <ClientDashboard />;
+  }
+
+  // PROMPT 41 Stage 0 - role is null once loading/orgLoading have both settled means "no membership row exists",
+  // not "still figuring it out" (that case is the spinner above). Checked before MainDashboard, same as 'client'.
+  if (role === null) {
+    return <NoMembershipScreen />;
   }
 
   return <MainDashboard />;

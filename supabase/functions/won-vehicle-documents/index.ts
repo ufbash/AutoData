@@ -16,7 +16,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const DOCUMENT_TYPES = ['invoice', 'receipt', 'shipping_document', 'bill_of_lading', 'title', 'assessment_notice', 'other'];
+// PROMPT 41 Stage 3 - 'receipt' renamed to 'supplier_bill' (migration 078), see wonVehicleService.ts.
+const DOCUMENT_TYPES = ['invoice', 'supplier_bill', 'shipping_document', 'bill_of_lading', 'title', 'assessment_notice', 'other'];
 const ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'];
 const MAX_BYTES = 8 * 1024 * 1024;
 

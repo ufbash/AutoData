@@ -257,12 +257,15 @@ export const getWonVehicleThumbnails = async (wvs: WonVehicle[]): Promise<Record
 // won-vehicle-documents Edge Function, the only path that can create or soft-delete a document.
 // Nothing here is ever exposed on the tracking page or behind a share token.
 
+// PROMPT 41 Stage 3 - 'receipt' renamed to 'supplier_bill' (migration 078): it collided with the client-facing
+// billing_receipts Caplimo issues - two different things cannot share one word. The IAAI invoice, filed as a
+// "receipt", is exactly the case this closes.
 export type WonVehicleDocumentType =
-  | 'invoice' | 'receipt' | 'shipping_document' | 'bill_of_lading' | 'title' | 'assessment_notice' | 'other';
+  | 'invoice' | 'supplier_bill' | 'shipping_document' | 'bill_of_lading' | 'title' | 'assessment_notice' | 'other';
 
 export const DOCUMENT_TYPES: { value: WonVehicleDocumentType; label: string }[] = [
   { value: 'invoice', label: 'Invoice' },
-  { value: 'receipt', label: 'Receipt' },
+  { value: 'supplier_bill', label: 'Supplier bill' },
   { value: 'shipping_document', label: 'Shipping document' },
   { value: 'bill_of_lading', label: 'Bill of lading' },
   { value: 'title', label: 'Title' },

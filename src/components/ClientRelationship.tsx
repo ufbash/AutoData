@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, ChevronRight, Loader2, AlertTriangle } from 'lucide-react';
 import { briefReference } from '../../supabase/functions/_shared/vehicleHeading';
 import { RelPayment, loadClientRelationship, ClientRelationshipData, RelWonVehicle } from '../services/clientRelationshipService';
+import BillingSection from './BillingSection';
+import ClientAccountStatus from './ClientAccountStatus';
+import ClientAccountStatusSummary from './ClientAccountStatusSummary';
 
 const fmtDate = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '');
 const label = (s: string | null | undefined): string => (s ? s.replace(/_/g, ' ') : '');
@@ -100,6 +103,12 @@ const ClientRelationship: React.FC<{
         <h2 className="text-2xl font-bold text-[#403f4c]">{client.full_name}</h2>
         <div className="text-sm text-gray-500 mt-1">Client since {fmtDate(client.created_at)}</div>
         {contact && <div className="text-sm text-gray-500 mt-1">{contact}</div>}
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <ClientAccountStatus client={client} onChanged={() => void load(() => false)} />
+        </div>
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <ClientAccountStatusSummary clientId={clientId} />
+        </div>
       </section>
 
       <Section title="Briefs" count={briefs.length} empty="No briefs for this client." testId="rel-briefs">
@@ -160,7 +169,12 @@ const ClientRelationship: React.FC<{
         ))}
       </Section>
 
-      <Section title="Invoices" count={invoices.length} empty="No invoices issued." testId="rel-invoices">
+      <section className="bg-white border border-gray-200 rounded-xl p-5" data-testid="rel-billing">
+        <h3 className="text-sm font-bold text-gray-700 mb-3 pb-1 border-b border-gray-100">Billing</h3>
+        <BillingSection orgId={orgId} clientId={clientId} clientName={client.full_name} />
+      </section>
+
+      <Section title="Invoices (legacy, retired path)" count={invoices.length} empty="No invoices issued through the retired path." testId="rel-invoices">
         {invoices.map(i => (
           <Row key={i.id}>
             <div>

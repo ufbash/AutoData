@@ -205,7 +205,16 @@ serve(async (req: Request) => {
             if (c.status !== 'available' || c.amountUsd === null) throw new Refuse(`Line ${position}: the auction fee cannot be computed (${c.reason ?? 'unavailable'}). Enter it as a staff figure with its basis, or link the auction's invoice.`);
             if (c.partialReason) throw new Refuse(`Line ${position}: the auction fee is only a range (${c.partialReason}) - it cannot be a computed line`);
             figure = c.amountUsd; ref = `bid ${bid.id}; ${c.sourceRows.map(r => `${r.label} (${r.source}, effective ${r.effectiveFrom})`).join('; ')}`;
-            inputs = { component: comp, bidId: bid.id, bidMethod: bid.bid_method, sightingId: sighting.id, amountUsd: figure, basis: c.basis ?? null, sourceRows: c.sourceRows };
+            // this line is client_visible on a brokerage invoice by construction (only a retail invoice may hide a
+            // line, and 'auction_fees' is never the retail all-inclusive line) - computed_inputs is therefore
+            // reachable by a client querying billing_document_lines directly (RLS confines rows, not columns).
+            // c.basis carries account.holder_name/account.member_number (Caplimo's real auction-house account
+            // identity) - never printed on any invoice, never read back anywhere in this codebase, and genuinely new
+            // information beyond what the printed origin footnote (built from `ref`/sourceRows above) discloses.
+            // Keep only the parts of `basis` that are already in that printed footnote text (fee tier/title/payment
+            // tier, house name) - strip the account identity fields at the point of writing, not after.
+            const safeBasis = c.basis ? { houseName: c.basis.houseName, feeTier: c.basis.feeTier, paymentTier: c.basis.paymentTier, titleStatus: c.basis.titleStatus } : null;
+            inputs = { component: comp, bidId: bid.id, bidMethod: bid.bid_method, sightingId: sighting.id, amountUsd: figure, basis: safeBasis, sourceRows: c.sourceRows };
           } else if (comp === 'inland_trucking') {
             if (!sighting || !dest) throw new Refuse(`Line ${position}: trucking needs the source listing and a destination port and method`);
             const c = await inlandTruckingComponent(db, { sighting: { id: sighting.id, source_platform: sighting.source_platform, source_auction_platform: sighting.source_auction_platform, location: sighting.location } as never, destinationPortNormalized: dest.destination_port, shippingMethod: dest.shipping_method, orgId });
@@ -446,7 +455,9 @@ serve(async (req: Request) => {
     if (mode === 'file_url') {
       const { data: f } = await db.from('billing_files').select('id, org_id, client_id, storage_path, filename, deleted_at').eq('id', payload.fileId).maybeSingle();
       if (!f || f.deleted_at || !(canAccessOrg(f.org_id) || myClientIds.has(f.client_id))) throw new Refuse('File not found', 404);
-      const { data: signed, error } = await db.storage.from(BUCKET).createSignedUrl(f.storage_path, 300);
+      // no `download` option -> the browser opens the PDF inline (view); `download: filename` sets
+      // Content-Disposition: attachment so the browser saves it instead (a real download).
+      const { data: signed, error } = await db.storage.from(BUCKET).createSignedUrl(f.storage_path, 300, payload.download ? { download: f.filename } : undefined);
       if (error || !signed) throw new Error(`Could not sign the link: ${error?.message}`);
       return json({ success: true, url: signed.signedUrl, filename: f.filename });
     }

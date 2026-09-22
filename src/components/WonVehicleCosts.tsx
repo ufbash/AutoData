@@ -8,6 +8,9 @@ import { matchSightingToYard, MatchResult } from '../services/yardMatchingServic
 import { listPortsForYard, listActiveYardKeys, PortSummary } from '../services/truckingRatesService';
 import type { WonVehicle, WonVehicleContext, WonVehicleDestination } from '../services/wonVehicleService';
 import WonVehicleDestinationPanel from './WonVehicleDestination';
+import ActualCostRow from './ActualCostRow';
+import { ActualCost, ActualComponent, listCurrentActuals } from '../services/actualCostsService';
+import { useAuth } from '../contexts/AuthContext';
 
 // PROMPT 35 Stage 1 - per-component cost view for a bought car. Every figure comes from the
 // shared bidHeadroomService functions the run breakdown already uses; this file owns no fee
@@ -42,6 +45,7 @@ const Row: React.FC<{ label: string; component: CostComponent; note?: string }> 
 );
 
 const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleContext; winningBidUsd: number | null; winningBidMethod: 'proxy' | 'live' | null; winningBidKey: string; destination: WonVehicleDestination | null; destinations: WonVehicleDestination[]; onDestinationChanged: () => void }> = ({ wonVehicle, context, winningBidUsd, winningBidMethod, winningBidKey, destination, destinations, onDestinationChanged }) => {
+  const { user } = useAuth();
   const snapshot = wonVehicle.won_snapshot as any;
   const sighting = context.sighting;
   const [match, setMatch] = useState<MatchResult | null>(null);
@@ -51,6 +55,10 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
   const [shipping, setShipping] = useState<CostComponent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actuals, setActuals] = useState<ActualCost[]>([]);
+  const actualFor = (c: ActualComponent) => actuals.find(a => a.component === c) ?? null;
+  const reloadActuals = () => { void listCurrentActuals(wonVehicle.id).then(setActuals).catch(() => {}); };
+  useEffect(() => { reloadActuals(); }, [wonVehicle.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ports THIS yard can quote - only an annotation on the destination options; the destination itself is the saved one.
   const quotedFromYard = new Set(ports.map(p => `${p.destination_port_normalized}|${p.shipping_method}`));
@@ -138,15 +146,23 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
   if (loading) return <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>;
 
   const duty = getDutyComponent();
-  const components: { name: string; c: CostComponent | null }[] = [
-    { name: 'Auction fees', c: fees }, { name: 'Trucking', c: trucking }, { name: 'Shipping', c: shipping }, { name: 'Duty', c: duty },
+  // PROMPT 41 Stage 2 - the actual wins over the estimate for display and for invoicing, wherever one is
+  // recorded; the estimate itself is never overwritten (still shown above, unchanged) - this only decides
+  // which figure counts toward the landed-cost total below.
+  const actualUsd = (c: ActualComponent): number | null => actualFor(c)?.amount_usd ?? (actualFor(c) && actualFor(c)!.currency === 'usd' ? actualFor(c)!.amount : null);
+  const components: { name: string; c: CostComponent | null; actual: number | null }[] = [
+    { name: 'Auction fees', c: fees, actual: actualUsd('auction_fees') }, { name: 'Trucking', c: trucking, actual: actualUsd('inland_trucking') },
+    { name: 'Shipping', c: shipping, actual: actualUsd('ocean_freight') }, { name: 'Duty', c: duty, actual: actualUsd('duty') },
   ];
-  const missing = components.filter(x => !x.c || x.c.status !== 'available' || !!x.c.partialReason);
-  const landed = missing.length === 0 ? components.reduce((sum, x) => sum + x.c!.amountUsd!, 0) : null;
+  const effective = (x: typeof components[number]) => x.actual ?? (x.c?.status === 'available' && !x.c.partialReason ? x.c.amountUsd : null);
+  const missing = components.filter(x => effective(x) === null);
+  const landed = missing.length === 0 ? components.reduce((sum, x) => sum + (effective(x) ?? 0), 0) : null;
 
   return (
     <div>
       {error && <div className="text-xs text-[#ba3b46] mb-2">{error}</div>}
+
+      <div className="text-[10px] text-[#a58039] mb-2" title="Estimates come from rate tables; actuals come from real bills.">Estimate vs actual: the black figure is what the rate tables predict; the gold "Actual" line, when recorded, is a real bill and always wins.</div>
 
       <div className="text-[10px] text-gray-500 mb-2 bg-gray-50 rounded p-2">
         {fees?.basis
@@ -163,6 +179,7 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
       </div>
 
       <Row label="Auction fees" component={fees ?? { status: 'unavailable', amountUsd: null, reason: 'computing…', detail: '', sourceRows: [] }} />
+      {user && <ActualCostRow orgId={wonVehicle.org_id} wonVehicleId={wonVehicle.id} component="auction_fees" estimateUsd={fees?.status === 'available' && !fees.partialReason ? fees.amountUsd : null} actual={actualFor('auction_fees')} userId={user.id} onChanged={reloadActuals} />}
 
       {match && (
         <div className="text-[10px] text-gray-500 py-1">
@@ -172,8 +189,11 @@ const WonVehicleCosts: React.FC<{ wonVehicle: WonVehicle; context: WonVehicleCon
       <WonVehicleDestinationPanel wonVehicle={wonVehicle} destinations={destinations} quotedFromYard={quotedFromYard} onChanged={onDestinationChanged} />
 
       <Row label="Trucking" component={trucking ?? { status: 'unavailable', amountUsd: null, reason: 'computing…', detail: '', sourceRows: [] }} />
+      {user && <ActualCostRow orgId={wonVehicle.org_id} wonVehicleId={wonVehicle.id} component="inland_trucking" estimateUsd={trucking?.status === 'available' && !trucking.partialReason ? trucking.amountUsd : null} actual={actualFor('inland_trucking')} userId={user.id} onChanged={reloadActuals} />}
       <Row label="Shipping" component={shipping ?? { status: 'unavailable', amountUsd: null, reason: 'computing…', detail: '', sourceRows: [] }} />
+      {user && <ActualCostRow orgId={wonVehicle.org_id} wonVehicleId={wonVehicle.id} component="ocean_freight" estimateUsd={shipping?.status === 'available' && !shipping.partialReason ? shipping.amountUsd : null} actual={actualFor('ocean_freight')} userId={user.id} onChanged={reloadActuals} />}
       <Row label="Duty" component={duty} />
+      {user && <ActualCostRow orgId={wonVehicle.org_id} wonVehicleId={wonVehicle.id} component="duty" estimateUsd={duty.status === 'available' && !duty.partialReason ? duty.amountUsd : null} actual={actualFor('duty')} userId={user.id} onChanged={reloadActuals} />}
 
       <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-gray-50" data-testid="landed-cost">
         {landed !== null ? (

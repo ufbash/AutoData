@@ -65,9 +65,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     });
 
+    // Supabase fires onAuthStateChange (TOKEN_REFRESHED, and sometimes a re-emitted SIGNED_IN) every time the tab
+    // regains focus/visibility, for the SAME user, with no actual change worth reacting to. Re-running
+    // fetchMembership on every one of these toggled orgLoading true->false, which made AuthGate swap MainDashboard
+    // out for the spinner and back - unmounting it and wiping its in-app navigation state (the `view` useState
+    // reset to its default 'dashboard'/'research' each time). Bug report: "anytime I navigate away from the tab...
+    // it takes me back to the homepage dashboard." Fix: only react when the signed-in user actually changes
+    // (sign-in, sign-out, or a different user) - a same-user event just updates the token silently.
+    let lastUserId: string | null = null;
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
+      const uid = session?.user?.id ?? null;
+      if (uid === lastUserId) return;
+      lastUserId = uid;
       if (session?.user) {
         fetchMembership(session.user.id).then(() => setLoading(false));
       } else {

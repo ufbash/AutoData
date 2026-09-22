@@ -6,7 +6,7 @@ import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead
 // or through that client's own won vehicle ids), and the loaded rows are then asserted against the scope so a
 // leak throws instead of rendering.
 
-export interface RelClient { id: string; org_id: string; full_name: string; email: string | null; phone: string | null; created_at: string; deleted_at: string | null }
+export interface RelClient { id: string; org_id: string; full_name: string; email: string | null; phone: string | null; created_at: string; deleted_at: string | null; user_id: string | null }
 export interface RelBrief { id: string; org_id: string; client_id: string; year_min: number | null; year_max: number | null; make: string | null; model: string | null; status: string | null; deposit_received_at: string | null; deleted_at: string | null }
 export interface RelRun { id: string; org_id: string; client_id: string; client_brief_id: string | null; client_name: string; run_type: string; status: string; created_at: string }
 export interface RelWonVehicle { id: string; org_id: string; client_id: string; brief_id: string | null; run_id: string | null; won_snapshot: Record<string, unknown> | null; promoted_at: string; deleted_at: string | null; currentStatus: string | null }
@@ -99,7 +99,7 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
 
   const { data: clientRow, error: clientErr } = await supabase
     .from('clients')
-    .select('id, org_id, full_name, email, phone, created_at, deleted_at')
+    .select('id, org_id, full_name, email, phone, created_at, deleted_at, user_id')
     .eq('id', clientId)
     .eq('org_id', orgId)
     .maybeSingle();
@@ -210,4 +210,25 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
     emails,
     pendingSchema,
   };
+};
+
+// PROMPT 41 Stage 0 - account provisioning, from the client relationship view.
+export interface ClientMembershipStatus { active: boolean; revokedAt: string | null; revokeReason: string | null }
+
+export const getClientMembershipStatus = async (userId: string, orgId: string): Promise<ClientMembershipStatus | null> => {
+  const { data, error } = await supabase.from('memberships').select('revoked_at, revoke_reason').eq('user_id', userId).eq('org_id', orgId).eq('role', 'client').maybeSingle();
+  if (error) throw new Error(`Failed to load account status: ${error.message}`);
+  if (!data) return null;
+  return { active: !data.revoked_at, revokedAt: data.revoked_at, revokeReason: data.revoke_reason };
+};
+
+export const provisionClientByEmail = async (clientId: string, email: string, actorUserId: string): Promise<{ linked: boolean; reason?: string }> => {
+  const { data, error } = await supabase.rpc('provision_client_account_by_email', { p_client_id: clientId, p_email: email, p_actor: actorUserId });
+  if (error) throw new Error(error.message);
+  return data as { linked: boolean; reason?: string };
+};
+
+export const revokeClientAccess = async (clientId: string, actorUserId: string, reason: string): Promise<void> => {
+  const { error } = await supabase.rpc('revoke_client_access', { p_client_id: clientId, p_actor: actorUserId, p_reason: reason });
+  if (error) throw new Error(error.message);
 };

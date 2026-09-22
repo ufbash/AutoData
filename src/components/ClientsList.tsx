@@ -433,7 +433,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
 
     setCreatingClient(true);
     try {
-      const c = await createClient(orgId, { full_name: newClientName.trim() });
+      const c = await createClient(orgId, { full_name: newClientName.trim() }, user?.id);
       setClients([c, ...clients]);
       setShowNewClientForm(false);
       setNewClientName('');
@@ -449,7 +449,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
     if (!selectedClient) return;
     setSavingClient(true);
     try {
-      const c = await updateClient(selectedClient.id, patch);
+      const c = await updateClient(selectedClient.id, patch, user?.id);
       setClients(clients.map(cl => cl.id === c.id ? c : cl));
       setSelectedClient(c);
       setEditingClient(false);
