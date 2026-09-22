@@ -41,7 +41,8 @@ serve(async (req: Request) => {
     const { data: memberships, error: memError } = await supabase.from('memberships').select('org_id, role').eq('user_id', user.id);
     if (memError) throw memError;
     const isSuperadmin = (memberships ?? []).some((m: { role: string }) => m.role === 'superadmin');
-    const canAccessOrg = (orgId: string) => isSuperadmin || (memberships ?? []).some((m: { org_id: string }) => m.org_id === orgId);
+    // PROMPT 39 Stage 3 - a client-role membership must never satisfy a staff-only org check.
+    const canAccessOrg = (orgId: string) => isSuperadmin || (memberships ?? []).some((m: { org_id: string; role: string }) => m.org_id === orgId && m.role !== 'client');
 
     const payload = await req.json().catch(() => null);
     const mode = payload?.mode;

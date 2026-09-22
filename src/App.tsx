@@ -18,6 +18,7 @@ import IntakeFormView from './components/IntakeFormView';
 import { ClientsList } from './components/ClientsList';
 import AdminArea from './components/AdminArea';
 import WonVehicleTrackingView from './components/WonVehicleTrackingView';
+import ClientDashboard from './components/ClientDashboard';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -743,9 +744,9 @@ const MainDashboard: React.FC = () => {
 };
 
 const AuthGate: React.FC = () => {
-  const { session, loading } = useAuth();
+  const { session, loading, role, orgLoading } = useAuth();
 
-  if (loading) {
+  if (loading || (session && orgLoading)) {
     return (
       <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-[#a58039] animate-spin" />
@@ -755,6 +756,13 @@ const AuthGate: React.FC = () => {
 
   if (!session) {
     return <LoginScreen />;
+  }
+
+  // PROMPT 39 Stage 4 - a client NEVER reaches MainDashboard (the staff app), by construction: this is the one
+  // branch point, checked before anything else renders. role is read from the client's OWN membership row via RLS
+  // (memberships_select's `user_id = auth.uid()` arm), so this cannot be forged by a client session.
+  if (role === 'client') {
+    return <ClientDashboard />;
   }
 
   return <MainDashboard />;

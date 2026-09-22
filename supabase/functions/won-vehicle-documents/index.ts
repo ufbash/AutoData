@@ -45,8 +45,10 @@ serve(async (req: Request) => {
       .from('memberships').select('org_id, role').eq('user_id', user.id);
     if (memError) throw memError;
     const isSuperadmin = (memberships ?? []).some((m: { role: string }) => m.role === 'superadmin');
+    // PROMPT 39 Stage 3 - a client-role membership must never satisfy a staff-only org check; every staff
+    // Edge Function excludes role='client' explicitly (RLS alone is not the boundary for service-role code).
     const canAccessOrg = (orgId: string) =>
-      isSuperadmin || (memberships ?? []).some((m: { org_id: string }) => m.org_id === orgId);
+      isSuperadmin || (memberships ?? []).some((m: { org_id: string; role: string }) => m.org_id === orgId && m.role !== 'client');
 
     const payload = await req.json().catch(() => null);
     const mode = payload?.mode;
@@ -132,7 +134,23 @@ serve(async (req: Request) => {
       return json({ success: true });
     }
 
-    return json({ error: "mode must be 'upload' or 'delete'" }, 400);
+    // PROMPT 39 Stage 4 - a client reads a signed URL for their OWN vehicle's document, only when it is flagged
+    // client_visible (migration 069). This function stays the only writer; a client cannot upload or delete.
+    if (mode === 'client_file_url') {
+      const { documentId } = payload;
+      if (typeof documentId !== 'string') return json({ error: "documentId is required" }, 400);
+      const { data: doc } = await supabase.from('won_vehicle_documents')
+        .select('id, org_id, won_vehicle_id, storage_path, original_filename, client_visible, deleted_at').eq('id', documentId).maybeSingle();
+      if (!doc || doc.deleted_at || !doc.client_visible) return json({ error: "Document not found" }, 404);
+      const { data: vehicle } = await supabase.from('won_vehicles').select('client_id').eq('id', doc.won_vehicle_id).maybeSingle();
+      const { data: client } = await supabase.from('clients').select('id').eq('user_id', user.id).eq('id', vehicle?.client_id ?? '').maybeSingle();
+      if (!client) return json({ error: "Document not found" }, 404);
+      const { data: signed, error: signErr } = await supabase.storage.from('won-vehicle-documents').createSignedUrl(doc.storage_path, 300);
+      if (signErr || !signed) throw new Error(`Could not sign the link: ${signErr?.message}`);
+      return json({ success: true, url: signed.signedUrl, filename: doc.original_filename });
+    }
+
+    return json({ error: "mode must be 'upload', 'delete' or 'client_file_url'" }, 400);
   } catch (error) {
     console.error("won-vehicle-documents failed:", error);
     return json({ error: (error as Error).message }, 500);

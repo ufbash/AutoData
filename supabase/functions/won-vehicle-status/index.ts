@@ -53,7 +53,18 @@ serve(async (req: Request) => {
     }
 
     if (mode === 'advance') {
-      // Any authenticated staff member - no role check beyond being a real logged-in user.
+      // Any authenticated STAFF member - PROMPT 39 Stage 3: this had no role check at all until a live hostile-client
+      // test (a real client-role token) successfully advanced a vehicle's status through this exact path. Excluding
+      // role='client' is not optional here the way it is elsewhere - this is the one function in the codebase that
+      // previously trusted "a real logged-in user" as sufficient, and a client token is a real logged-in user.
+      const { data: memberships, error: memError } = await supabase
+        .from('memberships').select('role').eq('user_id', user.id);
+      if (memError) throw memError;
+      if (!memberships?.some((m: { role: string }) => m.role === 'staff' || m.role === 'superadmin')) {
+        return new Response(JSON.stringify({ error: "Advancing a won vehicle's status is restricted to staff." }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
       const { data, error } = await supabase.rpc('advance_won_vehicle_status', {
         p_won_vehicle_id: wonVehicleId,
         p_new_status: newStatus,
