@@ -1,12 +1,12 @@
 import { supabase } from './supabaseClient';
-import { matchSightingToYard } from './yardMatchingService';
-import { listActiveYardKeys } from './truckingRatesService';
-import type { YardKey, SightingForMatching } from './yardMatchingService';
+import type { SightingForMatching } from './yardMatchingService';
 import { listAuctionHouses, getAccount, getDefaultAccount } from './auctionAccountsService';
 import type { AuctionAccount, PaymentTier } from './auctionAccountsService';
-import { classifyTitleStatus as classifySharedTitleStatus } from '../../supabase/functions/_shared/specVocabulary.ts';
-import { usdAmount } from '../../supabase/functions/_shared/rateConventions.ts';
-import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead';
+import {
+  classifyTitleStatus as sharedClassifyTitleStatus, resolveSchedule as sharedResolveSchedule, auctionFeeComponent as sharedAuctionFeeComponent,
+  inlandTruckingComponent as sharedInlandTruckingComponent, oceanFreightComponent as sharedOceanFreightComponent, dutyComponent as sharedDutyComponent,
+} from '../../supabase/functions/_shared/costComponents.ts';
+import type { AuctionFeeInput, InlandTruckingInput, Resolved, ResolveArgs } from '../../supabase/functions/_shared/costComponents.ts';
 import {
   unavailable, findBracket, selectSchedule, auctionFeeFromRows, boundaryPair, combinedFeeAt, solveMaxBidForFees, solverSupports, feeForBracket,
 } from '../../supabase/functions/_shared/feeSchedule.ts';
@@ -45,263 +45,21 @@ export interface BidHeadroomResult {
   maxBidSolve: MaxBidSolveResult | null;
 }
 
-// --- Title status classification ---
-// SCHEMA.md S5: title_type is genuinely messy, format varies by state and capture source.
-// PROMPT 31 Stage 3 (debt #58) - this used to be its own independent classifier, diverging from
-// ResearchRunDetail.tsx's separate inline one (confirmed disagreeing on real data - a bare
-// "Certificate of Title" value). Both now resolve through the single shared classifier in
-// `_shared/specVocabulary.ts`; this function is a thin binary view onto it; preserving this
-// module's own long-standing 'clean'|'non_clean'|'unknown' abstain-rather-than-guess contract
-// for the auction-fee bracket lookup (a wrong guess in EITHER direction produces a wrong dollar
-// figure, so 'unknown' must stay reachable here) without touching its four call sites below.
-// Verified byte-identical against every real title_type value in production before this change.
-export function classifyTitleStatus(titleType: string | null | undefined): 'clean' | 'non_clean' | 'unknown' {
-  const { status, isFloodBranded } = classifySharedTitleStatus(titleType);
-  if (isFloodBranded) return 'non_clean'; // flood always non-clean here, matching the prior regex's own explicit flood match
-  if (status === 'unknown') return 'unknown';
-  if (status === 'clean') return 'clean';
-  return 'non_clean'; // salvage | rebuilt | non_repairable
-}
-
-// --- Effective platform ---
-// The lot's real auction house: the capture source itself when that source IS a configured house (a direct
-// Copart or IAAI capture), otherwise the house an aggregator (bid.cars) recorded in source_auction_platform.
-// Which houses exist is data (auction_houses), not a list in this file. Verified identical to the previous
-// hardcoded rule on all 221 real sightings (21 Sep 2026): bidcars/copart, bidcars/iaai, bidcars/null,
-// copart, iaai and manual all resolve as before.
-function resolveEffectivePlatform(sighting: SightingForMatching, houses: { auction_platform: string }[]): string | null {
-  const isHouse = (v: string | null | undefined) => !!v && houses.some(h => h.auction_platform === v);
-  if (isHouse(sighting.source_platform)) return sighting.source_platform;
-  if (isHouse(sighting.source_auction_platform)) return sighting.source_auction_platform as string;
-  return null;
-}
-
+// PROMPT 38 (debt #79) - the cost logic (title classification, effective platform, schedule resolution, the auction-fee,
+// trucking, freight and duty components and their database reads) moved to supabase/functions/_shared/costComponents.ts
+// and costReads.ts, taking the database client as an argument. The billing Edge Function recomputes computed invoice lines
+// from those same functions; this module keeps every export it always had and binds them to the browser's supabase client.
+export const classifyTitleStatus = sharedClassifyTitleStatus;
 export type { FeeBracketRow };
 export { feeForBracket, findBracket };
+export type { AuctionFeeInput, InlandTruckingInput, Resolved, ResolveArgs };
 
-export interface AuctionFeeInput {
-  sighting: SightingForMatching;
-  titleType: string | null;
-  // Either the actual confirmed sale price (a finished, sale_confirmed=true listing's price_usd) or a
-  // staff-entered candidate bid on an active listing. Never current_bid_usd on its own.
-  referencePriceUsd: number | null;
-  // Shown as the abstention reason when referencePriceUsd is null, so the UI can say WHY.
-  referencePriceUnavailableDetail?: string;
-  orgId: string;
-  // Price under a specific account instead of the org's default account for the house.
-  accountId?: string;
-  // Override the account's own payment tier (a what-if); absent means the account's tier.
-  paymentTier?: PaymentTier;
-  // How the winning bid was placed, when known. Absent for every listing that has not been won - the
-  // fee then stays a range across both methods.
-  bidMethod?: 'proxy' | 'live' | null;
-}
-
-// PROMPT 37 Phase 1 - which schedule a lot prices against is DATA: the org's account for the lot's auction
-// house, that account's official fee tier, and its payment tier. This function names no house, no account
-// and no fee. A house with no account, or an account whose tier has no schedule loaded, abstains and says so.
-type Resolved =
-  | { ok: true; house: { auction_platform: string; display_name: string }; account: AuctionAccount; basis: FeeBasis; schedule: ScheduleRows; titleStatus: 'clean' | 'non_clean'; paymentTier: string }
-  | { ok: false; component: CostComponent };
-
-interface ResolveArgs {
-  orgId: string;
-  sighting: SightingForMatching;
-  titleType: string | null;
-  accountId?: string;
-  paymentTier?: PaymentTier;
-  // When present the reference price is checked in the same precedence order the fee always used.
-  price?: { value: number | null; detail?: string };
-}
-
-async function fetchTierRows(orgId: string, platform: string, feeTier: string): Promise<FeeBracketRow[]> {
-  const rows = await fetchAllVerified<any>(
-    'fee brackets',
-    (from, to) => supabase
-      .from('auction_fee_brackets')
-      .select('fee_type, title_status, payment_tier, bid_method, bracket_min, bracket_max, fee_unit, fee_value, source, effective_from, currency, amount_usd')
-      .eq('org_id', orgId).eq('auction_platform', platform).eq('fee_tier', feeTier).is('effective_to', null)
-      .order('bracket_min').order('id').range(from, to),
-    () => supabase.from('auction_fee_brackets').select('id', { count: 'exact', head: true })
-      .eq('org_id', orgId).eq('auction_platform', platform).eq('fee_tier', feeTier).is('effective_to', null),
-  );
-  return rows.map((r: any): FeeBracketRow => ({
-    fee_type: r.fee_type, title_status: r.title_status, payment_tier: r.payment_tier, bid_method: r.bid_method,
-    bracket_min: Number(r.bracket_min), bracket_max: r.bracket_max === null ? null : Number(r.bracket_max),
-    fee_unit: r.fee_unit,
-    // A percent is a pure ratio; a dollar bracket is read in dollars (rateConventions.usdAmount).
-    fee_value: r.fee_unit === 'percent' ? Number(r.fee_value) : usdAmount(r, r.fee_value, 'fee bracket'),
-    source: r.source, effective_from: r.effective_from,
-  }));
-}
-
-async function fetchFlatFees(orgId: string, platform: string): Promise<FlatFee[]> {
-  const { data, error } = await supabase
-    .from('cost_rates')
-    .select('label, fee_role, rate_value, source, effective_from, currency, amount_usd')
-    .eq('org_id', orgId)
-    .eq('cost_category', 'auction_fee')
-    .eq('auction_platform', platform)
-    .eq('fee_applies', 'always')
-    .is('effective_to', null);
-  if (error) throw new Error(`Failed to load flat auction fees: ${error.message}`);
-  return (data || []).map((r: any): FlatFee => ({
-    label: r.label, fee_role: r.fee_role, source: r.source, effective_from: r.effective_from, rate_value: usdAmount(r, r.rate_value, 'flat fee'),
-  }));
-}
-
-async function resolveSchedule(args: ResolveArgs): Promise<Resolved> {
-  const houses = await listAuctionHouses();
-  const platform = resolveEffectivePlatform(args.sighting, houses);
-  if (!platform) {
-    return { ok: false, component: unavailable('no resolvable auction platform', `source_platform=${args.sighting.source_platform}`) };
-  }
-  const house = houses.find(h => h.auction_platform === platform)!;
-
-  // A capture that labels a lot with one house while its yard names another is contradictory: pricing under
-  // either schedule would be a confident wrong number, so no fee is quoted (Yaris, debt #61). The prefixes
-  // that identify a house's yards ("IAA ...") are data on auction_houses, not a regex here.
-  const leading = (args.sighting.location ?? '').trim().split(/[\s,(/-]+/)[0]?.toUpperCase() ?? '';
-  const other = leading ? houses.find(h => h.auction_platform !== platform && h.location_prefixes.some(p => p.toUpperCase() === leading)) : undefined;
-  if (other) {
-    return { ok: false, component: unavailable('platform label contradicts the yard', `source_auction_platform="${args.sighting.source_auction_platform}" but location="${args.sighting.location}" names a ${other.display_name} yard - no fee is quoted rather than pricing under ${house.display_name}'s schedule`) };
-  }
-
-  const account = args.accountId ? await getAccount(args.orgId, args.accountId) : await getDefaultAccount(args.orgId, platform);
-  if (account && account.auction_platform !== platform) {
-    return { ok: false, component: unavailable('the chosen account belongs to a different auction house', `account "${account.holder_name}" is a ${account.auction_platform} account but this lot is at ${house.display_name}`) };
-  }
-  if (!account) {
-    return { ok: false, component: unavailable(`no ${house.display_name} account is set up`, `add the ${house.display_name} account this org buys through (with its official fee tier) under Admin > Rates > Fee schedules and accounts`) };
-  }
-
-  const titleStatus = classifyTitleStatus(args.titleType);
-  const paymentTier = args.paymentTier ?? account.payment_tier;
-  const basisBase = { houseName: house.display_name, feeTier: account.fee_tier, holder: account.holder_name, memberNumber: account.member_number, paymentTier: paymentTier ?? 'n/a' };
-  const abstain = (reason: string, detail: string, title: string): Resolved => ({
-    ok: false, component: { ...unavailable(reason, detail), basis: { ...basisBase, titleStatus: title } },
-  });
-
-  const [tierRows, flatFees] = await Promise.all([fetchTierRows(args.orgId, platform, account.fee_tier), fetchFlatFees(args.orgId, platform)]);
-  if (tierRows.length === 0) {
-    return abstain(`no fee schedule is loaded for ${account.fee_tier}`, `${house.display_name} account "${account.holder_name}" is on ${account.fee_tier}, which has no fee brackets loaded yet - load its schedule (Admin > Rates > Fee schedules and accounts) rather than pricing it under another tier`, titleStatus);
-  }
-
-  const selected = selectSchedule(tierRows, titleStatus, paymentTier, flatFees);
-  if (selected.ok === false) return abstain('the fee schedule is ambiguous', selected.reason, titleStatus);
-
-  // Same precedence the fee has always had: an unclassifiable title abstains before a missing price does.
-  if (titleStatus === 'unknown' && selected.rows.buyerFeeRows.length === 0) {
-    return abstain('title status could not be classified', `title_type="${args.titleType ?? ''}" matched neither a clean nor non-clean indicator`, 'unknown');
-  }
-  if (args.price && (args.price.value === null || args.price.value === undefined)) {
-    return abstain('no price to bracket against', args.price.detail ?? 'no confirmed sale price and no candidate bid entered', titleStatus);
-  }
-  if (selected.rows.buyerFeeRows.length === 0) {
-    return abstain(`no fee schedule is loaded for ${account.fee_tier} under a ${titleStatus} title / ${paymentTier ?? 'n/a'} payment`, `${account.fee_tier} has brackets loaded, but none for this title status and payment tier`, titleStatus);
-  }
-  return {
-    ok: true, house, account, titleStatus: titleStatus as 'clean' | 'non_clean', paymentTier: paymentTier ?? 'n/a', schedule: selected.rows,
-    basis: { ...basisBase, titleStatus },
-  };
-}
-
-export async function getAuctionFeeComponent(input: AuctionFeeInput): Promise<CostComponent> {
-  const r = await resolveSchedule({
-    orgId: input.orgId, sighting: input.sighting, titleType: input.titleType, accountId: input.accountId, paymentTier: input.paymentTier,
-    price: { value: input.referencePriceUsd, detail: input.referencePriceUnavailableDetail },
-  });
-  if (r.ok === false) return r.component;
-  const component = auctionFeeFromRows(input.referencePriceUsd!, r.account.fee_tier, r.titleStatus, r.schedule, r.paymentTier, input.bidMethod ?? null);
-  return { ...component, basis: r.basis };
-}
-
-export interface InlandTruckingInput {
-  sighting: SightingForMatching;
-  destinationPortNormalized: string | null;
-  shippingMethod: 'container' | 'roro' | null;
-  orgId: string;
-}
-
-export async function getInlandTruckingComponent(input: InlandTruckingInput): Promise<CostComponent> {
-  if (!input.destinationPortNormalized || !input.shippingMethod) {
-    return unavailable('no destination port/method selected for this run', '');
-  }
-
-  // Complete, paginated yard list (debt #68) - a bare select silently returns only the first 1,000 rows.
-  const yards = await listActiveYardKeys(input.orgId);
-
-  const matchResult = matchSightingToYard(input.sighting, yards);
-  if (matchResult.status !== 'matched' || !matchResult.matchedYard) {
-    return unavailable(`trucking not quotable: ${matchResult.status}`, matchResult.reason);
-  }
-
-  const { data: rates, error: ratesError } = await supabase
-    .from('trucking_rates')
-    .select('vendor, price, source, effective_from, currency, amount_usd')
-    .eq('org_id', input.orgId)
-    .eq('auction_platform', matchResult.effectivePlatform!)
-    .eq('yard_state', matchResult.matchedYard.yard_state)
-    .eq('yard_city', matchResult.matchedYard.yard_city)
-    .eq('destination_port_normalized', input.destinationPortNormalized)
-    .eq('shipping_method', input.shippingMethod)
-    .is('effective_to', null);
-
-  if (ratesError) throw new Error(`Failed to load trucking rates: ${ratesError.message}`);
-  if (!rates || rates.length === 0) {
-    return unavailable('trucking not quotable: no current rate for this yard/port/method', `${matchResult.matchedYard.yard_city}, ${matchResult.matchedYard.yard_state} -> ${input.destinationPortNormalized} (${input.shippingMethod})`);
-  }
-
-  // Cheapest in DOLLARS: a non-USD quote is compared by its frozen USD equivalent, never by its raw figure.
-  const priced = (rates as any[]).map(r => ({ ...r, usd: usdAmount(r, r.price, 'trucking rate') })).sort((a, b) => a.usd - b.usd);
-  const cheapest = priced[0];
-  return {
-    status: 'available',
-    amountUsd: cheapest.usd,
-    reason: null,
-    detail: `Cheapest of ${rates.length} current quote(s) for ${matchResult.matchedYard.yard_city}, ${matchResult.matchedYard.yard_state} -> ${input.destinationPortNormalized} (${input.shippingMethod})`,
-    sourceRows: [{ label: `${cheapest.vendor} (inland trucking)`, source: cheapest.source, effectiveFrom: cheapest.effective_from }],
-  };
-}
-
-export async function getOceanFreightComponent(orgId: string, shippingMethod: 'container' | 'roro' | null, destinationPortLabel: string | null): Promise<CostComponent> {
-  if (!shippingMethod || !destinationPortLabel) {
-    return unavailable('no shipping method/destination selected for this run', '');
-  }
-
-  const { data, error } = await supabase
-    .from('cost_rates')
-    .select('label, rate_value, rate_value_max, source, effective_from, currency, amount_usd')
-    .eq('org_id', orgId)
-    .eq('cost_category', 'ocean_freight')
-    .ilike('label', `%${shippingMethod}%`)
-    .ilike('label', `%${destinationPortLabel}%`)
-    .is('effective_to', null);
-
-  if (error) throw new Error(`Failed to load ocean freight rates: ${error.message}`);
-  if (!data || data.length === 0) {
-    return unavailable('no ocean freight rate stored for this method/destination', `looked for cost_rates.cost_category='ocean_freight' matching "${shippingMethod}" and "${destinationPortLabel}" - none entered yet (PLAN_TRACKER.md debt #35)`);
-  }
-
-  const row = data[0] as any;
-  // A non-USD rate is read through its frozen USD equivalent; its max shares that frozen exchange rate.
-  const valueUsd = usdAmount(row, row.rate_value, 'ocean freight rate');
-  const maxUsd = row.rate_value_max ? (valueUsd / Number(row.rate_value)) * Number(row.rate_value_max) : null;
-  const amount = maxUsd !== null ? (valueUsd + maxUsd) / 2 : valueUsd;
-  return {
-    status: 'available',
-    amountUsd: amount,
-    reason: null,
-    detail: row.rate_value_max ? `Midpoint of $${row.rate_value}-$${row.rate_value_max} range` : `$${row.rate_value}`,
-    sourceRows: [{ label: row.label, source: row.source, effectiveFrom: row.effective_from }],
-  };
-}
-
-// C2 remains blocked on collecting 10+ assessment notices (PLAN_TRACKER.md). Explicitly "not
-// yet calculable" - never zero, never estimated. Do not build C2 here (PROMPT_21 out of scope).
-export function getDutyComponent(): CostComponent {
-  return unavailable('C2 duty calculator not yet built', 'blocked on collecting 10+ assessment notices (PLAN_TRACKER.md Phase C); the 51.47% formula exists but is uncalibrated for declared-CIF purposes');
-}
+const resolveSchedule = (args: ResolveArgs): Promise<Resolved> => sharedResolveSchedule(supabase, args);
+export const getAuctionFeeComponent = (input: AuctionFeeInput): Promise<CostComponent> => sharedAuctionFeeComponent(supabase, input);
+export const getInlandTruckingComponent = (input: InlandTruckingInput): Promise<CostComponent> => sharedInlandTruckingComponent(supabase, input);
+export const getOceanFreightComponent = (orgId: string, shippingMethod: 'container' | 'roro' | null, destinationPortLabel: string | null): Promise<CostComponent> =>
+  sharedOceanFreightComponent(supabase, orgId, shippingMethod, destinationPortLabel);
+export const getDutyComponent = sharedDutyComponent;
 
 // PROMPT 26 - fee as a function of bid, not a bracket lookup on a guessed reference price. Buyer fees are
 // tiered by actual sale price; there is no single correct price to look up a bracket against for a car that
