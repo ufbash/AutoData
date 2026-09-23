@@ -27,10 +27,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchMembership = async (userId: string) => {
     setOrgLoading(true);
     try {
+      // PROMPT 42 Stage 3 - found live: memberships_select's RLS policy deliberately lets a user read their OWN
+      // row even when revoked (`user_id = auth.uid()`, no revoked_at filter - so a revoked client can at least
+      // see they were revoked, rather than a silent mystery), but this query never excluded a revoked row, so
+      // AuthGate treated a revoked client exactly like an active one and routed them to ClientDashboard. Every
+      // actual DATA read inside that dashboard was still correctly empty (current_client_id()/user_org_ids() DO
+      // filter revoked_at, so RLS on clients/won_vehicles/billing_documents/etc. genuinely blocked them - this
+      // was never a data leak, Decision 20.4 still holds) - but a revoked client saw a hollow, confusing "no
+      // vehicles, no invoices" dashboard instead of the clear "your account isn't set up" message. Filtering
+      // revoked_at here makes the two paths agree.
       const { data, error } = await supabase
         .from('memberships')
         .select('org_id, role')
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .is('revoked_at', null);
 
       if (error) throw error;
 
