@@ -1,9 +1,26 @@
-import React from 'react';
-import { Car } from 'lucide-react';
+import React, { useState } from 'react';
+import { Car, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
+// PROMPT 42 Stage 1 - the email/password form below is what the Playwright harness drives (a synthetic org-4
+// account, never Bashir's, never a real client's) - "through the real login form, exactly as a person does" ruled
+// out both writing a session into storage and a hidden test-only route. Google stays primary; this is a real
+// fallback path any staff member could also use if Google sign-in were unavailable.
 const LoginScreen: React.FC = () => {
-  const { signInWithGoogle } = useAuth();
+  const { signInWithGoogle, signInWithPassword } = useAuth();
+  const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submitPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    const { error } = await signInWithPassword(email, password);
+    if (error) setErr(error);
+    setBusy(false);
+  };
 
   return (
     <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center p-4 font-sans text-[#403f4c]">
@@ -13,7 +30,7 @@ const LoginScreen: React.FC = () => {
             <Car className="w-10 h-10 text-[#F0EDDE]" />
           </div>
         </div>
-        
+
         <h1 className="text-3xl font-bold text-[#a58039] leading-none tracking-tight mb-2">
           AutoData
         </h1>
@@ -47,6 +64,24 @@ const LoginScreen: React.FC = () => {
           </svg>
           Continue with Google
         </button>
+
+        {!showPassword ? (
+          <button onClick={() => setShowPassword(true)} className="mt-4 text-xs text-gray-400 hover:text-gray-600 hover:underline">
+            Sign in with email and password instead
+          </button>
+        ) : (
+          <form onSubmit={submitPassword} className="mt-4 text-left space-y-2" data-testid="password-login-form">
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" autoComplete="username"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" data-testid="login-email" />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" autoComplete="current-password"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" data-testid="login-password" />
+            {err && <p className="text-xs text-red-600" data-testid="login-error">{err}</p>}
+            <button type="submit" disabled={busy || !email || !password} data-testid="login-submit"
+              className="w-full bg-[#a58039] text-white py-2 rounded-lg font-bold text-sm disabled:opacity-50 flex items-center justify-center gap-2">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Sign in'}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

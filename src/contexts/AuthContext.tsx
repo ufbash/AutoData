@@ -10,6 +10,7 @@ interface AuthContextType {
   role: 'superadmin' | 'staff' | 'client' | null;
   orgLoading: boolean;
   signInWithGoogle: () => Promise<void>;
+  signInWithPassword: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -100,12 +101,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
+  // PROMPT 42 Stage 1 - a real, second sign-in path (not a test-only backdoor): Google is primary, this is the
+  // fallback for when it's unavailable, and it is what the Playwright harness drives - "through the real login
+  // form, exactly as a person does" ruled out both storage injection and a special test-only route.
+  const signInWithPassword = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error?.message ?? null };
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
   };
 
   return (
-    <AuthContext.Provider value={{ session, user, loading, orgId, role, orgLoading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ session, user, loading, orgId, role, orgLoading, signInWithGoogle, signInWithPassword, signOut }}>
       {children}
     </AuthContext.Provider>
   );

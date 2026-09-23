@@ -27,6 +27,13 @@ dist-ssr
 # Supabase CLI local cache
 supabase/.temp/
 
+# Playwright: test artifacts, and synthetic test-account credentials (org 4 only - never real accounts,
+# but a password is a password, never committed regardless)
+/test-results/
+/playwright-report/
+/playwright/.cache/
+e2e/.env.e2e
+
 # Generated import SQL and vendor source files - may carry proprietary rate data
 scripts/out/
 scripts/input/
