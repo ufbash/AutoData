@@ -9,6 +9,14 @@ export const signIn = async (page: Page, email: string, password: string) => {
   await page.getByTestId('login-email').fill(email);
   await page.getByTestId('login-password').fill(password);
   await page.getByTestId('login-submit').click();
+  // Wait for the session to actually be signed in and persisted, not just for the click to register - a caller
+  // that immediately does a hard navigation (page.goto) right after this would otherwise race the async
+  // signInWithPassword() call and land on the login screen again.
+  await page.waitForFunction(() => {
+    try { return Object.keys(localStorage).some(k => k.startsWith('sb-') && k.endsWith('-auth-token')); }
+    catch { return false; }
+  }, { timeout: 15000 });
+  await expect(page.getByText('Continue with Google')).not.toBeVisible({ timeout: 15000 });
 };
 
 export const signInAsStaff = (page: Page) =>

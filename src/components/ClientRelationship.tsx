@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, ChevronRight, Loader2, AlertTriangle } from 'lucide-react';
 import { briefReference } from '../../supabase/functions/_shared/vehicleHeading';
 import { RelPayment, loadClientRelationship, ClientRelationshipData, RelWonVehicle } from '../services/clientRelationshipService';
+import { getWonVehicleThumbnails, WonVehicle } from '../services/wonVehicleService';
+import { supabase } from '../services/supabaseClient';
 import BillingSection from './BillingSection';
 import ClientAccountStatus from './ClientAccountStatus';
 import ClientAccountStatusSummary from './ClientAccountStatusSummary';
@@ -51,6 +53,8 @@ const ClientRelationship: React.FC<{
   const [data, setData] = useState<ClientRelationshipData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [wonThumbs, setWonThumbs] = useState<Record<string, string | null>>({});
+  const [wonBalances, setWonBalances] = useState<Record<string, { amount: number; currency: string }[]>>({});
 
   const load = useCallback(async (isCancelled: () => boolean) => {
     setLoading(true);
@@ -70,6 +74,47 @@ const ClientRelationship: React.FC<{
     void load(() => cancelled);
     return () => { cancelled = true; };
   }, [load]);
+
+  // PROMPT 42 Stage 2 - the client page lists every won vehicle with a thumbnail and its balance.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data || data.wonVehicles.length === 0) { setWonThumbs({}); return; }
+    void getWonVehicleThumbnails(data.wonVehicles as unknown as WonVehicle[]).then(t => { if (!cancelled) setWonThumbs(t); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [data]);
+
+  // The REAL, live balance per vehicle - not the legacy `invoices` field below (Phase 2's own issuance table,
+  // kept only as read-only history). billing_document_balances has no won_vehicle_id of its own, so it's joined
+  // here to billing_documents for it.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data || data.wonVehicles.length === 0) { setWonBalances({}); return; }
+    (async () => {
+      try {
+        // billing_document_balances is a VIEW - PostgREST does not infer an embeddable relationship to it (tried
+        // and confirmed live: the nested-select form silently returns null for every row, no error). Two plain
+        // queries, joined client-side, instead.
+        const { data: docs } = await supabase.from('billing_documents').select('id, won_vehicle_id, voided_at')
+          .in('won_vehicle_id', data.wonVehicles.map(v => v.id)).eq('doc_type', 'invoice');
+        if (cancelled || !docs || docs.length === 0) { setWonBalances({}); return; }
+        const liveDocs = docs.filter(d => !d.voided_at);
+        if (liveDocs.length === 0) { setWonBalances({}); return; }
+        const { data: bals } = await supabase.from('billing_document_balances').select('document_id, currency, outstanding')
+          .in('document_id', liveDocs.map(d => d.id));
+        if (cancelled || !bals) return;
+        const vehicleByDoc = new Map(liveDocs.map(d => [d.id, d.won_vehicle_id as string]));
+        const out: Record<string, { amount: number; currency: string }[]> = {};
+        for (const b of bals) {
+          const vehicleId = vehicleByDoc.get(b.document_id);
+          const outstanding = Number(b.outstanding);
+          if (!vehicleId || !(outstanding > 0)) continue;
+          (out[vehicleId] ??= []).push({ amount: outstanding, currency: b.currency });
+        }
+        setWonBalances(out);
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [data]);
 
   const back = (
     <button onClick={onBack} className="text-sm font-bold text-[#a58039] hover:underline mb-4 flex items-center gap-1">
@@ -143,18 +188,27 @@ const ClientRelationship: React.FC<{
       </Section>
 
       <Section title="Won vehicles" count={wonVehicles.length} empty="No vehicles won yet." testId="rel-won-vehicles">
-        {wonVehicles.map(v => (
-          <Row key={v.id} onClick={onOpenWonVehicle ? () => onOpenWonVehicle(v.id) : undefined}>
-            <div>
-              <div className="font-medium text-gray-900">{heading(v)}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Won {fmtDate(v.promoted_at)}</div>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {v.currentStatus && <Badge tone="blue">{label(v.currentStatus)}</Badge>}
-              {onOpenWonVehicle && <ChevronRight className="w-4 h-4 text-gray-300" />}
-            </div>
-          </Row>
-        ))}
+        {wonVehicles.map(v => {
+          const bal = wonBalances[v.id] ?? [];
+          return (
+            <Row key={v.id} onClick={onOpenWonVehicle ? () => onOpenWonVehicle(v.id) : undefined}>
+              <div className="flex items-center gap-3">
+                <div className="w-14 h-10 flex-shrink-0 rounded overflow-hidden bg-gray-200" data-testid="rel-won-thumb">
+                  {wonThumbs[v.id] ? <img src={wonThumbs[v.id]!} alt="" className="w-full h-full object-cover" /> : null}
+                </div>
+                <div>
+                  <div className="font-medium text-gray-900">{heading(v)}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Won {fmtDate(v.promoted_at)}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {bal.length > 0 && <span className="text-xs font-semibold text-amber-700">{bal.map((b, i) => <span key={i}>{money(b.amount, b.currency)}{i < bal.length - 1 ? ' + ' : ''}</span>)} owed</span>}
+                {v.currentStatus && <Badge tone="blue">{label(v.currentStatus)}</Badge>}
+                {onOpenWonVehicle && <ChevronRight className="w-4 h-4 text-gray-300" />}
+              </div>
+            </Row>
+          );
+        })}
       </Section>
 
       <Section title="Documents" count={documents.length} empty="No documents uploaded." testId="rel-documents">

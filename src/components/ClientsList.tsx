@@ -5,8 +5,7 @@ import { listClients, createClient, updateClient, softDeleteClient, listClientBr
 import { Plus, Loader2, Users, FileText, ChevronRight, Check, AlertTriangle, Trash2, Edit2, X, Archive, RefreshCw, Car, Copy, Link as LinkIcon, ImageOff } from 'lucide-react';
 import { listTieredMakes, listReferenceModels, TieredMake, ReferenceModel } from '../services/vehicleReferenceService';
 import MakeCombobox from './MakeCombobox';
-import { listWonVehiclesForBrief, getWonVehicleThumbnails, getWonVehicle, WonVehicle } from '../services/wonVehicleService';
-import WonVehicleDetail from './WonVehicleDetail';
+import { listWonVehiclesForBrief, getWonVehicleThumbnails, WonVehicle } from '../services/wonVehicleService';
 import ClientRelationship from './ClientRelationship';
 
 // PROMPT 33 Stage 3 - make/model as vocabulary selections, with an explicit "not listed" free-text
@@ -308,9 +307,12 @@ interface ClientsListProps {
   initialClientId?: string | null;
   initialBriefId?: string | null;
   onConsumedInitialSelection?: () => void;
+  // PROMPT 42 Stage 2 - the won vehicle is a full page at its own URL now (App.tsx owns the route); this replaces
+  // the old in-component modal entirely.
+  onOpenWonVehicle: (id: string) => void;
 }
 
-export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunForClient, initialClientId, initialBriefId, onConsumedInitialSelection }) => {
+export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunForClient, initialClientId, initialBriefId, onConsumedInitialSelection, onOpenWonVehicle }) => {
   const { orgId, orgLoading, role, user } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -326,7 +328,6 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
   const [allRuns, setAllRuns] = useState<ResearchRun[]>([]);
   // PROMPT 34 Stage 2 - won vehicles under the currently-selected brief.
   const [wonVehicles, setWonVehicles] = useState<WonVehicle[]>([]);
-  const [viewingWonVehicle, setViewingWonVehicle] = useState<WonVehicle | null>(null);
   const [relationshipOpen, setRelationshipOpen] = useState(false);
   const [wonVehiclesLoading, setWonVehiclesLoading] = useState(false);
   const [wonThumbs, setWonThumbs] = useState<Record<string, string | null>>({});
@@ -1015,7 +1016,7 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
                       return (
                         <div
                           key={wv.id}
-                          onClick={() => setViewingWonVehicle(wv)}
+                          onClick={() => onOpenWonVehicle(wv.id)}
                           className="flex items-center gap-4 p-3 bg-emerald-50 hover:bg-white hover:border-emerald-400 border border-emerald-100 rounded-lg cursor-pointer transition-colors group"
                         >
                           <div className="w-24 h-16 flex-shrink-0 rounded overflow-hidden bg-gray-200" data-testid="won-thumb">
@@ -1284,18 +1285,9 @@ export const ClientsList: React.FC<ClientsListProps> = ({ onOpenRun, onNewRunFor
             clientId={selectedClient.id}
             orgId={orgId}
             onBack={() => setRelationshipOpen(false)}
-            onOpenWonVehicle={async (id) => { const wv = await getWonVehicle(id); if (wv) setViewingWonVehicle(wv); }}
+            onOpenWonVehicle={onOpenWonVehicle}
           />
         </div>
-      )}
-
-      {viewingWonVehicle && (
-        <WonVehicleDetail
-          wonVehicle={viewingWonVehicle}
-          onOpenRun={onOpenRun}
-          onClose={() => setViewingWonVehicle(null)}
-          onChanged={() => { if (selectedBriefId) void loadWonVehicles(selectedBriefId); }}
-        />
       )}
     </div>
   );

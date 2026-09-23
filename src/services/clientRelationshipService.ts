@@ -9,7 +9,7 @@ import { fetchAllVerified } from '../../supabase/functions/_shared/paginatedRead
 export interface RelClient { id: string; org_id: string; full_name: string; email: string | null; phone: string | null; created_at: string; deleted_at: string | null; user_id: string | null }
 export interface RelBrief { id: string; org_id: string; client_id: string; year_min: number | null; year_max: number | null; make: string | null; model: string | null; status: string | null; deposit_received_at: string | null; deleted_at: string | null }
 export interface RelRun { id: string; org_id: string; client_id: string; client_brief_id: string | null; client_name: string; run_type: string; status: string; created_at: string }
-export interface RelWonVehicle { id: string; org_id: string; client_id: string; brief_id: string | null; run_id: string | null; won_snapshot: Record<string, unknown> | null; promoted_at: string; deleted_at: string | null; currentStatus: string | null }
+export interface RelWonVehicle { id: string; org_id: string; client_id: string; brief_id: string | null; run_id: string | null; research_run_listing_id: string; won_snapshot: Record<string, unknown> | null; promoted_at: string; deleted_at: string | null; currentStatus: string | null }
 export interface RelDocument { id: string; org_id: string; won_vehicle_id: string; document_type: string; original_filename: string; uploaded_at: string }
 export interface RelBalance { issuance_id: string; invoice_amount: number; paid: number; outstanding: number }
 export interface RelInvoice {
@@ -116,7 +116,7 @@ export const loadClientRelationship = async (orgId: string, clientId: string): P
       'id, org_id, client_id, client_brief_id, client_name, run_type, status, created_at',
       q => q.eq('org_id', orgId).eq('client_id', clientId).is('deleted_at', null), [{ col: 'created_at', asc: false }, { col: 'id' }]),
     readAll<Omit<RelWonVehicle, 'currentStatus'>>('won vehicles', 'won_vehicles',
-      'id, org_id, client_id, brief_id, run_id, won_snapshot, promoted_at, deleted_at',
+      'id, org_id, client_id, brief_id, run_id, research_run_listing_id, won_snapshot, promoted_at, deleted_at',
       q => q.eq('org_id', orgId).eq('client_id', clientId), [{ col: 'promoted_at', asc: false }, { col: 'id' }]),
   ]);
   assertOrg('brief', allBriefs, orgId); assertClient('brief', allBriefs, clientId);

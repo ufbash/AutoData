@@ -19,6 +19,8 @@ import { ClientsList } from './components/ClientsList';
 import AdminArea from './components/AdminArea';
 import WonVehicleTrackingView from './components/WonVehicleTrackingView';
 import ClientDashboard from './components/ClientDashboard';
+import WonVehicleDetail from './components/WonVehicleDetail';
+import { getWonVehicle, WonVehicle } from './services/wonVehicleService';
 
 /** Normalize one legacy JSON object into CarSale (supports camelCase or old snake_case keys). */
 function normalizeLegacySaleRecord(
@@ -133,6 +135,38 @@ const MainDashboard: React.FC = () => {
   const [includeMarketData, setIncludeMarketData] = useState(false);
 
   const [showExportModal, setShowExportModal] = useState(false);
+
+  // PROMPT 42 Stage 2 - the won vehicle as a full page with its own URL (/vehicle/:id), not a modal. A real route:
+  // reload keeps the page, the browser back button returns to where the user came from, and the URL can be
+  // shared. `activeWonVehicleId` mirrors `window.location.pathname` in both directions (pushState on navigate-in,
+  // popstate on browser back) rather than owning the truth itself.
+  const [activeWonVehicleId, setActiveWonVehicleId] = useState<string | null>(() => {
+    const m = window.location.pathname.match(/^\/vehicle\/([0-9a-f-]{36})$/i);
+    return m ? m[1] : null;
+  });
+  const [activeWonVehicle, setActiveWonVehicle] = useState<WonVehicle | null>(null);
+  const [wonVehicleLoadError, setWonVehicleLoadError] = useState<string | null>(null);
+  useEffect(() => {
+    const onPopState = () => {
+      const m = window.location.pathname.match(/^\/vehicle\/([0-9a-f-]{36})$/i);
+      setActiveWonVehicleId(m ? m[1] : null);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeWonVehicleId) { setActiveWonVehicle(null); return; }
+    setWonVehicleLoadError(null);
+    getWonVehicle(activeWonVehicleId).then(wv => {
+      if (cancelled) return;
+      if (!wv) setWonVehicleLoadError('This won vehicle was not found, or does not belong to your organisation.');
+      else setActiveWonVehicle(wv);
+    }).catch(e => { if (!cancelled) setWonVehicleLoadError(e?.message || 'Failed to load this won vehicle.'); });
+    return () => { cancelled = true; };
+  }, [activeWonVehicleId]);
+  const navigateToWonVehicle = (id: string) => { window.history.pushState(null, '', `/vehicle/${id}`); setActiveWonVehicleId(id); };
+  const navigateBackFromWonVehicle = () => { window.history.back(); };
   const [exportCurrency, setExportCurrency] = useState<Currency>(Currency.NGN);
   const [showCleanupModal, setShowCleanupModal] = useState(false);
   const [cleanupMapping, setCleanupMapping] = useState<Record<string, string>>({});
@@ -736,9 +770,36 @@ const MainDashboard: React.FC = () => {
             initialClientId={hubClientId}
             initialBriefId={hubBriefId}
             onConsumedInitialSelection={() => { setHubClientId(null); setHubBriefId(null); }}
+            onOpenWonVehicle={navigateToWonVehicle}
           />
         )}
       </main>
+
+      {/* PROMPT 42 Stage 2 - a full-screen overlay, sibling to <main> rather than replacing its content: the
+          view underneath (in particular ClientsList's own `relationshipOpen`/`selectedClient` state, which lives
+          only in memory, never in the URL) must stay mounted while this is open, or "back" would have nothing
+          real to return to - found live, the first version of this replaced <main>'s content instead, which
+          unmounted ClientsList and "back" landed on the default Research Runs tab, not the client relationship
+          the user actually came from. */}
+      {activeWonVehicleId && (
+        <div className="fixed inset-0 z-50 bg-[#F0EDDE] overflow-y-auto p-6" data-testid="won-vehicle-overlay">
+          {activeWonVehicle && activeWonVehicle.id === activeWonVehicleId ? (
+            <WonVehicleDetail
+              wonVehicle={activeWonVehicle}
+              onBack={navigateBackFromWonVehicle}
+              onChanged={() => void getWonVehicle(activeWonVehicleId).then(wv => wv && setActiveWonVehicle(wv))}
+              onOpenRun={(id) => { setActiveRunId(id); setView('research-detail'); navigateBackFromWonVehicle(); }}
+            />
+          ) : wonVehicleLoadError ? (
+            <div className="max-w-4xl mx-auto bg-white p-8 rounded-xl shadow-sm border border-[#ba3b46]/20 text-center">
+              <p className="text-[#ba3b46] font-bold mb-4">{wonVehicleLoadError}</p>
+              <button onClick={navigateBackFromWonVehicle} className="px-4 py-2 bg-[#403f4c] text-white rounded-lg font-bold">Go back</button>
+            </div>
+          ) : (
+            <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
