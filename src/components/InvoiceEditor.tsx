@@ -303,14 +303,14 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
                     <td className="px-1"><input value={l.section} onChange={e => updateLine(i, { section: e.target.value })} className="w-full border rounded px-1.5 py-1" placeholder="Section" /></td>
                     <td className="px-1"><input value={l.description} onChange={e => updateLine(i, { description: e.target.value })} className="w-full border rounded px-1.5 py-1" /></td>
                     <td className="px-1"><input value={l.quantity} onChange={e => updateLine(i, { quantity: e.target.value })} className="w-full border rounded px-1.5 py-1 text-right" /></td>
-                    <td className="px-1"><input value={l.rate} onChange={e => editComputedRate(i, e.target.value)} className="w-full border rounded px-1.5 py-1 text-right" /></td>
+                    <td className="px-1"><input data-testid={`line-rate-${i}`} value={l.rate} onChange={e => editComputedRate(i, e.target.value)} className="w-full border rounded px-1.5 py-1 text-right" /></td>
                     <td className="px-1 flex gap-1">
                       <select value={l.discountType} onChange={e => updateLine(i, { discountType: e.target.value as DiscountType, discountValue: 0 })} className="border rounded px-1 py-1 bg-white text-xs"><option value="none">—</option><option value="percent">%</option><option value="fixed">$</option></select>
                       {l.discountType !== 'none' && <input value={l.discountValue} onChange={e => updateLine(i, { discountValue: e.target.value })} className="w-14 border rounded px-1 py-1" />}
                     </td>
                     <td className="px-1"><select value={l.taxCode ?? ''} onChange={e => updateLine(i, { taxCode: e.target.value || null })} className="w-full border rounded px-1 py-1 bg-white text-xs"><option value="">—</option>{taxCodes.map(t => <option key={t.code} value={t.code}>{t.code}</option>)}</select></td>
-                    <td className="px-1 text-xs text-gray-500">{l.origin === 'computed' ? 'Computed' : l.origin === 'document_backed' ? 'Document' : (
-                      <input value={l.basis ?? ''} onChange={e => updateLine(i, { basis: e.target.value })} placeholder="basis" className="w-full border rounded px-1 py-1" />
+                    <td className="px-1 text-xs text-gray-500" data-testid={`line-origin-${i}`}>{l.origin === 'computed' ? 'Computed' : l.origin === 'document_backed' ? 'Document' : (
+                      <input data-testid={`line-basis-${i}`} value={l.basis ?? ''} onChange={e => updateLine(i, { basis: e.target.value })} placeholder="basis" className="w-full border rounded px-1 py-1" />
                     )}</td>
                     <td className="px-1"><button onClick={() => removeLine(i)}><Trash2 className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" /></button></td>
                   </tr>
@@ -331,7 +331,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
 
           {/* scope statement */}
           {needsScope && (
-            <div><label className="text-xs text-gray-500">Scope of this invoice</label><textarea value={scopeStatement} onChange={e => setScopeStatement(e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-xs text-gray-500">Scope of this invoice</label><textarea data-testid="invoice-scope" value={scopeStatement} onChange={e => setScopeStatement(e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
           )}
           <div><label className="text-xs text-gray-500">Notes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
 
@@ -374,7 +374,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
           {issueErr && <p className="text-xs text-red-600 flex-1">{issueErr}</p>}
           <div className="flex gap-2 ml-auto">
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-            <button onClick={openConfirm} disabled={!preview} className="px-4 py-2 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-40">
+            <button onClick={openConfirm} disabled={!preview} data-testid="editor-issue-btn" className="px-4 py-2 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-40">
               {docType === 'credit_note' ? 'Issue credit note' : docType === 'retainer' ? 'Issue deposit request' : 'Issue invoice'}
             </button>
           </div>
@@ -385,11 +385,11 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
         <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
             <h3 className="font-bold text-[#403f4c] mb-2">Confirm issue</h3>
-            <p className="text-sm text-gray-600 mb-4">This will consume <span className="font-mono font-bold text-[#a58039]">{nextNumber}</span> and cannot be undone — the document can only be voided or reduced by a credit note afterward.</p>
+            <p className="text-sm text-gray-600 mb-4">This will consume <span className="font-mono font-bold text-[#a58039]" data-testid="confirm-issue-number">{nextNumber}</span> and cannot be undone — the document can only be voided or reduced by a credit note afterward.</p>
             <p className="text-sm font-semibold mb-4">Total: {preview ? money(Number(centsToDecimalSafe(preview.totalCents)), currency) : '—'}</p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirmOpen(false)} className="px-3 py-1.5 text-sm text-gray-600">Cancel</button>
-              <button onClick={doIssue} disabled={issuing} className="px-3 py-1.5 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+              <button onClick={doIssue} disabled={issuing} data-testid="confirm-issue-btn" className="px-3 py-1.5 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
                 {issuing && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Confirm, issue {nextNumber}
               </button>
             </div>
