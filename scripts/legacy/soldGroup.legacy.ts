@@ -26,12 +26,6 @@ export interface SoldGroupListing {
   sale_confirmed?: boolean | null;
   logged_via: string | null;
   source_platform: string | null;
-  /**
-   * True when this vehicle (VIN/asset) has sold at auction more than once (auction_history: 2+ distinct 'Sold'
-   * events). Derived by the caller from auction_history - optional so a caller that cannot know says nothing, and
-   * absence is not violation (AGENTS.md S6): only an explicit `true` changes anything.
-   */
-  repeat_sale?: boolean | null;
 }
 
 export type RunType = 'sold_comps' | 'active_listings' | 'mixed';
@@ -106,10 +100,6 @@ export function classifySaleConfirmation(listing: SoldGroupListing): SaleConfirm
  * be SAID about a row, never whether it counts.
  */
 export function countsTowardSoldAverage(listing: SoldGroupListing): boolean {
-  // A vehicle that sold twice (crashed, repaired, resold) is not a like-for-like comp: its price reflects a repair
-  // history. Excluded from the average and the count on BOTH sides, because both import this one predicate.
-  // (Decided by Bashir 1 Oct 2026: CRITICAL flag AND excluded from the average.)
-  if (listing.repeat_sale === true) return false;
   const confirmation = classifySaleConfirmation(listing);
   return confirmation.kind === 'confirmed_sold' || confirmation.kind === 'no_mechanism_for_entry_method';
 }
@@ -126,41 +116,7 @@ export function countsTowardSoldAverage(listing: SoldGroupListing): boolean {
 export function isInSoldPopulation(listing: SoldGroupListing, runType: RunType): boolean {
   if (runType === 'sold_comps') return true;
   if (runType === 'active_listings') return false;
-  // PROMPT 43 Stage 3 (PROJECT_CHARTER 5.7, extended 1 Oct 2026): in a MIXED run lot state decides which population a
-  // listing belongs to, and an unknown lot state belongs to NEITHER. Before this a listing with no lot state and no
-  // bid satisfied this predicate (sold) AND the active-side filters (active) at the same time.
-  if (lotStateUnknown(listing)) return false;
   return listing.lot_state !== 'active' && listing.current_bid_usd === null;
-}
-
-/** lot_state is null or the literal 'unknown': the capture could not say whether the lot is live or over. */
-export function lotStateUnknown(listing: { lot_state: string | null }): boolean {
-  return listing.lot_state === null || listing.lot_state === undefined || listing.lot_state === 'unknown';
-}
-
-/**
- * Is this listing in the ACTIVE (client-options) population for a run of this type?
- *  - active_listings run: every listing (the run type is the staff member's declaration at attach time; eligibility
- *    was checked then). Risk checks must not silently vanish for a listing the run was built to offer a client.
- *  - sold_comps run: none.
- *  - mixed run: lot state decides, and ONLY a lot known to be 'active' is active - regardless of whether a bid
- *    exists (AGENTS.md 4.1: current_bid_usd is not a liveness test; the old live-group filter required a bid, so a
- *    live lot with no bids yet belonged to no group while the risk checks still treated it as active).
- */
-export function isInActivePopulation(listing: SoldGroupListing, runType: RunType): boolean {
-  if (runType === 'active_listings') return true;
-  if (runType === 'sold_comps') return false;
-  return listing.lot_state === 'active';
-}
-
-/** 'unknown' = lot state unknown (mixed run); 'none' = known state but in neither group (e.g. a finished lot that only
- *  carries a bid, which 4.1 says is not a sale). Kept apart so the UI never labels a known lot 'lot state unknown'. */
-export type Population = 'sold' | 'active' | 'unknown' | 'none';
-/** The one answer to "which group is this listing in", for the staff page, the rules module and public-run alike. */
-export function populationOf(listing: SoldGroupListing, runType: RunType): Population {
-  if (isInSoldPopulation(listing, runType)) return 'sold';
-  if (isInActivePopulation(listing, runType)) return 'active';
-  return runType === 'mixed' && lotStateUnknown(listing) ? 'unknown' : 'none';
 }
 
 /** Convenience: in the sold population AND its price counts. */

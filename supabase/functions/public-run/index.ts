@@ -3,7 +3,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 // PROMPT 29 Stage 2 - the single definition of the sold population, shared literally with the
 // staff dashboard (src/components/ResearchRunDetail.tsx imports this same file). Closes the
 // divergence that caused the Prompt 25 client-facing bug: there is no second copy to drift.
-import { isInSoldPopulation, countsTowardSoldAverage, SoldGroupListing, RunType } from "../_shared/soldGroup.ts";
+import { SoldGroupListing, RunType } from "../_shared/soldGroup.ts";
+import { classifyListing } from "../_shared/riskRules.ts";
+import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from "../_shared/auctionHistory.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,8 +15,9 @@ const corsHeaders = {
 // The nested sighting row this function selects, reduced to the shape the shared rules read.
 // Explicit rather than a cast, so a future select-list change that drops one of these fields
 // is a type error here instead of a silently-null rule (the AGENTS.md §4 failure mode).
-const soldGroupShape = (sighting: any, repeatSale = false): SoldGroupListing => ({
-  repeat_sale: repeatSale,
+const soldGroupShape = (sighting: any, assetId: string | null = null): any => ({
+  id: sighting.id ?? 'x', asset_id: assetId, vin: null, year: null, make: null, model: null, trim: null, mileage_miles: null,
+  damage_type: null, secondary_damage: null, title_type: null, runs_and_drives: null, seller_type: null,
   lot_state: sighting.lot_state ?? null,
   current_bid_usd: sighting.current_bid_usd ?? null,
   price_usd: sighting.price_usd ?? null,
@@ -260,30 +263,26 @@ serve(async (req) => {
       throw listingsError;
     }
 
-    // 5b. REPEAT SALE (Bashir 1 Oct 2026): a vehicle that sold at auction 2+ times (crash, repair, resale) is not a
-    // like-for-like comp. Derived here from auction_history (service role) and used ONLY as a boolean - the history
-    // rows themselves never leave this function (decision 4.13: a derived value may be public, a raw one may not).
-    // It feeds the same shared predicate the staff page uses, so both sides exclude the same listings.
-    const repeatSaleAssetIds = new Set<string>();
+    // 5b. PROMPT 43 Stage 2 - history flags for the run's assets, derived by the SAME shared function the staff page
+    // uses (supabase/functions/_shared/auctionHistory.ts), and every listing is classified by the SAME shared module
+    // (_shared/riskRules.ts classifyListing): which group it is in, whether its price counts, whether it is a repeat
+    // sale. The history rows themselves never leave this function (decision 4.13: only derived booleans may be public).
+    // A failed history read must not silently turn a rule off - that is exactly how a flag "randomly stops" - so it throws.
+    const historyFlags = new Map<string, AuctionHistoryFlags>();
     {
       const assetIds = Array.from(new Set((listingsData || []).map((r: any) => r.sighting?.asset?.id).filter(Boolean))) as string[];
+      const rowsByAsset = new Map<string, any[]>();
       for (let i = 0; i < assetIds.length; i += 100) {
         const { data: hist, error: histError } = await supabaseClient
           .from('auction_history')
-          .select('asset_id, auction_platform, lot_number')
-          .in('asset_id', assetIds.slice(i, i + 100))
-          .eq('status', 'Sold');
-        // A failed history read must not silently turn the rule off - that is exactly how a flag "randomly stops".
+          .select('asset_id, auction_platform, lot_number, auction_date, bid_amount_usd, odometer_miles, status')
+          .in('asset_id', assetIds.slice(i, i + 100));
         if (histError) throw histError;
-        const eventsByAsset = new Map<string, Set<string>>();
-        (hist || []).forEach((h: any) => {
-          if (!eventsByAsset.has(h.asset_id)) eventsByAsset.set(h.asset_id, new Set());
-          eventsByAsset.get(h.asset_id)!.add(`${h.auction_platform ?? ''}::${h.lot_number ?? ''}`);
-        });
-        eventsByAsset.forEach((events, assetId) => { if (events.size >= 2) repeatSaleAssetIds.add(assetId); });
+        (hist || []).forEach((h: any) => { if (!rowsByAsset.has(h.asset_id)) rowsByAsset.set(h.asset_id, []); rowsByAsset.get(h.asset_id)!.push(h); });
       }
+      assetIds.forEach(id => historyFlags.set(id, deriveAuctionHistoryFlags(rowsByAsset.get(id))));
     }
-    const isRepeatSale = (row: any) => !!row.sighting?.asset?.id && repeatSaleAssetIds.has(row.sighting.asset.id);
+    const classify = (row: any) => classifyListing(soldGroupShape(row.sighting || {}, row.sighting?.asset?.id ?? null), run.run_type as RunType, historyFlags);
 
     // 6. Explicitly map allow-list of fields
     const publicRun = {
@@ -335,7 +334,7 @@ serve(async (req) => {
     // mixed run needs) - found auditing this file for Stage 2, not reported by any prompt.
     const inSoldPopulationById = new Map<string, boolean>();
     (listingsData || []).forEach((row: any) => {
-      inSoldPopulationById.set(row.id, isInSoldPopulation(soldGroupShape(row.sighting || {}, isRepeatSale(row)), run.run_type));
+      inSoldPopulationById.set(row.id, classify(row).population === 'sold');
     });
 
     const publicListings = (listingsData || []).map((row: any) => {
@@ -407,12 +406,16 @@ serve(async (req) => {
         // by ResearchRunDetail.tsx. This exact re-derivation is what silently diverged for
         // months and produced the Prompt 25 bug; there is now nothing left to diverge FROM.
         sale_unconfirmed: (() => {
-          if (!isInSoldPopulation(soldGroupShape(sighting, isRepeatSale(row)), run.run_type)) return false;
-          return !countsTowardSoldAverage(soldGroupShape(sighting, isRepeatSale(row)));
+          const c = classify(row);
+          if (c.population !== 'sold') return false;
+          return !c.countsTowardAverage;
         })(),
 
         // Derived boolean only. True => the page says why this price is not in the average.
-        repeat_sale: isInSoldPopulation(soldGroupShape(sighting), run.run_type) && isRepeatSale(row),
+        repeat_sale: classify(row).population === 'sold' && classify(row).repeatSale,
+
+        // Mixed run only: the capture could not say whether the lot is live or over, so it is in NO average. Labelled.
+        lot_state_unknown: classify(row).population === 'unknown',
 
         // PROMPT 28 Stage 1 - disclosure, not a spec flag (PROJECT_CHARTER.md S5.1: widen
         // bands and say so, never silently). 'out_of_range' only within the sold population,
@@ -420,7 +423,7 @@ serve(async (req) => {
         // an unknown year is not a violation (S4.1), it is unclassifiable, and stays null.
         // Never excludes the listing from anything; purely informational.
         range_status: (() => {
-          if (!isInSoldPopulation(soldGroupShape(sighting), run.run_type) || !rangeStated || asset.year == null) return null;
+          if (classify(row).population !== 'sold' || !rangeStated || asset.year == null) return null;
           const belowMin = briefYearMin != null && asset.year < briefYearMin;
           const aboveMax = briefYearMax != null && asset.year > briefYearMax;
           return (belowMin || aboveMax) ? 'out_of_range' : 'in_range';

@@ -1318,3 +1318,19 @@ export const restoreRun = async (runId: string): Promise<void> => {
     throw new Error(`Failed to restore research run: ${error.message}`);
   }
 };
+
+
+// PROMPT 43 Stage 2 - the set of unresolved flags that existed when sharing was switched on (migration 083, stored on
+// the staff-only research_runs_staff_notes). null = never recorded (a run shared before this existed).
+export const getShareFlagSnapshot = async (runId: string): Promise<string[] | null> => {
+  const { data, error } = await supabase.from('research_runs_staff_notes').select('shared_flag_keys').eq('run_id', runId).maybeSingle();
+  if (error) throw new Error(`Failed to read the share flag snapshot: ${error.message}`);
+  const keys = (data as { shared_flag_keys?: unknown } | null)?.shared_flag_keys;
+  return Array.isArray(keys) ? (keys as string[]) : null;
+};
+
+export const saveShareFlagSnapshot = async (runId: string, orgId: string, keys: string[]): Promise<void> => {
+  const { error } = await supabase.from('research_runs_staff_notes')
+    .upsert({ run_id: runId, org_id: orgId, shared_flag_keys: keys, shared_flags_at: new Date().toISOString() }, { onConflict: 'run_id' });
+  if (error) throw new Error(`Failed to record the share flag snapshot: ${error.message}`);
+};

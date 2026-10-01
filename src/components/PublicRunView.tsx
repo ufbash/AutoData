@@ -183,6 +183,11 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
                 {listing.repeat_sale ? 'Sold more than once - not in the average' : 'Unconfirmed sale'}
               </div>
             )}
+            {listing.lot_state_unknown && !listing.sale_unconfirmed && (
+              <div className="absolute top-2 right-2 bg-gray-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm backdrop-blur-sm">
+                Lot state unknown - not in any average
+              </div>
+            )}
             {/* PROMPT 28 Stage 1 - information, not a warning: deliberately blue, not amber,
                 and never "wrong" or "flagged" wording - this comp is legitimate market history
                 outside the brief's stated range, still fully counted above. */}
