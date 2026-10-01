@@ -301,7 +301,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
           <div className="border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500">
-                <tr><th className="text-left px-2 py-1.5 w-8"></th><th className="text-left px-2 py-1.5">Section</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-16">Qty</th><th className="text-right px-2 py-1.5 w-24">Rate</th><th className="text-left px-2 py-1.5 w-28">Discount</th><th className="text-left px-2 py-1.5 w-20">Tax</th><th className="text-left px-2 py-1.5 w-24" title="For a figure you typed: what it rests on (a quote, an agreement, an invoice). Required.">Basis (required)</th>{isRetail && <th className="text-left px-2 py-1.5 w-16">Client sees</th>}<th className="w-16"></th></tr>
+                <tr><th className="text-left px-2 py-1.5 w-8"></th><th className="text-left px-2 py-1.5">Section</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-16">Qty</th><th className="text-right px-2 py-1.5 w-24">Rate</th><th className="text-left px-2 py-1.5 w-28">Discount</th><th className="text-left px-2 py-1.5 w-20">Tax</th><th data-testid="basis-header" className="text-left px-2 py-1.5 w-32" title="For a figure you typed: what it rests on (a quote, an agreement, an invoice). Required. Whatever you type here is PRINTED on the client's invoice.">Basis (required)<div className="font-normal normal-case text-[10px] text-amber-700">Printed on the client's invoice</div></th>{isRetail && <th className="text-left px-2 py-1.5 w-16">Client sees</th>}<th className="w-16"></th></tr>
               </thead>
               <tbody>
                 {lines.map((l, i) => (
@@ -317,7 +317,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
                     </td>
                     <td className="px-1"><select value={l.taxCode ?? ''} onChange={e => updateLine(i, { taxCode: e.target.value || null })} className="w-full border rounded px-1 py-1 bg-white text-xs"><option value="">—</option>{taxCodes.map(t => <option key={t.code} value={t.code}>{t.code}</option>)}</select></td>
                     <td className="px-1 text-xs text-gray-500" data-testid={`line-origin-${i}`}>{l.origin === 'computed' ? 'Computed' : l.origin === 'document_backed' ? 'Document' : (
-                      <input data-testid={`line-basis-${i}`} value={l.basis ?? ''} onChange={e => updateLine(i, { basis: e.target.value })} placeholder="what it rests on" className="w-full border rounded px-1 py-1" />
+                      <input data-testid={`line-basis-${i}`} value={l.basis ?? ''} onChange={e => updateLine(i, { basis: e.target.value })} placeholder="what it rests on (printed)" className="w-full border rounded px-1 py-1" />
                     )}</td>
                     {isRetail && <td className="px-1 text-center"><input data-testid={`line-visible-${i}`} type="checkbox" checked={l.clientVisible} onChange={e => updateLine(i, { clientVisible: e.target.checked })} title="Untick to keep this cost line off what the client sees (retail: only the all-inclusive price is shown)" /></td>}
                     <td className="px-1"><button onClick={() => removeLine(i)}><Trash2 className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" /></button></td>
