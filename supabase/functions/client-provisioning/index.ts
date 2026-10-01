@@ -31,7 +31,7 @@ serve(async (req: Request) => {
     if (authError || !user) return json({ error: "Unauthorized: Invalid token" }, 401);
 
     // Staff-only, exactly like every other org-scoped function - a client token gets the same refusal here as anywhere else.
-    const { data: memberships, error: memError } = await db.from('memberships').select('org_id, role').eq('user_id', user.id);
+    const { data: memberships, error: memError } = await db.from('memberships').select('org_id, role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     const staff = (memberships ?? []).filter((m: { role: string }) => m.role !== 'client');
     const isSuperadmin = staff.some((m: { role: string }) => m.role === 'superadmin');

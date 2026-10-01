@@ -25,7 +25,7 @@ export type RuleKey =
   | 'zero_listings' | 'duplicate' | 'prior_auction_history' | 'prior_auction_not_checkable'
   | 'critical_damage' | 'spec_critical' | 'spec_warn' | 'odometer_rollback' | 'repeat_sale'
   | 'range_disclosure' | 'no_price' | 'non_insurance' | 'limited_sample' | 'different_model'
-  | 'population_mismatch' | 'population_unknown' | 'unconfirmed_sale' | 'lot_state_unknown';
+  | 'population_mismatch' | 'population_unknown' | 'unconfirmed_sale' | 'lot_state_unknown' | 'bid_only_not_a_sale';
 
 /** badge text per rule; `null` = the rule deliberately has no per-listing badge (it names no individual listing). */
 export const RULE_REGISTRY: Record<RuleKey, { badge: string | null; severity: Severity[] }> = {
@@ -46,7 +46,8 @@ export const RULE_REGISTRY: Record<RuleKey, { badge: string | null; severity: Se
   population_mismatch: { badge: 'Population mismatch', severity: ['WARN'] },
   population_unknown: { badge: 'Unknown source', severity: ['INFO'] },
   unconfirmed_sale: { badge: 'Unconfirmed sale', severity: ['WARN'] },
-  lot_state_unknown: { badge: 'Lot state unknown - not in any average', severity: ['INFO'] },
+  lot_state_unknown: { badge: 'Lot state unknown - not in any average', severity: ['INFO', 'WARN'] },
+  bid_only_not_a_sale: { badge: 'Final bid only - not a confirmed sale, not in any average', severity: ['INFO'] },
 };
 
 export interface RuleItem {
@@ -133,7 +134,7 @@ const CRITICAL_KEYWORDS = [
 ];
 const US_AUCTION_SOURCES = ['copart', 'bidcars', 'iaai'];
 
-const slug = (s: string) => s.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase().slice(0, 80);
+const slug = (s: string) => s.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase().slice(0, 200);
 const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
 /** The listing as the soldGroup predicates see it, with the repeat-sale fact merged from auction history. */
@@ -363,11 +364,21 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
   // population at all; in a typed run the run's own type still places them (staff chose it at attach time) but staff
   // are told which listings still need classifying either way.
   const unknownLot = listings.filter(l => lotStateUnknown(l));
-  if (unknownLot.length > 0) push({ id: 'lot_state_unknown', rule: 'lot_state_unknown', type: 'INFO',
+  // In a MIXED run these listings are in no population, so NO risk check ever looks at them - and an INFO never blocks
+  // sharing, which is how a flood car could reach a client unflagged (the AGENTS.md 4.1 pattern). So there it is a WARN:
+  // sharing needs a reviewed tick. In a typed run the run type still places the listing (and its risk checks run).
+  if (unknownLot.length > 0) push({ id: 'lot_state_unknown', rule: 'lot_state_unknown', type: isMixed ? 'WARN' : 'INFO',
     message: isMixed
-      ? `${plural(unknownLot.length, 'listing')} with unknown lot state - in NO average and NO risk check until classified.`
-      : `${plural(unknownLot.length, 'listing')} with unknown lot state (counted as this run's own type; classify it to be sure).`,
+      ? `${plural(unknownLot.length, 'listing')} with unknown lot state - in NO average and NO risk check, so it cannot be vetted. To fix: re-capture that lot from its auction page so its live/finished state is recorded, or remove it from the run.`
+      : `${plural(unknownLot.length, 'listing')} with unknown lot state (counted as this run's own type; re-capture the lot from its auction page to record its state).`,
     offenderIds: unknownLot.map(l => l.id), passed: false });
+
+  // a FINISHED lot that only carries a bid (4.1: a final bid alone is not a sale) is in neither group of a mixed run -
+  // name it, so a car that is in no average never has no explanation (the verifier found it silent)
+  const bidOnly = isMixed ? listings.filter(l => populationOf(l, runType) === 'none') : [];
+  if (bidOnly.length > 0) push({ id: 'bid_only_not_a_sale', rule: 'bid_only_not_a_sale', type: 'INFO',
+    message: `${plural(bidOnly.length, 'finished listing')} carry only a bid, not a confirmed sale - in no average.`,
+    offenderIds: bidOnly.map(l => l.id), passed: false });
 
   return items;
 }
@@ -404,8 +415,10 @@ export function classifyListing(l: RuleListing, runType: RunType, historyFlags: 
 export function flagKeys(items: RuleItem[]): { key: string; item: RuleItem; listingId: string | null }[] {
   const out: { key: string; item: RuleItem; listingId: string | null }[] = [];
   items.filter(i => !i.passed && i.type !== 'INFO').forEach(item => {
-    if (item.offenderIds.length === 0) out.push({ key: item.rule, item, listingId: null });
-    else item.offenderIds.forEach(id => out.push({ key: `${item.rule}:${id}`, item, listingId: id }));
+    // keyed on the item id (it carries the REASON), not just the rule: a listing that already had one critical reason and
+    // gains a second must read as new (found by the Prompt 43 adversarial verifier)
+    if (item.offenderIds.length === 0) out.push({ key: item.id, item, listingId: null });
+    else item.offenderIds.forEach(id => out.push({ key: `${item.id}:${id}`, item, listingId: id }));
   });
   return out;
 }

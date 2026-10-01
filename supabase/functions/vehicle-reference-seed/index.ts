@@ -58,7 +58,7 @@ serve(async (req: Request) => {
     }
 
     const { data: memberships, error: memError } = await supabase
-      .from('memberships').select('role').eq('user_id', user.id);
+      .from('memberships').select('role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     const hasAccess = memberships?.some((m: { role: string }) => m.role === 'superadmin');
     if (!hasAccess) {

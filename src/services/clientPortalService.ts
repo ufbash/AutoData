@@ -19,7 +19,7 @@ export interface MyDocument { id: string; won_vehicle_id: string; document_type:
 export interface MyBillingDoc {
   id: string; doc_type: 'invoice' | 'retainer' | 'credit_note'; invoice_kind: string | null; number_text: string; issue_date: string; due_date: string | null;
   currency: string; settlement_currency: string; fx_rate: number | null; scope_statement: string | null; total: number; voided_at: string | null;
-  won_vehicle_id: string | null; external_description: string | null;
+  won_vehicle_id: string | null; external_description: string | null; file_id: string | null;
 }
 export interface MyBillingLine { document_id: string; position: number; section: string; description: string; quantity: number; rate: number; discount_amount: number; net_amount: number }
 export interface MyBalance { document_id: string; outstanding: number; outstanding_settlement: number | null; applied_payments: number; applied_retainer_credits: number; credit_notes: number }
@@ -75,7 +75,7 @@ export const getMyDocumentUrl = async (documentId: string): Promise<string> => {
 export const listMyBillingDocs = async (): Promise<MyBillingDoc[]> => {
   const rows = await fetchAllVerified<Record<string, unknown>>('your invoices',
     (from, to) => supabase.from('billing_documents')
-      .select('id, doc_type, invoice_kind, number_text, issue_date, due_date, currency, settlement_currency, fx_rate, scope_statement, total, voided_at, won_vehicle_id, external_description')
+      .select('id, doc_type, invoice_kind, number_text, issue_date, due_date, currency, settlement_currency, fx_rate, scope_statement, total, voided_at, won_vehicle_id, external_description, file_id')
       .order('issue_date', { ascending: false }).range(from, to),
     () => supabase.from('billing_documents').select('id', { count: 'exact', head: true }));
   return rows.map(r => ({ ...r, total: Number(r.total), fx_rate: num(r.fx_rate) })) as MyBillingDoc[];
@@ -105,6 +105,23 @@ export const listMyReceipts = (): Promise<MyReceipt[]> =>
   fetchAllVerified<MyReceipt>('your receipts',
     (from, to) => supabase.from('billing_receipts').select('id, receipt_number, payment_id, issued_at, voided_at, file_id').order('issued_at', { ascending: false }).range(from, to),
     () => supabase.from('billing_receipts').select('id', { count: 'exact', head: true }));
+
+// PROMPT 43 Stage 4 - view (inline) or download (attachment) one of the client's OWN billing PDFs - an invoice, a credit
+// note, a deposit request or a receipt. The `billing` function's file_url mode signs a link only for staff of the org or
+// for the client the file belongs to (billing_files.client_id), and answers 404 for anything else - the same answer for
+// "missing" and "not yours".
+export const getMyBillingFileUrl = async (fileId: string, forceDownload = false): Promise<string> => {
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session) throw new Error('Please log in.');
+  const projectUrl = (import.meta as any).env?.VITE_SUPABASE_URL as string;
+  const res = await fetch(`${projectUrl}/functions/v1/billing`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.session.access_token}` },
+    body: JSON.stringify({ mode: 'file_url', fileId, download: forceDownload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error(res.status === 404 ? 'That document is not available.' : (data.error || `The request failed (${res.status})`));
+  return data.url as string;
+};
 
 export const getMyReceiptUrl = async (fileId: string): Promise<string> => {
   const { data: session } = await supabase.auth.getSession();

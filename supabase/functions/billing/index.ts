@@ -48,7 +48,7 @@ serve(async (req: Request) => {
     const { data: { user }, error: authError } = await db.auth.getUser(authHeader.replace('Bearer ', ''));
     if (authError || !user) return json({ error: "Unauthorized: Invalid token" }, 401);
 
-    const { data: memberships, error: memError } = await db.from('memberships').select('org_id, role').eq('user_id', user.id);
+    const { data: memberships, error: memError } = await db.from('memberships').select('org_id, role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     // staff only: a membership that is a CLIENT account (Phase B) never writes billing records
     const staff = (memberships ?? []).filter((m: { role: string }) => m.role !== 'client');
@@ -56,8 +56,12 @@ serve(async (req: Request) => {
     const canAccessOrg = (orgId: string) => isSuperadmin || staff.some((m: { org_id: string }) => m.org_id === orgId);
     // PROMPT 39 Stage 4 - a client may read THEIR OWN file (billing_files.client_id), never anyone else's, never
     // anything else in this function (every other mode still checks canAccessOrg, which a client role never satisfies).
-    const { data: myClientRows } = await db.from('clients').select('id').eq('user_id', user.id);
-    const myClientIds = new Set((myClientRows ?? []).map((c: { id: string }) => c.id));
+    // A client's own files only while their CLIENT membership is active: clients.user_id stays set after access is revoked
+    // (so a re-provision is a reactivation), so the link alone must never be enough (found by journey 16: a revoked
+    // client could still sign their own invoice PDF).
+    const activeClientOrgs = new Set((memberships ?? []).filter((m: { role: string }) => m.role === 'client').map((m: { org_id: string }) => m.org_id));
+    const { data: myClientRows } = await db.from('clients').select('id, org_id').eq('user_id', user.id);
+    const myClientIds = new Set((myClientRows ?? []).filter((c: { org_id: string }) => activeClientOrgs.has(c.org_id)).map((c: { id: string }) => c.id));
 
     const payload = await req.json().catch(() => null);
     const mode = payload?.mode;

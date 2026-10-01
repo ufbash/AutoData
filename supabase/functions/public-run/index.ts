@@ -417,6 +417,9 @@ serve(async (req) => {
         // Mixed run only: the capture could not say whether the lot is live or over, so it is in NO average. Labelled.
         lot_state_unknown: classify(row).population === 'unknown',
 
+        // Mixed run only: a FINISHED lot that carries only a bid is not a confirmed sale and is in no average. Labelled.
+        bid_only_lot: run.run_type === 'mixed' && classify(row).population === 'none',
+
         // PROMPT 28 Stage 1 - disclosure, not a spec flag (PROJECT_CHARTER.md S5.1: widen
         // bands and say so, never silently). 'out_of_range' only within the sold population,
         // only when the brief actually states a range, and only when the year itself is known -
@@ -465,7 +468,9 @@ serve(async (req) => {
             else rangeUnknownCount++;
           }
         }
-        if (typeof l.mileage_miles === 'number') {
+        // a recorded mileage of 0 is treated as unknown, exactly as the staff page's listing mapper does (`|| null`) - the
+        // two sides disagreed here (found by the Prompt 43 adversarial verifier; 2 real sightings have mileage 0)
+        if (typeof l.mileage_miles === 'number' && l.mileage_miles > 0) {
           tM += l.mileage_miles;
           mC++;
         }

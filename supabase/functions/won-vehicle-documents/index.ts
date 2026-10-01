@@ -43,7 +43,7 @@ serve(async (req: Request) => {
     if (authError || !user) return json({ error: "Unauthorized: Invalid token" }, 401);
 
     const { data: memberships, error: memError } = await supabase
-      .from('memberships').select('org_id, role').eq('user_id', user.id);
+      .from('memberships').select('org_id, role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     const isSuperadmin = (memberships ?? []).some((m: { role: string }) => m.role === 'superadmin');
     // PROMPT 39 Stage 3 - a client-role membership must never satisfy a staff-only org check; every staff
@@ -145,7 +145,9 @@ serve(async (req: Request) => {
       if (!doc || doc.deleted_at || !doc.client_visible) return json({ error: "Document not found" }, 404);
       const { data: vehicle } = await supabase.from('won_vehicles').select('client_id').eq('id', doc.won_vehicle_id).maybeSingle();
       const { data: client } = await supabase.from('clients').select('id').eq('user_id', user.id).eq('id', vehicle?.client_id ?? '').maybeSingle();
-      if (!client) return json({ error: "Document not found" }, 404);
+      // active CLIENT membership in the document's org is required too (clients.user_id outlives a revoke)
+      const activeClient = (memberships ?? []).some((m: { role: string; org_id: string }) => m.role === 'client' && m.org_id === doc.org_id);
+      if (!client || !activeClient) return json({ error: "Document not found" }, 404);
       const { data: signed, error: signErr } = await supabase.storage.from('won-vehicle-documents').createSignedUrl(doc.storage_path, 300);
       if (signErr || !signed) throw new Error(`Could not sign the link: ${signErr?.message}`);
       return json({ success: true, url: signed.signedUrl, filename: doc.original_filename });

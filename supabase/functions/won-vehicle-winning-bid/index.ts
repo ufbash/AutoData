@@ -36,7 +36,7 @@ serve(async (req: Request) => {
     if (authError || !user) return json({ error: "Unauthorized: Invalid token" }, 401);
 
     const { data: memberships, error: memError } = await supabase
-      .from('memberships').select('org_id, role').eq('user_id', user.id);
+      .from('memberships').select('org_id, role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     const isSuperadmin = (memberships ?? []).some((m: { role: string }) => m.role === 'superadmin');
     // PROMPT 39 Stage 3 - a client-role membership must never satisfy a staff-only org check; every staff

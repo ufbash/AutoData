@@ -131,7 +131,8 @@ test('8.3 client A cannot open another client\'s vehicle - by URL, or through th
 
   const apikey = await captureApiKey(page);
   await page.goto(`/vehicle/${OTHER_CLIENTS_VEHICLE_ID}`);
-  await expect(page.getByText('ZZ Synthetic Client C').first()).toBeVisible({ timeout: 15000 }); // still A's own portal
+  // since Prompt 43 Stage 4 a foreign vehicle address shows an explicit 'not available' page (journey 17 C covers its wording)
+  await expect(page.getByTestId('portal-not-available')).toBeVisible({ timeout: 15000 });
   await expect(page.getByTestId('won-vehicle-page')).toHaveCount(0);
   expect(await page.locator('body').innerText()).not.toMatch(/Danmusa|Mohammed/);
 

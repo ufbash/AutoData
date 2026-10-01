@@ -177,6 +177,27 @@ silent('known lot state raises nothing', run('mixed', [SOLD(), L()]), 'lot_state
   check('no snapshot (shared before tracking): a BLOCK is always reported', newlyFlagged(run('active_listings', [L({ vin: 'D' }), L({ vin: 'D' })]), null, true).some(f => f.item.rule === 'duplicate'));
   check('no snapshot: a CRITICAL is reported only when no override reason was ever recorded', [newlyFlagged(after, null, false).some(f => f.item.type === 'CRITICAL'), newlyFlagged(after, null, true).some(f => f.item.type === 'CRITICAL')].join() === 'true,false'); }
 
+// ---- adversarial-verifier fixes (Prompt 43 Stage 6)
+{ const bad = L({ vin: 'MULTI', damage_type: 'Water/Flood' });
+  const before = run('active_listings', [bad]);
+  const snap = flagKeys(before).map(f => f.key);
+  const worse = L({ ...bad, runs_and_drives: null }); // same listing id? no - rebuild with the SAME id so it is the same listing
+  const sameId = { ...worse, id: bad.id, asset_id: bad.asset_id };
+  const after = run('active_listings', [sameId]);
+  check('a SECOND critical reason on an already-flagged listing is reported as new (key carries the reason)', newlyFlagged(after, snap, true).some(f => /not confirmed run-and-drive/.test(f.item.message)), JSON.stringify(newlyFlagged(after, snap, true).map(f => f.key))); }
+{ const u = L({ lot_state: null, current_bid_usd: null });
+  check('mixed run: an unknown-lot-state listing is a WARN (it can no longer reach a client on an INFO alone)', run('mixed', [u, SOLD()]).some(i => i.rule === 'lot_state_unknown' && i.type === 'WARN' && !i.passed));
+  check('typed run: it stays INFO (its run type still places it and its risk checks run)', run('active_listings', [L({ lot_state: null })]).some(i => i.rule === 'lot_state_unknown' && i.type === 'INFO')); }
+{ const f = SOLD({ current_bid_usd: 9000 });
+  fires('mixed run: a finished lot that only carries a bid is NAMED, not silent', run('mixed', [f, SOLD()]), 'bid_only_not_a_sale', [f.id]);
+  silent('a normal finished sale is not', run('mixed', [SOLD(), SOLD()]), 'bid_only_not_a_sale'); }
+{ const key = (rows: any[]) => hist(rows).soldEventCount;
+  check('repeat key: platform casing / lot whitespace is the SAME sale (not double counted)', key([sold('1', '2026-01-01', 9000, 10000, 'Copart'), { ...sold('1 ', '2026-01-01', 9000, 10000, 'copart') }]) === 1);
+  check("repeat key: status 'SOLD' / 'Sold ' still counts as a sale", key([{ ...sold('1', '2025-01-01', 8000, 5000), status: 'SOLD' }, { ...sold('2', '2026-01-01', 9000, 9000), status: 'Sold ' }]) === 2);
+  check('repeat key: a relist at the SAME lot on a different date is a second sale', key([sold('7', '2025-01-01', 8000, 5000), sold('7', '2026-03-01', 6000, 12000)]) === 2);
+  check('repeat key: two null-lot Sold rows on different dates are two sales', key([sold(null as any, '2025-01-01', 8000, 5000), sold(null as any, '2026-01-01', 7000, 9000)]) === 2);
+  check('repeat key: the SAME scraped row stored twice is still ONE sale', key([sold('1', '2026-01-01', 9000, 10000), sold('1', '2026-01-01', 9000, 10000), sold('1', '2026-01-01', 9000, 10000)]) === 1); }
+
 // ---- the registry: unknown rules fail LOUDLY
 check('every rule the module EMITTED anywhere above is in the registry (a rule cannot ship unregistered)', [...emitted].every(k => k in RULE_REGISTRY), `emitted but unregistered: ${[...emitted].filter(k => !(k in RULE_REGISTRY)).join(', ')}`);
 check('every rule that FIRED has a badge entry the UI can render', [...fired].every(k => { try { badgeFor({ rule: k }); return true; } catch { return false; } }));

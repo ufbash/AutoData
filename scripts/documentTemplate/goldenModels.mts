@@ -106,7 +106,7 @@ export function creditNote(logo: Uint8Array | null): InvoicePrintModel {
 export function retainer(logo: Uint8Array | null): InvoicePrintModel {
   const m = usdPurchase(logo, { no: 'INV-0028', date: '21/09/2026', deposits: [], balanceUsd: 0, ngn: 0 });
   return {
-    ...m, kind: 'retainer', title: 'RETAINER INVOICE',
+    ...m, kind: 'retainer', title: 'DEPOSIT REQUEST',
     topBalance: { label: 'Balance Due', amount: 695000, currency: N },
     meta: [{ label: 'Invoice No.', value: 'INV-0028' }, { label: 'Invoice Date', value: '21/09/2026' }, { label: 'Payment Due', value: '25/09/2026' }],
     vehicle: null, reference: 'Ref: Retainer for 2019 Lexus RX 350 purchase (IAAI lot 47102233)',

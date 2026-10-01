@@ -56,9 +56,15 @@ export function deriveAuctionHistoryFlags(rows: AuctionHistoryRow[] | null | und
   const appearanceCount = eventKeys.size;
 
   const previouslyUnsold = rows.some(r => r.status === 'Not sold');
-  const previouslySold = rows.some(r => r.status === 'Sold');
+  const isSoldStatus = (st: string | null | undefined) => (st ?? '').trim().toLowerCase() === 'sold';
+  const previouslySold = rows.some(r => isSoldStatus(r.status));
+  // A repeat sale = two DISTINCT sale events. An event is identified by platform + lot + date (normalised: case and
+  // surrounding whitespace never make one sale look like two) and, when the lot number is missing, by its bid too - so
+  // a relist at the same lot on another date is a second sale, two null-lot rows are not silently merged, and the same
+  // scraped row stored twice stays ONE sale. (Found by the Prompt 43 adversarial verifier; none fired on live data.)
+  const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
   const soldEvents = new Set<string>();
-  rows.forEach(r => { if (r.status === 'Sold') soldEvents.add(`${r.auction_platform ?? ''}::${r.lot_number ?? ''}`); });
+  rows.forEach(r => { if (isSoldStatus(r.status)) soldEvents.add([norm(r.auction_platform), norm(r.lot_number), norm(r.auction_date), norm(r.lot_number) === '' ? norm(r.bid_amount_usd) : ''].join('|')); });
   const soldEventCount = soldEvents.size;
 
   const rejectedBids = rows

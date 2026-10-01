@@ -25,8 +25,9 @@ test('mixed run: unknown lot state is in no average, a live lot with no bid is a
   const live = page.locator('div', { has: page.getByText('Client Options (Live)') }).filter({ hasText: 'Listings count' }).last();
   await expect(live).toContainText('1 included');
 
-  // the unknown-lot listing is named, and badged on its own row
-  await expect(page.locator('li', { hasText: 'unknown lot state - in NO average and NO risk check until classified' })).toBeVisible();
+  // the unknown-lot listing is named (a WARN in a mixed run: sharing needs a reviewed tick), says how to fix it, and is badged on its row
+  await expect(page.locator('li', { hasText: 're-capture that lot from its auction page' })).toContainText('(WARN)');
+  await expect(page.locator('li', { hasText: 'unknown lot state - in NO average and NO risk check, so it cannot be vetted' })).toBeVisible();
   await expect(page.locator(`[id="listing-${UNKNOWN}"]`)).toContainText('Lot state unknown - not in any average');
   // ...and the live lot is NOT mislabelled
   await expect(page.locator(`[id="listing-${LIVE_NOBID}"]`)).not.toContainText('Lot state unknown');

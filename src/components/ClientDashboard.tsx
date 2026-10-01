@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, Car, FileText, Receipt as ReceiptIcon, CheckCircle2, Circle, LogOut, Download } from 'lucide-react';
+import { Loader2, Car, FileText, Receipt as ReceiptIcon, CheckCircle2, Circle, LogOut, Download, Eye } from 'lucide-react';
+import ClientAccountStatusSummary from './ClientAccountStatusSummary';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getMyClientRecord, listMyBriefs, listMySharedRuns, listMyWonVehicles, listMyStatusHistory, listMyDocuments,
-  getMyDocumentUrl, listMyBillingDocs, listMyBillingLines, getMyBalance, listMyReceipts, getMyReceiptUrl,
+  getMyDocumentUrl, listMyBillingDocs, listMyBillingLines, getMyBalance, listMyReceipts, getMyBillingFileUrl,
   STATUS_LABELS, STATUS_SEQUENCE,
 } from '../services/clientPortalService';
 import type {
@@ -100,6 +101,13 @@ const InvoiceCard: React.FC<{ doc: MyBillingDoc }> = ({ doc }) => {
   const [balance, setBalance] = useState<MyBalance | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [fileErr, setFileErr] = useState<string | null>(null);
+  const openFile = async (forceDownload: boolean) => {
+    if (!doc.file_id) return;
+    setFileErr(null);
+    try { window.open(await getMyBillingFileUrl(doc.file_id, forceDownload), '_blank', 'noopener'); }
+    catch (e) { setFileErr((e as Error).message); }
+  };
 
   const toggle = async () => {
     const next = !open; setOpen(next);
@@ -123,8 +131,17 @@ const InvoiceCard: React.FC<{ doc: MyBillingDoc }> = ({ doc }) => {
           <div className="text-sm font-medium text-[#3d3a37]">{doc.number_text} <span className="text-xs text-[#9a9184] font-normal">{kindLabel}</span></div>
           <div className="text-xs text-[#9a9184]">{ddmmyyyy(doc.issue_date)}{doc.voided_at ? ' · voided' : ''}</div>
         </div>
-        <div className="text-sm font-semibold text-[#5c4a2f]">{money(doc.total, doc.currency)}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-semibold text-[#5c4a2f]">{money(doc.total, doc.currency)}</div>
+          {doc.file_id && (
+            <span className="flex items-center gap-1.5">
+              <span role="button" tabIndex={0} data-testid="portal-doc-view" title="View" onClick={e => { e.stopPropagation(); void openFile(false); }} className="p-1 rounded hover:bg-[#f0ece0] cursor-pointer"><Eye className="w-3.5 h-3.5 text-[#a58039]" /></span>
+              <span role="button" tabIndex={0} data-testid="portal-doc-download" title="Download PDF" onClick={e => { e.stopPropagation(); void openFile(true); }} className="p-1 rounded hover:bg-[#f0ece0] cursor-pointer"><Download className="w-3.5 h-3.5 text-[#a58039]" /></span>
+            </span>
+          )}
+        </div>
       </button>
+      {fileErr && <p data-testid="portal-doc-error" className="px-4 pb-2 text-xs text-red-600">{fileErr}</p>}
       {open && (
         <div className="px-4 pb-4 border-t border-[#e8e2d0] pt-3">
           {loading && <Loader2 className="w-4 h-4 animate-spin text-[#a58039]" />}
@@ -159,22 +176,25 @@ const InvoiceCard: React.FC<{ doc: MyBillingDoc }> = ({ doc }) => {
 const ReceiptRow: React.FC<{ r: MyReceipt }> = ({ r }) => {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const download = async () => {
+  const open = async (forceDownload: boolean) => {
     if (!r.file_id) return;
     setBusy(true); setErr(null);
-    try { const url = await getMyReceiptUrl(r.file_id); window.open(url, '_blank', 'noopener'); }
+    try { window.open(await getMyBillingFileUrl(r.file_id, forceDownload), '_blank', 'noopener'); }
     catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   };
   return (
     <div className="flex items-center justify-between text-sm py-1.5 border-b border-[#f0ece0] last:border-0">
-      <span className="text-[#3d3a37]">{r.receipt_number}{r.voided_at ? ' (voided)' : ''}</span>
+      <span className="text-[#3d3a37]" data-testid="portal-receipt-number">{r.receipt_number}{r.voided_at ? ' (voided)' : ''}</span>
       <div className="flex items-center gap-2">
         <span className="text-xs text-[#9a9184]">{ddmmyyyy(r.issued_at)}</span>
         {r.file_id && (
-          <button onClick={download} disabled={busy} className="text-[#a58039] hover:text-[#8a6a2f] disabled:opacity-50">
-            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-          </button>
+          <>
+            <button data-testid="portal-receipt-view" title="View" onClick={() => open(false)} disabled={busy} className="text-[#a58039] hover:text-[#8a6a2f] disabled:opacity-50"><Eye className="w-3.5 h-3.5" /></button>
+            <button data-testid="portal-receipt-download" title="Download PDF" onClick={() => open(true)} disabled={busy} className="text-[#a58039] hover:text-[#8a6a2f] disabled:opacity-50">
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            </button>
+          </>
         )}
       </div>
       {err && <p className="text-xs text-red-600">{err}</p>}
@@ -192,6 +212,7 @@ const ClientDashboard: React.FC = () => {
   const [receipts, setReceipts] = useState<MyReceipt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dismissedNotice, setDismissedNotice] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -209,6 +230,22 @@ const ClientDashboard: React.FC = () => {
     return <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center"><Loader2 className="w-8 h-8 text-[#a58039] animate-spin" /></div>;
   }
 
+  // PROMPT 43 Stage 4 - a /vehicle/... address that is not one of THIS client's own vehicles (another client's, one that
+  // does not exist, or nonsense) gets a clear page instead of silently showing the dashboard under a URL that looks like
+  // a different page. One message for all three, so it never says whether a vehicle exists or whose it is.
+  const requestedVehicle = window.location.pathname.startsWith('/vehicle/') ? window.location.pathname.slice('/vehicle/'.length).replace(/\/$/, '') : null;
+  if (requestedVehicle !== null && !vehicles.some(v => v.id === requestedVehicle) && !dismissedNotice) {
+    return (
+      <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center p-6">
+        <div data-testid="portal-not-available" className="bg-white border border-[#e8e2d0] rounded-xl p-8 max-w-md text-center">
+          <h1 className="text-lg font-semibold text-[#3d3a37] mb-2">This page isn't available</h1>
+          <p className="text-sm text-[#9a9184] mb-5">That vehicle isn't part of your account, or the address isn't right. If you were sent this link, please ask the team you're working with.</p>
+          <button data-testid="portal-not-available-back" onClick={() => { window.history.replaceState(null, '', '/'); setDismissedNotice(true); }} className="px-4 py-2 bg-[#a58039] text-white rounded-lg text-sm font-medium">Go to my account</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F0EDDE]">
       <div className="bg-white border-b border-[#e8e2d0] px-6 py-4 flex items-center justify-between">
@@ -222,6 +259,10 @@ const ClientDashboard: React.FC = () => {
       </div>
       <div className="max-w-3xl mx-auto p-5">
         {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
+
+        <Section title="Amount owed" icon={<FileText className="w-4 h-4" />}>
+          <div data-testid="portal-amount-owed"><ClientAccountStatusSummary mine /></div>
+        </Section>
 
         {briefs.length > 0 && (
           <Section title="Your briefs">

@@ -27,7 +27,7 @@ serve(async (req: Request) => {
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
     if (authError || !user) return json({ error: "Unauthorized: Invalid token" }, 401);
-    const { data: memberships, error: memError } = await supabase.from('memberships').select('role').eq('user_id', user.id);
+    const { data: memberships, error: memError } = await supabase.from('memberships').select('role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     if (!memberships?.some((m: { role: string }) => m.role === 'superadmin')) {
       return json({ error: "Merge decisions are restricted to administrators." }, 403);

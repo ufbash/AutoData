@@ -45,7 +45,7 @@ export interface OrgHeader {
 
 export interface InvoicePrintModel {
   kind: 'invoice' | 'retainer' | 'credit_note';
-  title: string;                       // the big word top right: "INVOICE", "RETAINER INVOICE", "CREDIT NOTE"
+  title: string;                       // the big word top right: "INVOICE", "DEPOSIT REQUEST", "CREDIT NOTE"
   org: OrgHeader;
   currency: Currency;                  // the currency of the lines
   topBalance: { label: string; amount: number; currency: Currency };   // "Balance Due" / ₦2,564,550.00 (the settlement figure)

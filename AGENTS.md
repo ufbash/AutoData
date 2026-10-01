@@ -4,9 +4,10 @@
 **Audience:** Claude Code (primary, from 28 Aug 2026). Antigravity built the system through
 5 Aug 2026 — its incidents are kept below because the mistakes are what matters, not which
 tool made them. Applies to any AI agent working this repo.
-**Last revised:** 9 September 2026 — added §4.13/§4.14 (capture-path traps found 6 Sep 2026,
-not previously recorded here). §0-§7 otherwise unchanged since the 28 Aug tooling-switch
-rewrite; the 4 Sep browser-capability correction in §3 already stood.
+**Last revised:** 1 October 2026 — added the production smoke requirement (§3), the consumer-trace rule
+(§4.15) and the revoked-membership trap (§4.16) after the nine-day share-link outage. Earlier: 9 September
+2026 added §4.13/§4.14. §0-§7 otherwise unchanged since the 28 Aug tooling-switch rewrite; the 4 Sep
+browser-capability correction in §3 already stood.
 
 > This file exists because the same mistakes have been made repeatedly. Every rule below
 > is written from a real incident on this project, not from general good practice.
@@ -128,6 +129,26 @@ CLOSING items.** Closing a checklist item requires database output or the user's
 observation. An agent's report of its own browser session is still an agent's summary, which
 §1 above already says is not evidence — running the browser yourself does not exempt you
 from that rule.
+
+### Production smoke — REQUIRED after every Edge Function deploy and every push
+
+```
+npm run smoke
+```
+
+A read-only suite (`e2e/smoke/`, config `playwright.smoke.config.ts`) against the **live** site
+(`https://theautodata.com`): the login page loads; an anonymous **share link** renders with its listings (the page
+*and* the `public-run` function behind it); the **tracking page** renders for a valid synthetic token; a synthetic
+**staff** sign-in reaches the dashboard; a synthetic **client** sign-in reaches the client dashboard. It uses
+**org 4 synthetic data only**, with tokens and passwords from the gitignored `e2e/.env.e2e`.
+
+- **It writes nothing — on production, ever.** No issuing, no payments, no provisioning. A test inside the suite
+  records every request the browser sends and **fails the run** if any non-read request reaches the backend other
+  than the sign-in itself, so the claim is checked, not promised. Never add a step that mutates.
+- Run it **after** the deploy or push, not before. A green local suite says nothing about production.
+- **A red smoke after a deploy means roll the change back or fix it forward immediately** — do not move on.
+- Why it exists: on 22 Sep 2026 migration 074 moved a column, `public-run` kept reading it, and **every client share
+  link was dead for nine days** before a client reported it (`PLAN_TRACKER.md` post-incident note, debt #119).
 
 **The reasoning:** capability is not the same as authorization. Being *able* to run
 `supabase db push` does not mean it is safe to run it unsupervised on a system with no
@@ -260,6 +281,27 @@ capture silently attaches to the old run.** When a capture turns up in a run nob
 select, check `activeRunLastActivity` against the capture's own timestamp before assuming the
 extension mis-selected anything; it more likely never re-evaluated because the popup was
 reopened inside the window. See `docs/SOLVED.md` topic 11.
+
+### 4.15 Before moving, renaming or dropping a column: trace every consumer — Edge Functions included
+Migration 074 moved `research_runs.notes` to a staff-only table. The frontend and the RLS policies were updated and
+tested; **`public-run` was never searched**, kept selecting the dropped column, and returned "not found" for every
+shared run for nine days (a function that maps any lookup error to 404 turns a schema break into a plausible-looking
+"link no longer available" — the same disguise as §4.3).
+
+**Rule: before any migration that renames, moves or drops a column (or a table, a view, or a CHECK value), grep every
+consumer and list them in the migration's report:** frontend services and components, **Edge Functions**
+(`supabase/functions/**`), SQL functions and views (`pg_proc.prosrc`, `pg_views.definition` on the live database),
+`scripts/`, and `e2e/`. After it ships, open a public link as an anonymous visitor (`npm run smoke`). A migration
+report that does not list its consumers is not finished. (Checked 1 Oct 2026 for migrations 066–082: the only
+remaining reader of a moved/dropped column was `public-run`, fixed; no SQL function or view referenced one.)
+
+### 4.16 Every membership read must ignore revoked memberships
+`memberships.revoked_at` marks withdrawn access, and `clients.user_id` deliberately **stays set** after a revoke (so
+re-provisioning is a reactivation). RLS honours `revoked_at`; **Edge Functions use the service role and bypass RLS**, so
+each must filter for itself: `.from('memberships').select(…).eq('user_id', …).is('revoked_at', null)`, and any client-file path must also require
+an **active client membership**, not just `clients.user_id = caller`. Until 1 Oct 2026 none of ~22 functions did: a
+revoked client could still sign a signed URL for their own invoice (proved live in org 4, journey 16), and a revoked
+staff member would have kept every function's powers. A new function that reads memberships without the filter is a bug.
 
 ---
 

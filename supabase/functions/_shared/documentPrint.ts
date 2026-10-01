@@ -42,7 +42,7 @@ export const ddmmyyyy = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}
 const rateText = (r: number) => r.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 const firstWord = (s: string) => (s.trim().split(/\s+/)[0] || s).replace(/[^\p{L}\p{N}-]/gu, '');
 
-const TITLE = { invoice: 'INVOICE', retainer: 'RETAINER INVOICE', credit_note: 'CREDIT NOTE' } as const;
+const TITLE = { invoice: 'INVOICE', retainer: 'DEPOSIT REQUEST', credit_note: 'CREDIT NOTE' } as const;
 
 export function buildInvoicePrintModel(input: {
   doc: PrintDoc; lines: PrintDocLine[]; applications: PrintApplication[]; org: PrintOrg;

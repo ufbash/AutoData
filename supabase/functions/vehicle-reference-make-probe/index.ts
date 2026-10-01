@@ -70,7 +70,7 @@ serve(async (req: Request) => {
       });
     }
     const { data: memberships, error: memError } = await supabase
-      .from('memberships').select('role').eq('user_id', user.id);
+      .from('memberships').select('role').eq('user_id', user.id).is('revoked_at', null);
     if (memError) throw memError;
     if (!memberships?.some((m: { role: string }) => m.role === 'superadmin')) {
       return new Response(JSON.stringify({ error: "Make probing is restricted to administrators." }), {

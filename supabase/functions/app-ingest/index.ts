@@ -88,7 +88,7 @@ serve(async (req: Request) => {
     const { data: memberships, error: memError } = await supabase
       .from('memberships')
       .select('org_id, role')
-      .eq('user_id', user.id);
+      .eq('user_id', user.id).is('revoked_at', null);
 
     if (memError) throw memError;
 

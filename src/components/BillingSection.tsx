@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { notifyBillingChanged } from '../utils/billingEvents';
+import { notifyBillingChanged, useBillingChangeCounter } from '../utils/billingEvents';
 import { Loader2, FileText, Plus, Download, Eye, Ban, Receipt as ReceiptIcon } from 'lucide-react';
 import {
   BillingDoc, Balance, Payment, Receipt, DocType,
@@ -163,7 +163,13 @@ const BillingSection: React.FC<Props> = ({ orgId, clientId, clientName, wonVehic
   // Prompt 42 journey 5 browser test).
   const loadedOnce = useRef(false);
   const [refreshTick, setRefreshTick] = useState(0);
-  const load = async () => {
+  // another Billing list on screen (the client page's under the vehicle page, or the reverse) changed something: refresh
+  // this one too. Found by journey 18 - a deposit request issued on the vehicle page was missing from the client page's
+  // own list until a reload. Own announcements are ignored and a refresh caused by someone else's is silent, so two
+  // lists can never ping-pong.
+  const instanceId = useRef(Math.random().toString(36).slice(2));
+  const otherListChanged = useBillingChangeCounter(instanceId.current);
+  const load = async (opts?: { silent?: boolean }) => {
     const isReload = loadedOnce.current;
     if (!isReload) setLoading(true);
     setErr(null);
@@ -173,11 +179,12 @@ const BillingSection: React.FC<Props> = ({ orgId, clientId, clientName, wonVehic
         listClientPayments(clientId), listClientReceipts(clientId),
       ]);
       setDocs(d); setPayments(p); setReceipts(r);
-      if (isReload) { notifyBillingChanged(); setRefreshTick(t => t + 1); }
+      if (isReload) { if (!opts?.silent) notifyBillingChanged(instanceId.current); setRefreshTick(t => t + 1); }
     } catch (e) { setErr((e as Error).message); }
     finally { loadedOnce.current = true; setLoading(false); }
   };
   useEffect(() => { loadedOnce.current = false; void load(); }, [clientId, wonVehicle?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (otherListChanged > 0) void load({ silent: true }); }, [otherListChanged]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doRecordPayment = async () => {
     setPayBusy(true); setErr(null);

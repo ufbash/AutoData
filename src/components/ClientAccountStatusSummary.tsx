@@ -21,17 +21,18 @@ const STATUS_STYLE: Record<Row['status'], { label: string; cls: string }> = {
   in_credit: { label: 'In credit', cls: 'bg-green-100 text-green-700' },
 };
 
-const ClientAccountStatusSummary: React.FC<{ clientId: string }> = ({ clientId }) => {
+const ClientAccountStatusSummary: React.FC<{ clientId?: string; mine?: boolean }> = ({ clientId, mine }) => {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const billingTick = useBillingChangeCounter();
 
   useEffect(() => {
     let cancelled = false;
-    supabase.from('client_account_status').select('*').eq('client_id', clientId)
+    // `mine`: the client's own door onto the SAME computation (migration 084: one base view, two filtered doors)
+    (mine ? supabase.from('my_account_status').select('*') : supabase.from('client_account_status').select('*').eq('client_id', clientId!))
       .then(({ data, error }) => { if (cancelled) return; if (error) setErr(error.message); else setRows((data ?? []) as Row[]); });
     return () => { cancelled = true; };
-  }, [clientId, billingTick]);
+  }, [clientId, mine, billingTick]);
 
   if (err) return <p className="text-xs text-red-600">{err}</p>;
   if (!rows) return <Loader2 className="w-4 h-4 animate-spin text-[#a58039]" />;

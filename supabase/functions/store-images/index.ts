@@ -67,7 +67,7 @@ serve(async (req) => {
     const { data: membership, error: membershipError } = await supabase
       .from('memberships')
       .select('role')
-      .eq('user_id', user.id)
+      .eq('user_id', user.id).is('revoked_at', null)
       .single();
 
     if (membershipError || !membership || membership.role !== 'superadmin') {
