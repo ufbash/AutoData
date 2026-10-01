@@ -152,6 +152,7 @@ Phase C.
 | 4.13 | A raw client-brief field never enters a public payload; only a value derived from it (a boolean, a count, a status label) may | LOCKED (11 Sep 2026) |
 | 4.14 | Vehicle-identity normalization is derived at fingerprint-computation time only, never written back to a captured make/model/trim field | LOCKED (12 Sep 2026) |
 | 4.16 | A vehicle that sold at auction more than once is a CRITICAL flag (overridable with a typed reason, 4.9) on every run type, and is excluded from the sold average and count by the single shared predicate both the staff page and `public-run` import; the client page says so in words. Reason: its price reflects a repair history, so it is not a like-for-like comp. Not a *risk* rule (4.8 stands for those); a data-integrity rule, the same class as odometer rollback | LOCKED (1 Oct 2026, Bashir) |
+| 4.17 | A listing with unknown `lot_state` (null or `unknown`) belongs to no population: labelled 'Lot state unknown - not in any average', in neither the sold nor the active average/count, listed for staff to classify. Extends `PROJECT_CHARTER.md` 5.7. Implemented in Prompt 43 Stage 3 | LOCKED (1 Oct 2026, Bashir) |
 | 4.15 | Title status has one classifier, taking the severe reading for active-listing eligibility/blocking; disagreement is surfaced, never silently resolved; never applied to sold comps | LOCKED (12 Sep 2026) |
 
 **On 4.11/4.12 — supersedes `PROJECT_CHARTER.md` §6's original wording.** A car auctioned
@@ -187,6 +188,8 @@ actively wrong.
 car that *genuinely sold* is valid market history. Blocking it from a sold-comps run would
 corrupt the very average that 4.1/4.2 exist to protect. Client-protection rules protect
 clients; market history records the market.
+
+**Amended 1 Oct 2026 (Prompt 43 Stage 1, with `PROJECT_CHARTER.md` 5.6).** Original text above retained. The narrow exception: a vehicle with two or more distinct confirmed sales is shown, labelled and excluded from the sold average (4.16), because repeated resale means the price describes a repair history. Everything else here stands - a car that sold once stays in and still counts, however damaged.
 
 **On 4.9 — three severity tiers:**
 

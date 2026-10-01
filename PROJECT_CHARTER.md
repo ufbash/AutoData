@@ -136,9 +136,25 @@ apply here and only here.
 Applying client-protection rules to market history corrupts the average. Applying
 market-history rules to client options hides risk. This separation is load-bearing.
 
+> **Amended 1 Oct 2026 (Prompt 43 Stage 1; `DECISIONS.md` 4.8 / 4.16).** Original wording above retained. One
+> deliberate, narrow exception to "a car that genuinely sold must never be blocked from a sold-comps run": a vehicle
+> with **two or more distinct confirmed sales** (two or more `Sold` events in `auction_history`) is **shown,
+> labelled, and excluded from the sold average and count**, and raises a CRITICAL pre-share flag (overridable with a
+> typed reason, `DECISIONS.md` 4.9). It is never hidden or removed from the run. Reason: repeated resale is evidence
+> the vehicle is not representative of the car a client would buy - a car that crashed, was repaired and resold
+> within a year at a large discount describes a repair history, not the market. This is a data-integrity rule, not a
+> client-protection (risk) rule. Everything else in 5.6 stands: a salvage, flood-damaged or non-running car that sold
+> **once** remains valid data and is never blocked.
+
 ### 5.7 Capture eligibility is keyed on lot state, not platform
 `lot_state` (`active` | `finished` | `unknown`) determines what a sighting is eligible for.
 This is self-maintaining as sources change; platform-keyed rules are not.
+
+> **Extended 1 Oct 2026 (Prompt 43 Stage 1).** A listing whose `lot_state` is unknown (null or `unknown`) belongs to
+> **no** population until it is classified: it is shown and labelled "Lot state unknown - not in any average",
+> counted in neither the sold group nor the active group, and surfaced to staff for classification. Unknown means
+> neither - never both. (Before this, a mixed-run listing with no lot state and no bid counted as a sold comp **and**
+> was risk-checked as an active listing at once; 46 real sightings were in that state.)
 
 ### 5.8 Raw at capture, classify at read
 Store what the source said. Derive bands, classes and groupings at query time. This keeps
