@@ -13,7 +13,8 @@ const corsHeaders = {
 // The nested sighting row this function selects, reduced to the shape the shared rules read.
 // Explicit rather than a cast, so a future select-list change that drops one of these fields
 // is a type error here instead of a silently-null rule (the AGENTS.md §4 failure mode).
-const soldGroupShape = (sighting: any): SoldGroupListing => ({
+const soldGroupShape = (sighting: any, repeatSale = false): SoldGroupListing => ({
+  repeat_sale: repeatSale,
   lot_state: sighting.lot_state ?? null,
   current_bid_usd: sighting.current_bid_usd ?? null,
   price_usd: sighting.price_usd ?? null,
@@ -60,7 +61,7 @@ serve(async (req) => {
     // 4. Look up the run
     const { data: run, error: runError } = await supabaseClient
       .from('research_runs')
-      .select('id, client_name, notes, created_at, run_type, client_brief:client_briefs(year_min, year_max)')
+      .select('id, client_name, created_at, run_type, client_brief:client_briefs(year_min, year_max)')
       .eq('share_token', token)
       .eq('share_enabled', true)
       .is('deleted_at', null)
@@ -234,6 +235,7 @@ serve(async (req) => {
           sale_confirmed,
           logged_via,
           asset:assets (
+            id,
             year,
             make,
             model,
@@ -258,10 +260,38 @@ serve(async (req) => {
       throw listingsError;
     }
 
+    // 5b. REPEAT SALE (Bashir 1 Oct 2026): a vehicle that sold at auction 2+ times (crash, repair, resale) is not a
+    // like-for-like comp. Derived here from auction_history (service role) and used ONLY as a boolean - the history
+    // rows themselves never leave this function (decision 4.13: a derived value may be public, a raw one may not).
+    // It feeds the same shared predicate the staff page uses, so both sides exclude the same listings.
+    const repeatSaleAssetIds = new Set<string>();
+    {
+      const assetIds = Array.from(new Set((listingsData || []).map((r: any) => r.sighting?.asset?.id).filter(Boolean))) as string[];
+      for (let i = 0; i < assetIds.length; i += 100) {
+        const { data: hist, error: histError } = await supabaseClient
+          .from('auction_history')
+          .select('asset_id, auction_platform, lot_number')
+          .in('asset_id', assetIds.slice(i, i + 100))
+          .eq('status', 'Sold');
+        // A failed history read must not silently turn the rule off - that is exactly how a flag "randomly stops".
+        if (histError) throw histError;
+        const eventsByAsset = new Map<string, Set<string>>();
+        (hist || []).forEach((h: any) => {
+          if (!eventsByAsset.has(h.asset_id)) eventsByAsset.set(h.asset_id, new Set());
+          eventsByAsset.get(h.asset_id)!.add(`${h.auction_platform ?? ''}::${h.lot_number ?? ''}`);
+        });
+        eventsByAsset.forEach((events, assetId) => { if (events.size >= 2) repeatSaleAssetIds.add(assetId); });
+      }
+    }
+    const isRepeatSale = (row: any) => !!row.sighting?.asset?.id && repeatSaleAssetIds.has(row.sighting.asset.id);
+
     // 6. Explicitly map allow-list of fields
     const publicRun = {
       client_name: run.client_name,
-      notes: run.notes,
+      // run.notes is NOT in this payload any more: migration 074 moved research_runs.notes to the staff-only
+      // research_runs_staff_notes (it is staff commentary, and a column a client-visible table carries must be
+      // client-safe). This function still SELECTed the dropped column, so the whole query errored and every share
+      // link answered 'Not found' from 22 Sep until this fix (found 1 Oct 2026, when a real client link 404'd).
       created_at: run.created_at,
       run_type: run.run_type
     };
@@ -305,7 +335,7 @@ serve(async (req) => {
     // mixed run needs) - found auditing this file for Stage 2, not reported by any prompt.
     const inSoldPopulationById = new Map<string, boolean>();
     (listingsData || []).forEach((row: any) => {
-      inSoldPopulationById.set(row.id, isInSoldPopulation(soldGroupShape(row.sighting || {}), run.run_type));
+      inSoldPopulationById.set(row.id, isInSoldPopulation(soldGroupShape(row.sighting || {}, isRepeatSale(row)), run.run_type));
     });
 
     const publicListings = (listingsData || []).map((row: any) => {
@@ -377,9 +407,12 @@ serve(async (req) => {
         // by ResearchRunDetail.tsx. This exact re-derivation is what silently diverged for
         // months and produced the Prompt 25 bug; there is now nothing left to diverge FROM.
         sale_unconfirmed: (() => {
-          if (!isInSoldPopulation(soldGroupShape(sighting), run.run_type)) return false;
-          return !countsTowardSoldAverage(soldGroupShape(sighting));
+          if (!isInSoldPopulation(soldGroupShape(sighting, isRepeatSale(row)), run.run_type)) return false;
+          return !countsTowardSoldAverage(soldGroupShape(sighting, isRepeatSale(row)));
         })(),
+
+        // Derived boolean only. True => the page says why this price is not in the average.
+        repeat_sale: isInSoldPopulation(soldGroupShape(sighting), run.run_type) && isRepeatSale(row),
 
         // PROMPT 28 Stage 1 - disclosure, not a spec flag (PROJECT_CHARTER.md S5.1: widen
         // bands and say so, never silently). 'out_of_range' only within the sold population,

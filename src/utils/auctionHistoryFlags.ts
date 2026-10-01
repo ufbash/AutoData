@@ -22,6 +22,12 @@ export interface AuctionHistoryFlags {
   highestRejectedBid: number | null;
   hasPriorAuctionHistory: boolean;
   odometerRollback: boolean;
+  // Distinct auction events (platform + lot) whose status is 'Sold'. 2 or more = the vehicle sold at auction, was
+  // (presumably) repaired/relisted, and sold again - the price of ANY of those sales then describes a vehicle with
+  // a repair history, which is not a like-for-like comp. Counted per distinct event so the same sale listed twice by
+  // a scrape is still one sale.
+  soldEventCount: number;
+  repeatSale: boolean;
 }
 
 const NOT_CHECKABLE: AuctionHistoryFlags = {
@@ -32,6 +38,8 @@ const NOT_CHECKABLE: AuctionHistoryFlags = {
   highestRejectedBid: null,
   hasPriorAuctionHistory: false,
   odometerRollback: false,
+  soldEventCount: 0,
+  repeatSale: false,
 };
 
 export function deriveAuctionHistoryFlags(rows: AuctionHistoryRow[] | null | undefined): AuctionHistoryFlags {
@@ -47,6 +55,9 @@ export function deriveAuctionHistoryFlags(rows: AuctionHistoryRow[] | null | und
 
   const previouslyUnsold = rows.some(r => r.status === 'Not sold');
   const previouslySold = rows.some(r => r.status === 'Sold');
+  const soldEvents = new Set<string>();
+  rows.forEach(r => { if (r.status === 'Sold') soldEvents.add(`${r.auction_platform ?? ''}::${r.lot_number ?? ''}`); });
+  const soldEventCount = soldEvents.size;
 
   const rejectedBids = rows
     .filter(r => r.status === 'Not sold' && r.bid_amount_usd != null)
@@ -77,5 +88,7 @@ export function deriveAuctionHistoryFlags(rows: AuctionHistoryRow[] | null | und
     highestRejectedBid,
     hasPriorAuctionHistory,
     odometerRollback,
+    soldEventCount,
+    repeatSale: soldEventCount >= 2,
   };
 }

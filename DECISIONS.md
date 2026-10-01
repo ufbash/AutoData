@@ -144,13 +144,14 @@ Phase C.
 | 4.5 | Normalise to `price_usd` at capture; freeze the rate; never average raw | LOCKED |
 | 4.6 | Averages: minimum n=3 or explicit caveat; always show sample size | LOCKED |
 | 4.7 | Public data access via Edge Function allow-list, never public RLS | LOCKED |
-| 4.8 | Risk rules apply to **active listings only**, never sold comps | LOCKED (5 Aug) |
+| 4.8 | Risk rules apply to **active listings only**, never sold comps - **amended 1 Oct 2026 by 4.16: data-integrity rules (odometer rollback, repeat sale) apply to every run type** | LOCKED (5 Aug); amended 1 Oct |
 | 4.9 | Critical warnings are overridable with a **typed, recorded reason** | LOCKED (5 Aug) |
 | 4.10 | Duplicate vehicle in a run is a hard block, never overridable | LOCKED |
 | 4.11 | A2 hard block triggers on **any** prior auction appearance, not cross-platform reappearance specifically | LOCKED (4 Sep 2026) |
 | 4.12 | A2's damage-severity-decrease escalation is dropped; decreasing odometer between appearances is the proxy critical signal | LOCKED (4 Sep 2026) |
 | 4.13 | A raw client-brief field never enters a public payload; only a value derived from it (a boolean, a count, a status label) may | LOCKED (11 Sep 2026) |
 | 4.14 | Vehicle-identity normalization is derived at fingerprint-computation time only, never written back to a captured make/model/trim field | LOCKED (12 Sep 2026) |
+| 4.16 | A vehicle that sold at auction more than once is a CRITICAL flag (overridable with a typed reason, 4.9) on every run type, and is excluded from the sold average and count by the single shared predicate both the staff page and `public-run` import; the client page says so in words. Reason: its price reflects a repair history, so it is not a like-for-like comp. Not a *risk* rule (4.8 stands for those); a data-integrity rule, the same class as odometer rollback | LOCKED (1 Oct 2026, Bashir) |
 | 4.15 | Title status has one classifier, taking the severe reading for active-listing eligibility/blocking; disagreement is surfaced, never silently resolved; never applied to sold comps | LOCKED (12 Sep 2026) |
 
 **On 4.11/4.12 — supersedes `PROJECT_CHARTER.md` §6's original wording.** A car auctioned
@@ -767,4 +768,8 @@ Bashir delegated these; they are hard to change later, so they are settled and r
 **23.9 Two screens that answer the same question must be proven to agree, in the browser, as each role.** The staff screen said INV-0064 was paid in full; the client portal said $37.34 was owed (debt #110). Both were reading the same view; the difference was whose RLS the view ran under. No single-role proof could have seen it - the usability verifier found it by being a client after having been staff. For any figure shown to both staff and clients, the journey asserts the same number from each side.
 
 **23.10 A control that exists in the database but not on the screen is a stuck record waiting to happen.** Receipts, applications and payments had a legal void order the database enforced and a screen that offered only one of its three links (debt #111). When a rule refuses an action, the screen must either offer the preceding action or say which one it needs, in the place the user is looking.
+
+**23.11 A 'never' in a decision is a place a regression can hide.** Decision 4.8 ('risk rules never apply to sold comps') was right about risk and silently wrong about data integrity, so a car that sold twice on a historical run could be recorded perfectly and flagged nowhere - three reports, each 'fixed' on the surface it was seen on. When a flag 'randomly stops', ask first which *rule's scope* excludes it (a lot flipping live -> finished is enough), not which code broke.
+
+**23.12 Moving a column is not finished until every reader is found - including the Edge Functions and the public surfaces.** Migration 074 was proven against RLS and the app and left `public-run` selecting a dropped column, which broke every client link for nine days. A function that maps *any* lookup error to 'not found' turns a schema break into a plausible-looking 404 (the same disguise as AGENTS.md 4.3). The standing check: after any column move, open a public link as an anonymous visitor.
 

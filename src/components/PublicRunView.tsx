@@ -180,7 +180,7 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
                 dashboard's "Unconfirmed sale" badge (ResearchRunDetail.tsx). */}
             {listing.sale_unconfirmed && (
               <div className="absolute top-2 right-2 bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm backdrop-blur-sm">
-                Unconfirmed sale
+                {listing.repeat_sale ? 'Sold more than once - not in the average' : 'Unconfirmed sale'}
               </div>
             )}
             {/* PROMPT 28 Stage 1 - information, not a warning: deliberately blue, not amber,

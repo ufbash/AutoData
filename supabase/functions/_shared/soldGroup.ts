@@ -26,6 +26,12 @@ export interface SoldGroupListing {
   sale_confirmed?: boolean | null;
   logged_via: string | null;
   source_platform: string | null;
+  /**
+   * True when this vehicle (VIN/asset) has sold at auction more than once (auction_history: 2+ distinct 'Sold'
+   * events). Derived by the caller from auction_history - optional so a caller that cannot know says nothing, and
+   * absence is not violation (AGENTS.md S6): only an explicit `true` changes anything.
+   */
+  repeat_sale?: boolean | null;
 }
 
 export type RunType = 'sold_comps' | 'active_listings' | 'mixed';
@@ -100,6 +106,10 @@ export function classifySaleConfirmation(listing: SoldGroupListing): SaleConfirm
  * be SAID about a row, never whether it counts.
  */
 export function countsTowardSoldAverage(listing: SoldGroupListing): boolean {
+  // A vehicle that sold twice (crashed, repaired, resold) is not a like-for-like comp: its price reflects a repair
+  // history. Excluded from the average and the count on BOTH sides, because both import this one predicate.
+  // (Decided by Bashir 1 Oct 2026: CRITICAL flag AND excluded from the average.)
+  if (listing.repeat_sale === true) return false;
   const confirmation = classifySaleConfirmation(listing);
   return confirmation.kind === 'confirmed_sold' || confirmation.kind === 'no_mechanism_for_entry_method';
 }

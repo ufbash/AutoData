@@ -326,7 +326,11 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     );
   }
 
-  const includedListings = listings.filter(l => l.included);
+  // A vehicle that sold at auction more than once (crash, repair, resale) is not a like-for-like comp. The flag is
+  // derived from auction_history and merged onto the listing HERE, once, so every consumer below - the sold average,
+  // the group composition and the pre-share checklist - reads the same fact through the shared predicate.
+  const listingsWithHistory = listings.map(l => (l.asset_id && auctionHistoryFlags.get(l.asset_id)?.repeatSale) ? { ...l, repeat_sale: true } : l);
+  const includedListings = listingsWithHistory.filter(l => l.included);
   const includedCount = includedListings.length;
   const approvedListing = listings.find(l => l.approved_at);
 
@@ -697,6 +701,35 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
     passed: odometerRollbackOffenders.length === 0
   });
 
+  // REPEAT SALE (CRITICAL, overridable with a typed reason; all run types; Bashir 1 Oct 2026). A vehicle that sold at
+  // auction more than once - typically: catastrophic damage, sold, repaired, sold again - must never pass as an
+  // ordinary comp. Deliberately OUTSIDE the active-listings gate: decision 4.8 keeps *risk* rules off sold comps, but
+  // this is a data-integrity rule about whether a recorded price describes a comparable vehicle, the same reason the
+  // odometer-rollback rule runs on every run type. For an ACTIVE listing the prior-auction BLOCK above already
+  // covers it, so only listings in the sold population are reported here. The listing is also excluded from the sold
+  // average and count (soldGroup.countsTowardSoldAverage), so the figure shown and the figure averaged agree.
+  const repeatSaleOffenders: string[] = [];
+  const repeatSaleDetails: string[] = [];
+  includedListings.forEach(l => {
+    if (!l.repeat_sale || !isInSoldPopulation(l, run.run_type as any)) return;
+    repeatSaleOffenders.push(l.id);
+    const sales = ((l.asset_id && auctionHistoryRows.get(l.asset_id)) || [])
+      .filter(r => r.status === 'Sold')
+      .slice()
+      .sort((a, b) => String(a.auction_date ?? '').localeCompare(String(b.auction_date ?? '')))
+      .map(r => `${r.auction_date ?? 'date unknown'}${r.bid_amount_usd != null ? ` $${Number(r.bid_amount_usd).toLocaleString('en-US')}` : ''}${r.odometer_miles != null ? ` at ${Number(r.odometer_miles).toLocaleString('en-US')} mi` : ''}`);
+    repeatSaleDetails.push(`${[l.year, l.make, l.model].filter(Boolean).join(' ') || 'vehicle'}${l.vin ? ` (VIN ${l.vin})` : ''}: sold ${sales.join(' then ')}`);
+  });
+  checklistItems.push({
+    id: 'repeat_sale',
+    type: 'CRITICAL',
+    message: repeatSaleOffenders.length > 0
+      ? `${repeatSaleOffenders.length} listing(s) are RE-SALES - the vehicle sold at auction more than once, so its price reflects a repair history and is EXCLUDED from the sold average: ${repeatSaleDetails.join('; ')}.`
+      : 'No repeat-sale vehicles in the sold group',
+    offenderIds: repeatSaleOffenders,
+    passed: repeatSaleOffenders.length === 0
+  });
+
   // PROMPT 28 Stage 1 - sold-comps range disclosure (debt #52, decided). Applies regardless of
   // run_type, deliberately outside the isActiveListings||isMixed gate above - unlike the nine
   // spec rules, this is not a client-protection check on an active listing (PROJECT_CHARTER.md
@@ -902,6 +935,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       else if (item.id.startsWith('prior_auction_history')) text = 'PRIOR AUCTION HISTORY';
       else if (item.id === 'prior_auction_not_checkable') text = 'History not checkable';
       else if (item.id === 'odometer_rollback') text = 'Odometer rollback';
+      else if (item.id === 'repeat_sale') text = 'SOLD TWICE - excluded from average';
       else if (item.id === 'range_disclosure') text = 'Outside requested year range';
       if (text) {
         listingBadges.get(id)!.push({ type: item.type, text });
@@ -1180,12 +1214,16 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
             <LinkIcon className={`w-5 h-5 ${canShare ? 'text-[#a58039]' : 'text-gray-400'}`} />
             <h3 className="text-lg font-bold text-[#403f4c]">Client Sharing</h3>
           </div>
-          <label className={`relative inline-flex items-center ${canShare ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
+          <label className={`relative inline-flex items-center ${(canShare || run.share_enabled) ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
             <input 
               type="checkbox" 
+              data-testid="share-toggle"
               className="sr-only peer" 
               checked={run.share_enabled}
-              disabled={!canShare}
+              // Turning sharing OFF must always be possible. A run that is already shared and then acquires a block or
+              // an unreviewed CRITICAL (a new rule, a re-capture) used to have its off-switch disabled too - the one
+              // control that stops a client seeing it was the one the checks locked.
+              disabled={!canShare && !run.share_enabled}
               onChange={(e) => {
                 const checked = e.target.checked;
                 const patch: Partial<ResearchRun> = { share_enabled: checked };
@@ -1199,7 +1237,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
             />
             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#a58039]"></div>
             <span className="ml-3 text-sm font-medium text-gray-700">
-              {run.share_enabled ? 'Enabled' : (!canShare ? 'Blocked by checks' : 'Disabled')}
+              {run.share_enabled ? (canShare ? 'Enabled' : 'Enabled - has unresolved checks (turn off to stop sharing)') : (!canShare ? 'Blocked by checks' : 'Disabled')}
             </span>
           </label>
         </div>
@@ -1210,6 +1248,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
               <input 
                 type="text" 
                 readOnly 
+                data-testid="share-link"
                 value={`${window.location.origin}/share/${run.share_token}`}
                 className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 focus:outline-none"
               />

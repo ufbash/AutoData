@@ -87,6 +87,8 @@ export interface ResearchRun {
 
 export interface RunListing {
   id: string;
+  // derived in ResearchRunDetail from auction_history (2+ distinct Sold events); never stored on the row
+  repeat_sale?: boolean;
   sighting_id: string;
   asset_id: string | null;
   position: number | null;
