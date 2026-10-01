@@ -54,7 +54,7 @@ test('build and issue an invoice: edit a computed line, use an actual as a line,
   expect(number).toMatch(/^INV-\d{4}$/);
 
   await page.getByTestId('confirm-issue-btn').click();
-  await expect(editor).not.toBeVisible({ timeout: 15000 });
+  await expect(editor).not.toBeVisible({ timeout: 60000 });
 
   // the new document appears in the Billing list with the exact number that was stated before issuing
   await expect(billing.getByText(number, { exact: false })).toBeVisible({ timeout: 15000 });

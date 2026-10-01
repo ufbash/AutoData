@@ -71,7 +71,7 @@ const VehicleCard: React.FC<{ v: MyWonVehicle }> = ({ v }) => {
   };
 
   return (
-    <div className="border border-[#e8e2d0] rounded-lg p-4 mb-3">
+    <div data-testid="portal-vehicle" className="border border-[#e8e2d0] rounded-lg p-4 mb-3">
       <div className="flex items-center gap-2 mb-1">
         <Car className="w-4 h-4 text-[#a58039]" />
         <span className="font-medium text-[#3d3a37]">{title}</span>
@@ -114,10 +114,10 @@ const InvoiceCard: React.FC<{ doc: MyBillingDoc }> = ({ doc }) => {
   };
 
   const kindLabel = doc.doc_type === 'invoice' ? (doc.invoice_kind === 'retail' ? 'Invoice' : doc.invoice_kind === 'repair' ? 'Repair invoice' : 'Invoice')
-    : doc.doc_type === 'retainer' ? 'Retainer invoice' : 'Credit note';
+    : doc.doc_type === 'retainer' ? 'Deposit request' : 'Credit note';
 
   return (
-    <div className="border border-[#e8e2d0] rounded-lg mb-2 overflow-hidden">
+    <div data-testid="portal-invoice" className="border border-[#e8e2d0] rounded-lg mb-2 overflow-hidden">
       <button onClick={toggle} className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-[#f7f4ea]">
         <div>
           <div className="text-sm font-medium text-[#3d3a37]">{doc.number_text} <span className="text-xs text-[#9a9184] font-normal">{kindLabel}</span></div>
@@ -130,13 +130,13 @@ const InvoiceCard: React.FC<{ doc: MyBillingDoc }> = ({ doc }) => {
           {loading && <Loader2 className="w-4 h-4 animate-spin text-[#a58039]" />}
           {err && <p className="text-xs text-red-600">{err}</p>}
           {lines && lines.map(l => (
-            <div key={l.position} className="flex justify-between text-xs text-[#5c4a2f] py-0.5">
+            <div key={l.position} data-testid="portal-invoice-line" className="flex justify-between text-xs text-[#5c4a2f] py-0.5">
               <span>{l.description}</span>
               <span>{money(l.net_amount, doc.currency)}</span>
             </div>
           ))}
           {doc.scope_statement && (
-            <p className="text-xs text-[#9a9184] italic mt-2 border-t border-dashed border-[#e8e2d0] pt-2">
+            <p data-testid="portal-invoice-scope" className="text-xs text-[#9a9184] italic mt-2 border-t border-dashed border-[#e8e2d0] pt-2">
               <strong className="not-italic">Scope: </strong>{doc.scope_statement}
             </p>
           )}

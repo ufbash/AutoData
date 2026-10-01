@@ -7,6 +7,7 @@ import { supabase } from '../services/supabaseClient';
 import BillingSection from './BillingSection';
 import ClientAccountStatus from './ClientAccountStatus';
 import ClientAccountStatusSummary from './ClientAccountStatusSummary';
+import { useBillingChangeCounter } from '../utils/billingEvents';
 
 const fmtDate = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '');
 const label = (s: string | null | undefined): string => (s ? s.replace(/_/g, ' ') : '');
@@ -54,6 +55,7 @@ const ClientRelationship: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [wonThumbs, setWonThumbs] = useState<Record<string, string | null>>({});
+  const billingTick = useBillingChangeCounter();
   const [wonBalances, setWonBalances] = useState<Record<string, { amount: number; currency: string }[]>>({});
 
   const load = useCallback(async (isCancelled: () => boolean) => {
@@ -114,7 +116,7 @@ const ClientRelationship: React.FC<{
       } catch { /* non-fatal */ }
     })();
     return () => { cancelled = true; };
-  }, [data]);
+  }, [data, billingTick]);
 
   const back = (
     <button onClick={onBack} className="text-sm font-bold text-[#a58039] hover:underline mb-4 flex items-center gap-1">

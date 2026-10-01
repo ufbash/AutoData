@@ -80,6 +80,8 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
   const isRetail = docType === 'invoice' && invoiceKind === 'retail';
   const needsScope = docType === 'invoice' && (invoiceKind === 'vehicle_purchase' || invoiceKind === 'retail');
   const crossCurrency = settlementCurrency !== currency;
+  // the database refuses due < issue (billing_documents_dates); say so here instead of surfacing the raw constraint name
+  const dueBeforeIssue = !!dueDate && !!issueDate && dueDate < issueDate;
 
   // ---- load reference data
   useEffect(() => {
@@ -189,7 +191,12 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
   const doIssue = async () => {
     setIssuing(true); setIssueErr(null);
     try {
-      const validLines = lines.filter(l => l.description.trim() && Number(l.rate) > 0 && Number(l.quantity) > 0);
+      const validLines = lines.filter(l => l.description.trim() && Number(l.rate) > 0 && Number(l.quantity) > 0).map(l => ({
+        ...l,
+        clientVisible: isRetail ? l.clientVisible : true, // hidden lines exist only on retail invoices
+        // the one client-visible line of a retail invoice IS the all-inclusive price - the database requires it be tagged so
+        component: isRetail && l.clientVisible ? 'all_inclusive_price' : l.component,
+      }));
       const result = await issueDocument({
         docType, invoiceKind: docType === 'invoice' ? invoiceKind : undefined, clientId,
         wonVehicleId: !useExternal && wonVehicle ? wonVehicle.id : undefined,
@@ -249,15 +256,15 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
 
           {/* dates / reference */}
           <div className="grid grid-cols-4 gap-3">
-            <div><label className="text-xs text-gray-500">Issue date</label><input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
-            <div><label className="text-xs text-gray-500">Payment due</label><input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-xs text-gray-500">Issue date</label><input data-testid="invoice-issue-date" type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-xs text-gray-500">Payment due</label><input data-testid="invoice-due" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" />{dueBeforeIssue && <p data-testid="due-before-issue-warning" className="text-[11px] text-red-600 mt-0.5">Payment due can't be earlier than the issue date.</p>}</div>
             <div className="col-span-2"><label className="text-xs text-gray-500">Reference</label><input value={reference} onChange={e => setReference(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
           </div>
 
           {/* currency / FX */}
           <div className="grid grid-cols-4 gap-3 items-end">
-            <div><label className="text-xs text-gray-500">Currency</label><select value={currency} onChange={e => setCurrency(e.target.value as Currency)} className="w-full border rounded px-2 py-1.5 text-sm bg-white"><option>USD</option><option>NGN</option></select></div>
-            <div><label className="text-xs text-gray-500">Settled in</label><select value={settlementCurrency} onChange={e => setSettlementCurrency(e.target.value as Currency)} className="w-full border rounded px-2 py-1.5 text-sm bg-white"><option>USD</option><option>NGN</option></select></div>
+            <div><label className="text-xs text-gray-500">Currency</label><select data-testid="invoice-currency" value={currency} onChange={e => setCurrency(e.target.value as Currency)} className="w-full border rounded px-2 py-1.5 text-sm bg-white"><option>USD</option><option>NGN</option></select></div>
+            <div><label className="text-xs text-gray-500">Settled in</label><select data-testid="invoice-settle" value={settlementCurrency} onChange={e => setSettlementCurrency(e.target.value as Currency)} className="w-full border rounded px-2 py-1.5 text-sm bg-white"><option>USD</option><option>NGN</option></select></div>
             {crossCurrency && (<>
               <div><label className="text-xs text-gray-500">Rate basis</label><select value={fxBasis} onChange={e => setFxBasis(e.target.value as any)} className="w-full border rounded px-2 py-1.5 text-sm bg-white"><option value="agreed">Agreed</option><option value="live">Live (fetched at issue)</option></select></div>
               {fxBasis === 'agreed' && <div><label className="text-xs text-gray-500">Rate ({currency}→{settlementCurrency})</label><input value={fxRate} onChange={e => setFxRate(e.target.value)} placeholder="e.g. 1390" className="w-full border rounded px-2 py-1.5 text-sm" /></div>}
@@ -294,14 +301,14 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
           <div className="border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500">
-                <tr><th className="text-left px-2 py-1.5 w-8"></th><th className="text-left px-2 py-1.5">Section</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-16">Qty</th><th className="text-right px-2 py-1.5 w-24">Rate</th><th className="text-left px-2 py-1.5 w-28">Discount</th><th className="text-left px-2 py-1.5 w-20">Tax</th><th className="text-left px-2 py-1.5 w-24">Origin</th><th className="w-16"></th></tr>
+                <tr><th className="text-left px-2 py-1.5 w-8"></th><th className="text-left px-2 py-1.5">Section</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-16">Qty</th><th className="text-right px-2 py-1.5 w-24">Rate</th><th className="text-left px-2 py-1.5 w-28">Discount</th><th className="text-left px-2 py-1.5 w-20">Tax</th><th className="text-left px-2 py-1.5 w-24" title="For a figure you typed: what it rests on (a quote, an agreement, an invoice). Required.">Basis (required)</th>{isRetail && <th className="text-left px-2 py-1.5 w-16">Client sees</th>}<th className="w-16"></th></tr>
               </thead>
               <tbody>
                 {lines.map((l, i) => (
                   <tr key={i} className="border-t">
                     <td className="px-1"><div className="flex flex-col"><button onClick={() => moveLine(i, -1)} disabled={i === 0}><ChevronUp className="w-3 h-3 text-gray-400" /></button><button onClick={() => moveLine(i, 1)} disabled={i === lines.length - 1}><ChevronDown className="w-3 h-3 text-gray-400" /></button></div></td>
                     <td className="px-1"><input value={l.section} onChange={e => updateLine(i, { section: e.target.value })} className="w-full border rounded px-1.5 py-1" placeholder="Section" /></td>
-                    <td className="px-1"><input value={l.description} onChange={e => updateLine(i, { description: e.target.value })} className="w-full border rounded px-1.5 py-1" /></td>
+                    <td className="px-1"><input data-testid={`line-desc-${i}`} value={l.description} onChange={e => updateLine(i, { description: e.target.value })} className="w-full border rounded px-1.5 py-1" /></td>
                     <td className="px-1"><input value={l.quantity} onChange={e => updateLine(i, { quantity: e.target.value })} className="w-full border rounded px-1.5 py-1 text-right" /></td>
                     <td className="px-1"><input data-testid={`line-rate-${i}`} value={l.rate} onChange={e => editComputedRate(i, e.target.value)} className="w-full border rounded px-1.5 py-1 text-right" /></td>
                     <td className="px-1 flex gap-1">
@@ -310,8 +317,9 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
                     </td>
                     <td className="px-1"><select value={l.taxCode ?? ''} onChange={e => updateLine(i, { taxCode: e.target.value || null })} className="w-full border rounded px-1 py-1 bg-white text-xs"><option value="">—</option>{taxCodes.map(t => <option key={t.code} value={t.code}>{t.code}</option>)}</select></td>
                     <td className="px-1 text-xs text-gray-500" data-testid={`line-origin-${i}`}>{l.origin === 'computed' ? 'Computed' : l.origin === 'document_backed' ? 'Document' : (
-                      <input data-testid={`line-basis-${i}`} value={l.basis ?? ''} onChange={e => updateLine(i, { basis: e.target.value })} placeholder="basis" className="w-full border rounded px-1 py-1" />
+                      <input data-testid={`line-basis-${i}`} value={l.basis ?? ''} onChange={e => updateLine(i, { basis: e.target.value })} placeholder="what it rests on" className="w-full border rounded px-1 py-1" />
                     )}</td>
+                    {isRetail && <td className="px-1 text-center"><input data-testid={`line-visible-${i}`} type="checkbox" checked={l.clientVisible} onChange={e => updateLine(i, { clientVisible: e.target.checked })} title="Untick to keep this cost line off what the client sees (retail: only the all-inclusive price is shown)" /></td>}
                     <td className="px-1"><button onClick={() => removeLine(i)}><Trash2 className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" /></button></td>
                   </tr>
                 ))}
@@ -374,7 +382,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
           {issueErr && <p className="text-xs text-red-600 flex-1">{issueErr}</p>}
           <div className="flex gap-2 ml-auto">
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-            <button onClick={openConfirm} disabled={!preview} data-testid="editor-issue-btn" className="px-4 py-2 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-40">
+            <button onClick={openConfirm} disabled={!preview || dueBeforeIssue} data-testid="editor-issue-btn" className="px-4 py-2 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-40">
               {docType === 'credit_note' ? 'Issue credit note' : docType === 'retainer' ? 'Issue deposit request' : 'Issue invoice'}
             </button>
           </div>

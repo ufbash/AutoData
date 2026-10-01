@@ -15,6 +15,10 @@ export default defineConfig({
   testDir: './e2e/tests',
   fullyParallel: false, // shared org-4 fixtures (won vehicles, invoices) - serialize to avoid cross-test interference
   forbidOnly: !!process.env.CI,
+  // 90s, not Playwright's 30s default: every step talks to the real remote Supabase project, and a journey issues
+  // invoices/PDFs. Journey 9 failed once in a full-suite run at 30.9s - a timeout, not an assertion (artifacts were
+  // overwritten by the next run, so that is the best reading of it, not a proven cause); it then passed 6 times.
+  timeout: 90_000,
   retries: 0,
   workers: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
