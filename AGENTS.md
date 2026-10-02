@@ -132,6 +132,8 @@ from that rule.
 
 ### Production smoke — REQUIRED after every Edge Function deploy and every push
 
+**Deploy Edge Functions ONLY with `npm run deploy:fn -- <function>`** (`scripts/deployFunction.sh`): it deploys, then runs the smoke, and fails loudly if either fails. Never run `supabase functions deploy` directly. Confirm with Bashir first, as before.
+
 ```
 npm run smoke
 ```
@@ -302,6 +304,14 @@ each must filter for itself: `.from('memberships').select(…).eq('user_id', …
 an **active client membership**, not just `clients.user_id = caller`. Until 1 Oct 2026 none of ~22 functions did: a
 revoked client could still sign a signed URL for their own invoice (proved live in org 4, journey 16), and a revoked
 staff member would have kept every function's powers. A new function that reads memberships without the filter is a bug.
+
+### 4.17 Claim the idempotency key BEFORE allocating anything
+Any path that allocates a scarce, sequential, never-reusable thing (a document number, a receipt number) must claim its
+idempotency key atomically FIRST, and make duplicate requests wait for the winner and return its result. "Check whether it
+exists, then allocate" is a race: five simultaneous identical issue requests produced one document and FOUR abandoned
+numbers (gaps in the invoice series) and four raw constraint errors (Prompt 44). The `billing` function now claims through
+`billing_issue_claims` (migration 086) before `allocate_document_number`; a new issuing path must do the same and be proven
+with a simultaneous burst (`scripts/stressIssue.mjs`, journey 19), not a sequential test.
 
 ---
 

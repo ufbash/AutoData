@@ -2333,3 +2333,11 @@ This was the first prompt run with subagents (parallel read-only pre-flight, an 
 
 **What was not done.** The independent hostile-client verifier for the new download path did not run (stopped by a safety classifier before its first request); its attack list is covered by journey 16, which the implementer wrote. The attach-time eligibility rules in `researchService.addListingToRun` are still a separate copy of "sold/active" (debt #125).
 
+## 56. 1 Oct 2026 (Prompt 44): the test that was supposed to prove safety found the unsafe thing
+
+**The instruction was "prove the double-click case is safe".** The first simultaneous burst did produce one document and one issued number - the pass condition as written - and also four abandoned numbers and four raw database errors. The safe-looking result hid a real defect: the function checked for an existing document, then allocated a number, then rendered, stored and committed, so every simultaneous request allocated before any of them could lose. Gaps in an invoice series are exactly what a bookkeeper notices. The fix reorders the work (claim the key first, allocate second), and the test is now a journey that counts burned numbers, not just documents.
+
+**The stall that would not be a stall.** The occasional 15-second issue had only ever been answered with wider test timeouts for three prompts. Per-phase timing showed there is no slow phase: nearly every request is a cold start, the CPU work is a constant ~100ms, and every network round trip fluctuates together. A diagnosis that ends 'it is the platform' is unsatisfying but it is evidence, and it changed what was built: honest 'still working' feedback and a double-click that cannot hurt, not a faster PDF.
+
+**A grep keeps paying.** Re-searching for any definition of sold/active outside the shared module found two copies the Prompt 29 and 43 sweeps missed - one on the CLIENT page, deciding sold vs live by whether a bid existed (the AGENTS.md 4.1 mistake), so a live car with no bids could be listed as a sold comp. And a read-only mapping of the attack surface turned up an anonymously writable legacy table nothing uses. Both were invisible to every journey because no journey looked there.
+
