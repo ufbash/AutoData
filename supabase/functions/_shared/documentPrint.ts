@@ -93,7 +93,7 @@ export function buildInvoicePrintModel(input: {
 
   const applied = input.applications.filter(a => a.amount > 0);
   for (const a of applied) {
-    const label = a.kind === 'retainer_credit' ? `Less: Retainer ${a.retainerNumber ?? ''} applied (${cur})`.replace('  ', ' ')
+    const label = a.kind === 'retainer_credit' ? `Less: Deposit received ${a.retainerNumber ?? ''} (${cur})`.replace('  ', ' ')
                 : a.purpose === 'deposit' ? `Less: Deposit Received (${cur})` : `Less: Payment Received (${cur})`;
     rows.push({ label, amount: -a.amount, currency: cur, emphasis: 'accent' });
   }
@@ -114,7 +114,9 @@ export function buildInvoicePrintModel(input: {
     for (const l of visible) {
       const text = l.origin === 'computed' ? `Computed by the system from the current rates${l.sourceRef ? ` (${l.sourceRef})` : ''}`
                  : l.origin === 'document_backed' ? `Per ${l.sourceDocumentLabel ?? 'the attached document'}`
-                 : `Staff figure${l.basis ? `: ${l.basis}` : ''}`;
+                 : (l.basis ?? '').trim();   // a typed figure prints the BASIS TEXT ALONE (Bashir 1 Oct 2026): the Basis field says
+                                              // "Printed on the client's invoice", so staff write for the client; no 'Staff figure:' prefix
+      if (!text) continue;                        // nothing to print (the basis is required at issue, so this is only defensive)
       footnotes.push({ marker: `Line ${l.position}`, text });
     }
   }

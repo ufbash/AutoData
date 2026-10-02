@@ -25,7 +25,7 @@ export type RuleKey =
   | 'zero_listings' | 'duplicate' | 'prior_auction_history' | 'prior_auction_not_checkable'
   | 'critical_damage' | 'spec_critical' | 'spec_warn' | 'odometer_rollback' | 'repeat_sale'
   | 'range_disclosure' | 'no_price' | 'non_insurance' | 'limited_sample' | 'different_model'
-  | 'population_mismatch' | 'population_unknown' | 'unconfirmed_sale' | 'lot_state_unknown' | 'bid_only_not_a_sale';
+  | 'population_mismatch' | 'population_unknown' | 'unconfirmed_sale' | 'lot_state_unknown' | 'bid_only_not_a_sale' | 'possible_repeat_sale';
 
 /** badge text per rule; `null` = the rule deliberately has no per-listing badge (it names no individual listing). */
 export const RULE_REGISTRY: Record<RuleKey, { badge: string | null; severity: Severity[] }> = {
@@ -46,7 +46,8 @@ export const RULE_REGISTRY: Record<RuleKey, { badge: string | null; severity: Se
   population_mismatch: { badge: 'Population mismatch', severity: ['WARN'] },
   population_unknown: { badge: 'Unknown source', severity: ['INFO'] },
   unconfirmed_sale: { badge: 'Unconfirmed sale', severity: ['WARN'] },
-  lot_state_unknown: { badge: 'Lot state unknown - not in any average', severity: ['INFO', 'WARN'] },
+  lot_state_unknown: { badge: 'Lot state unknown - not in any average', severity: ['WARN'] },
+  possible_repeat_sale: { badge: 'May be a re-sale - check', severity: ['WARN'] },
   bid_only_not_a_sale: { badge: 'Final bid only - not a confirmed sale, not in any average', severity: ['INFO'] },
 };
 
@@ -175,7 +176,11 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
 
   // The ACTIVE portion: client options. active run: every listing; mixed run: only lots KNOWN to be active
   // (soldGroup.isInActivePopulation); sold run: none. Risk and spec rules apply here and only here (4.8).
-  const activeList = listings.filter(l => isInActivePopulation(l, runType));
+  // PROMPT 44 Stage 1a: an unknown lot state is in NO population (so in no average or count) - but 'unknown' is not
+  // 'safe': in an active or mixed run it MAY be a live lot a client could be offered, so the risk and spec checks still
+  // run on it as a precaution (a flood car with no recorded lot state must never reach a client unflagged - AGENTS.md
+  // 4.1). In a sold run nothing is risk-checked, as before (4.8).
+  const activeList = isSoldRun ? [] : listings.filter(l => isInActivePopulation(l, runType) || lotStateUnknown(l));
 
   if (isActiveRun || isMixed) {
     // critical damage / unknown damage / not confirmed run-and-drive
@@ -259,7 +264,7 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
       message: `${ids.length} listing(s) blocked: this vehicle ${detail}.`, offenderIds: ids, passed: false }));
     push({ id: 'prior_auction_not_checkable', rule: 'prior_auction_not_checkable', type: 'INFO',
       message: notCheckable.length > 0
-        ? `Prior auction history not checkable for this source (${notCheckable.length} listing(s)) — bid.cars Sales History coverage only, Copart not yet available.`
+        ? `Prior auction history could not be checked for ${plural(notCheckable.length, 'listing')}: only bid.cars records a sales history to check against, so a car from another source may have been through auction before without us knowing.`
         : 'Prior auction history checked for all listings',
       offenderIds: notCheckable, passed: notCheckable.length === 0 });
   }
@@ -277,7 +282,7 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
   listings.forEach(l => {
     if (!l.repeat_sale || !isInSoldPopulation(l, runType)) return;
     repeatOffenders.push(l.id);
-    const sales = (((l.asset_id && historyRows.get(l.asset_id)) || []) as HistoryRowDetail[]).filter(r => r.status === 'Sold').slice()
+    const sales = (((l.asset_id && historyRows.get(l.asset_id)) || []) as HistoryRowDetail[]).filter(r => (r.status ?? '').trim().toLowerCase() === 'sold').slice()
       .sort((a, b) => String(a.auction_date ?? '').localeCompare(String(b.auction_date ?? '')))
       .map(r => `${r.auction_date ?? 'date unknown'}${r.bid_amount_usd != null ? ` $${Number(r.bid_amount_usd).toLocaleString('en-US')}` : ''}${r.odometer_miles != null ? ` at ${Number(r.odometer_miles).toLocaleString('en-US')} mi` : ''}`);
     repeatDetails.push(`${[l.year, l.make, l.model].filter(Boolean).join(' ') || 'vehicle'}${l.vin ? ` (VIN ${l.vin})` : ''}: sold ${sales.join(' then ')}`);
@@ -286,6 +291,16 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
     message: repeatOffenders.length > 0
       ? `${repeatOffenders.length} listing(s) are RE-SALES - the vehicle sold at auction more than once, so its price reflects a repair history and is EXCLUDED from the sold average: ${repeatDetails.join('; ')}.`
       : 'No repeat-sale vehicles in the sold group', offenderIds: repeatOffenders, passed: repeatOffenders.length === 0 });
+
+  // POSSIBLE repeat sale (WARN, sold population): one recorded Sold plus an appearance whose outcome is NOT recorded
+  // ('No information'). It MAY have sold again - unknown, not 'sold once' - so it is not excluded from the average (that is
+  // for two CONFIRMED sales) but staff must look before the price is relied on.
+  const possibleOffenders = listings.filter(l => isInSoldPopulation(l, runType) && !l.repeat_sale && !!(l.asset_id && historyFlags.get(l.asset_id)?.possibleRepeatSale));
+  push({ id: 'possible_repeat_sale', rule: 'possible_repeat_sale', type: 'WARN',
+    message: possibleOffenders.length > 0
+      ? `${plural(possibleOffenders.length, 'sold comp')} MAY be a re-sale: the vehicle has one recorded auction sale and another appearance whose outcome is not recorded ("No information"). Check it before relying on the price.`
+      : 'No sold comp has an unrecorded appearance beside a recorded sale',
+    offenderIds: possibleOffenders.map(l => l.id), passed: possibleOffenders.length === 0 });
 
   // sold-comps range disclosure (INFO, every run type)
   const soldForDisclosure = listings.filter(l => isInSoldPopulation(l, runType));
@@ -317,7 +332,7 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
     const priceCount = soldPriceCount(listings, runType);
     const limited = priceCount > 0 && priceCount < 3;
     push({ id: 'limited_sample', rule: 'limited_sample', type: 'WARN',
-      message: limited ? `Market research average is based on only ${priceCount} sales. Limited sample.` : 'Sufficient sample size', offenderIds: [], passed: !limited });
+      message: limited ? `Market research average is based on only ${plural(priceCount, 'sale')}. Limited sample.` : 'Sufficient sample size', offenderIds: [], passed: !limited });
 
     // different model (WARN)
     const counts: Record<string, string[]> = {};
@@ -354,9 +369,11 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
       offenderIds: unknownSourceIds, passed: false });
 
     // unconfirmed sale (WARN)
-    const unconfirmed = soldList.filter(l => { const k = classifySaleConfirmation(l).kind; return k === 'platform_has_no_mechanism' || k === 'inconclusive'; }).map(l => l.id);
+    // every comp whose sale is not confirmed AS A SALE is out of the average and must be NAMED: unconfirmable by platform,
+    // inconclusive, or confirmed NOT sold (sale_confirmed = false - e.g. a later re-capture flipped it)
+    const unconfirmed = soldList.filter(l => { const k = classifySaleConfirmation(l).kind; return k === 'platform_has_no_mechanism' || k === 'inconclusive' || k === 'confirmed_not_sold'; }).map(l => l.id);
     push({ id: 'unconfirmed_sale', rule: 'unconfirmed_sale', type: 'WARN',
-      message: unconfirmed.length > 0 ? `${unconfirmed.length} of ${soldList.length} included listings have unconfirmed sale status and are excluded from the average below.` : 'All sold listings are confirmed',
+      message: unconfirmed.length > 0 ? `${unconfirmed.length} of ${soldList.length} included listings have an unconfirmed or not-sold status and are excluded from the average below.` : 'All sold listings are confirmed',
       offenderIds: unconfirmed, passed: unconfirmed.length === 0 });
   }
 
@@ -364,13 +381,11 @@ export function evaluateRun(input: RunRuleInput): RuleItem[] {
   // population at all; in a typed run the run's own type still places them (staff chose it at attach time) but staff
   // are told which listings still need classifying either way.
   const unknownLot = listings.filter(l => lotStateUnknown(l));
-  // In a MIXED run these listings are in no population, so NO risk check ever looks at them - and an INFO never blocks
-  // sharing, which is how a flood car could reach a client unflagged (the AGENTS.md 4.1 pattern). So there it is a WARN:
-  // sharing needs a reviewed tick. In a typed run the run type still places the listing (and its risk checks run).
-  if (unknownLot.length > 0) push({ id: 'lot_state_unknown', rule: 'lot_state_unknown', type: isMixed ? 'WARN' : 'INFO',
-    message: isMixed
-      ? `${plural(unknownLot.length, 'listing')} with unknown lot state - in NO average and NO risk check, so it cannot be vetted. To fix: re-capture that lot from its auction page so its live/finished state is recorded, or remove it from the run.`
-      : `${plural(unknownLot.length, 'listing')} with unknown lot state (counted as this run's own type; re-capture the lot from its auction page to record its state).`,
+  // An unknown lot state is in no average and no count on EVERY run type (charter 5.7 as extended). It is a WARN, not an
+  // INFO: sharing needs a reviewed tick, because a client page would otherwise show a car that is in no figure with
+  // nothing asked of staff. Risk checks still run on it in active and mixed runs (see activeList).
+  if (unknownLot.length > 0) push({ id: 'lot_state_unknown', rule: 'lot_state_unknown', type: 'WARN',
+    message: `${plural(unknownLot.length, 'listing')} with unknown lot state - in NO average and NO count${isSoldRun ? '' : ' (risk checks still run on it)'}. To fix: re-capture that lot from its auction page so its live/finished state is recorded, or remove it from the run. For a hand-entered or screenshot comp there is no page to re-capture: use Classify on its row.`,
     offenderIds: unknownLot.map(l => l.id), passed: false });
 
   // a FINISHED lot that only carries a bid (4.1: a final bid alone is not a sale) is in neither group of a mixed run -

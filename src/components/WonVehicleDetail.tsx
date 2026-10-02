@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { platformLabel } from '../utils/enumLabels';
 import { useAuth } from '../contexts/AuthContext';
 import {
   WonVehicle, WonVehicleStatusHistoryRow, WonVehicleStatus, WonVehicleContext,
@@ -222,7 +223,7 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onBack: () => void; o
               <Field label="Trim" value={snapshot?.trim} />
               <Field label="VIN" value={snapshot?.vin} />
               <Field label="Lot number" value={snapshot?.lot_number || (context?.sighting?.lot_number ? `${context.sighting.lot_number} (from listing)` : null)} />
-              <Field label="Source platform" value={snapshot?.source_platform} />
+              <Field label="Source platform" value={platformLabel(snapshot?.source_platform as string | null)} />
               <Field label="Destination" value={dest ? `${dest.destination_port} (${dest.shipping_method === 'roro' ? 'RoRo' : 'container'}) — set below, under Costs` : 'Not set yet — set below, under Costs'} />
             </div>
             {images.length > 0 ? (
@@ -248,7 +249,7 @@ const WonVehicleDetail: React.FC<{ wonVehicle: WonVehicle; onBack: () => void; o
                 value={snapshot?.display_price != null ? `${Number(snapshot.display_price).toLocaleString()} ${snapshot?.listed_currency || ''}` : null}
               />
               <Field label="Date won" value={new Date(wonVehicle.promoted_at).toLocaleDateString()} />
-              <Field label="Platform" value={snapshot?.source_platform} />
+              <Field label="Platform" value={platformLabel(snapshot?.source_platform as string | null)} />
               <Field label="Captured" value={snapshot?.captured_at ? new Date(snapshot.captured_at).toLocaleString() : null} />
               <Field label="Sale date" value={snapshot?.sale_date} />
             </div>

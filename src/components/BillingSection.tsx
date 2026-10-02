@@ -249,10 +249,10 @@ const BillingSection: React.FC<Props> = ({ orgId, clientId, clientName, wonVehic
 
       {payForm && (
         <div className="border rounded-lg p-3 mb-3 flex flex-wrap gap-2 items-end">
-          <p data-testid="pay-form-hint" className="basis-full text-xs text-gray-500">Records money received <strong>on account</strong> - it is not applied to any invoice, and shows as credit. To pay a specific invoice, open that invoice below and use its own "Record payment".</p>
+          <p data-testid="pay-form-hint" className="basis-full text-xs text-gray-500">Records money received that is not applied to any invoice - it is held as a <strong>credit balance</strong>. To pay a specific invoice, open that invoice below and use its own "Record payment".</p>
           <div><label className="text-xs text-gray-500 block">Amount</label><input data-testid="pay-amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} className="border rounded px-2 py-1 text-sm w-24" /></div>
           <div><label className="text-xs text-gray-500 block">Currency</label><select data-testid="pay-currency" value={payCurrency} onChange={e => setPayCurrency(e.target.value as Currency)} className="border rounded px-2 py-1 text-sm bg-white"><option>USD</option><option>NGN</option></select></div>
-          <div><label className="text-xs text-gray-500 block">Purpose</label><select value={payPurpose} onChange={e => setPayPurpose(e.target.value as any)} className="border rounded px-2 py-1 text-sm bg-white"><option value="deposit">Deposit</option><option value="payment">Payment</option></select></div>
+          <div><label className="text-xs text-gray-500 block">Purpose</label><select value={payPurpose} onChange={e => setPayPurpose(e.target.value as any)} className="border rounded px-2 py-1 text-sm bg-white"><option value="deposit">Commitment fee</option><option value="payment">Payment</option></select></div>
           <div><label className="text-xs text-gray-500 block">Method</label><select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="border rounded px-2 py-1 text-sm bg-white"><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="cheque">Cheque</option><option value="other">Other</option></select></div>
           <div><label className="text-xs text-gray-500 block">Date</label><input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} className="border rounded px-2 py-1 text-sm" /></div>
           <button data-testid="pay-save" onClick={doRecordPayment} disabled={payBusy || !payAmount} className="text-xs bg-[#a58039] text-white px-3 py-1.5 rounded disabled:opacity-50">{payBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Save'}</button>
@@ -268,7 +268,7 @@ const BillingSection: React.FC<Props> = ({ orgId, clientId, clientName, wonVehic
           <div className="text-xs font-semibold text-gray-500 mb-1">Payments</div>
           {payments.map(p => (
             <div key={p.id} data-testid="payment-row" className="flex flex-wrap items-center justify-between text-sm py-1 border-b border-gray-100 last:border-0">
-              <span>{p.purpose === 'deposit' ? 'Deposit' : 'Payment'} {money(p.amount, p.currency)} · {p.method.replace(/_/g, ' ')} · {ddmmyyyy(p.paid_at)}{p.voided_at ? ' (voided)' : ''}</span>
+              <span>{p.purpose === 'deposit' ? 'Commitment fee' : 'Payment'} {money(p.amount, p.currency)} · {p.method.replace(/_/g, ' ')} · {ddmmyyyy(p.paid_at)}{p.voided_at ? ' (voided)' : ''}</span>
               {!p.voided_at && (
                 <span className="flex items-center gap-2">
                   <button onClick={() => doIssueReceipt(p.id)} title="Issues a numbered receipt for this payment (a permanent document). To open an existing receipt, use the Receipts list below." className="text-xs text-[#a58039] hover:underline flex items-center gap-1"><ReceiptIcon className="w-3 h-3" /> Issue receipt</button>

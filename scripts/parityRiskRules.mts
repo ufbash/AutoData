@@ -53,17 +53,22 @@ for (const run of runs) {
 
   // item-level attribution
   const hasRepeat = ls.some(l => l.asset_id && nFlags.get(l.asset_id)?.repeatSale);
-  const hasUnknownLot = run.run_type === 'mixed' && ls.some(l => l.lot_state == null || l.lot_state === 'unknown');
+  const hasUnknownLot = ls.some(l => l.lot_state == null || l.lot_state === 'unknown'); // strict on EVERY run type since Prompt 44 Stage 1a
   const explain = (x: any, side: 'legacy' | 'module'): string | null => {
-    if (side === 'module' && x.rule === 'lot_state_unknown') return 'INTENDED: new INFO naming listings with unknown lot state';
+    if (side === 'module' && x.rule === 'lot_state_unknown') return 'INTENDED: unknown lot state is named (WARN) on every run type (charter 5.7 as extended, Prompt 44 1a)';
+    if (side === 'module' && x.rule === 'possible_repeat_sale') return "INTENDED: Prompt 44 Stage 4 - one recorded Sold beside an appearance whose outcome is 'No information' may be a re-sale";
+    if (/unconfirmed (sale |or not-sold )?status and are excluded from the average/.test(x.message)) return 'INTENDED: Prompt 44 Stage 6 - a comp confirmed NOT sold (sale_confirmed=false) is now named, wording widened to "unconfirmed or not-sold"';
+    if (/^Market research average is based on only 1 sales?\. Limited sample/.test(x.message)) return 'INTENDED: Prompt 44 Stage 6 - usability verifier: "1 sales" grammar, now "1 sale"';
+    if (side === 'legacy' && x.passed && x.message === 'All sold listings are confirmed') return 'INTENDED: Prompt 44 Stage 6 - the legacy check said "all confirmed" while a comp confirmed NOT sold (sale_confirmed=false) sat in the sold group, silently excluded from the average; the module now names it (the average itself is unchanged)';
+    if (x.message.startsWith('Prior auction history not checkable') || x.message.startsWith('Prior auction history could not be checked')) return 'INTENDED: Prompt 44 Stage 4 - reworded (it read like a roadmap note)';
     if (side === 'module' && x.rule === 'repeat_sale' && !x.passed) return 'INTENDED: repeat-sale rule (decision 4.16)';
     if (side === 'module' && x.rule === 'repeat_sale' && x.passed) return 'INTENDED: repeat-sale rule item (passes - nothing flagged)';
     if (hasRepeat && ['limited_sample', 'unconfirmed_sale', 'different_model', 'population_mismatch', 'population_unknown', 'range_disclosure'].includes(x.rule || ((x.message.startsWith('Market research average') && 'limited_sample') as string))) return 'INTENDED: a repeat-sale comp is excluded from the sold average/sample';
-    if (hasUnknownLot) return 'INTENDED: mixed run with unknown-lot-state listings (charter 5.7 as extended)';
+    if (hasUnknownLot) return 'INTENDED: the run holds unknown-lot-state listings, now in no population on every run type (charter 5.7 as extended)';
     return null;
   };
   // a module-only item that PASSES and flags nobody (the always-present 'No repeat-sale vehicles' line) is not a flag difference
-  const diffs = [...onlyLegacy.map(x => ({ side: 'legacy', x })), ...onlyModule.filter(x => !(x.rule === 'repeat_sale' && x.passed)).map(x => ({ side: 'module', x }))];
+  const diffs = [...onlyLegacy.map(x => ({ side: 'legacy', x })), ...onlyModule.filter(x => !((x.rule === 'repeat_sale' || x.rule === 'possible_repeat_sale') && x.passed)).map(x => ({ side: 'module', x }))];
   const unexpl = diffs.filter(d => !explain(d.x, d.side as any));
 
   // stats parity: sold group (count of priced-in-average, average) + live group size

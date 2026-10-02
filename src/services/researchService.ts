@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient';
 import { briefReference } from '../../supabase/functions/_shared/vehicleHeading';
 import { fetchAllVerified, assertComplete } from '../../supabase/functions/_shared/paginatedRead';
+import { attachEligibility, effectiveLotState, LotStateClassification } from '../../supabase/functions/_shared/soldGroup';
 
 export interface Client {
   id: string;
@@ -94,7 +95,7 @@ export interface RunListing {
   position: number | null;
   included: boolean;
   notes: string | null;
-  source_platform: string;
+  source_platform: string | null;
   source_url: string | null;
   lot_number: string | null;
   mileage_miles: number | null;
@@ -123,6 +124,8 @@ export interface RunListing {
   captured_at: string;
   price_usd: number | null;
   lot_state: 'active' | 'finished' | 'unknown' | null;
+  /** true when lot_state is a staff classification (not what the source recorded) */
+  lot_state_classified?: boolean;
   sale_confirmed?: boolean | null;
   make: string;
   model: string;
@@ -810,6 +813,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
   }
   assertComplete('run listings', (data || []).length, count);
 
+  const classByRunSighting = await loadLotStateClassifications((data || []).map((r: any) => r.sighting_id).filter(Boolean));
   return (data || []).map((row: any) => {
     const sighting = Array.isArray(row.sightings) ? row.sightings[0] : (row.sightings || {});
     const asset = Array.isArray(sighting.assets) ? sighting.assets[0] : (sighting.assets || {});
@@ -831,7 +835,7 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       approved_snapshot: row.approved_snapshot ?? null,
       won_vehicle_id: row.won_vehicle_id ?? null,
       won_at: row.won_at ?? null,
-      source_platform: sighting.source_platform || 'unknown',
+      source_platform: sighting.source_platform ?? null, // PROMPT 44: a missing platform stays null (it used to be coerced to 'unknown', which made the population_unknown rule impossible to fire)
       source_auction_platform: sighting.source_auction_platform ?? null,
       source_url: sighting.source_url || null,
       lot_number: sighting.lot_number || null,
@@ -869,7 +873,8 @@ export const listRunListings = async (runId: string): Promise<RunListing[]> => {
       logged_via: sighting.logged_via || 'unknown',
       captured_at: sighting.captured_at,
       price_usd: sighting.price_usd ?? null,
-      lot_state: sighting.lot_state ?? null,
+      lot_state: effectiveLotState(sighting.lot_state ?? null, classByRunSighting.get(row.sighting_id)).lot_state as any,
+      lot_state_classified: effectiveLotState(sighting.lot_state ?? null, classByRunSighting.get(row.sighting_id)).classified,
       sale_confirmed: sighting.sale_confirmed ?? null,
       make: asset.make || 'Unknown',
       model: asset.model || 'Unknown',
@@ -1015,7 +1020,7 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
 
   const sightingObj = {
     source_platform: sightingData.source_platform,
-    lot_state: sightingData.lot_state,
+    lot_state: effectiveLotState(sightingData.lot_state, (await loadLotStateClassifications([sightingId])).get(sightingId)).lot_state as any,
     price_usd: sightingData.price_usd,
     // Fixed 11 Sep 2026 - same mistake as listRunListings/listAvailableSightings. See
     // PLAN_TRACKER.md.
@@ -1023,23 +1028,9 @@ export const attachSightingToRun = async (orgId: string, runId: string, sighting
     sale_confirmed: sightingData.sale_confirmed
   };
 
-  const isFinished = (l: any) => l.lot_state === 'finished';
-  const isAuctionSource = (l: any) => ['copart','bidcars','iaai'].includes(l.source_platform);
-  const hasValue = (v: any) => v !== null && v !== undefined;
-  const isUnconfirmed = l => l.sale_confirmed === false;
-
-  const eligibleActive = (l: any) => isAuctionSource(l) && !isFinished(l);
-  const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active' && !isUnconfirmed(l);
-
-  if (runData.run_type === 'sold_comps') {
-    if (!eligibleSold(sightingObj)) {
-      throw new Error("Only sold or settled listings can be added to a market-research run.");
-    }
-  } else if (runData.run_type === 'active_listings') {
-    if (!eligibleActive(sightingObj)) {
-      throw new Error("Only live auction listings can be added to a client-options run.");
-    }
-  }
+  // PROMPT 44 Stage 1e - the eligibility decision is the shared module's (soldGroup.attachEligibility), not a copy here.
+  const eligibility = attachEligibility(sightingObj as any, runData.run_type as any);
+  if (eligibility.ok === false) throw new Error(eligibility.message);
   const { data, error: countError } = await supabase
     .from('research_run_listings')
     .select('position')
@@ -1184,6 +1175,7 @@ export async function listAvailableSightings(
     throw new Error(`Failed to list available sightings: ${error.message}`);
   }
 
+  const classByAvail = await loadLotStateClassifications((data || []).map((r: any) => r.id));
   const available = (data || [])
     .map((row: any) => {
       const asset = Array.isArray(row.assets) ? row.assets[0] : (row.assets || {});
@@ -1196,7 +1188,7 @@ export async function listAvailableSightings(
         year: asset.year || null,
         mileage_miles: row.mileage_miles,
         damage_type: row.damage_type,
-        source_platform: row.source_platform || 'unknown',
+        source_platform: row.source_platform ?? null,
         logged_via: row.logged_via || 'unknown',
         captured_at: row.captured_at,
         image_urls: row.image_urls || [],
@@ -1204,7 +1196,7 @@ export async function listAvailableSightings(
         listed_price: row.listed_price ?? null,
         listed_currency: row.listed_currency ?? null,
         price_usd: row.price_usd ?? null,
-        lot_state: row.lot_state ?? null,
+        lot_state: effectiveLotState(row.lot_state ?? null, classByAvail.get(row.id)).lot_state as any,
         sale_confirmed: row.sale_confirmed ?? null,
         // Fixed 11 Sep 2026 - same mistake as listRunListings: raw_payload.current_bid_usd
         // doesn't exist at that path, and the real column wasn't selected. See
@@ -1334,3 +1326,31 @@ export const saveShareFlagSnapshot = async (runId: string, orgId: string, keys: 
     .upsert({ run_id: runId, org_id: orgId, shared_flag_keys: keys, shared_flags_at: new Date().toISOString() }, { onConflict: 'run_id' });
   if (error) throw new Error(`Failed to record the share flag snapshot: ${error.message}`);
 };
+
+
+/**
+ * PROMPT 44 (adversarial verifier #1; charter 5.8 - store what the source said, derive at read). A hand-entered or screenshot
+ * comp has no captured lot_state, so it sits in no average. Staff say what it is HERE: an append-only, attributed row (who,
+ * when, what they chose) in sighting_lot_state_classifications. sightings.lot_state is NEVER written; every reader derives the
+ * effective state with effectiveLotState (soldGroup.ts).
+ */
+export async function classifyLotState(sightingId: string, state: 'active' | 'finished'): Promise<void> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { data: s, error: sErr } = await supabase.from('sightings').select('org_id, lot_state').eq('id', sightingId).single();
+  if (sErr || !s) throw new Error('Listing not found');
+  if (s.lot_state === 'active' || s.lot_state === 'finished') throw new Error('That listing already has a recorded lot state.');
+  const { error } = await supabase.from('sighting_lot_state_classifications').insert({ org_id: s.org_id, sighting_id: sightingId, lot_state: state, classified_by: userId });
+  if (error) throw new Error(`Could not classify this listing: ${error.message}`);
+}
+
+async function loadLotStateClassifications(sightingIds: string[]): Promise<Map<string, LotStateClassification[]>> {
+  const out = new Map<string, LotStateClassification[]>();
+  for (let i = 0; i < sightingIds.length; i += 100) {
+    const { data, error } = await supabase.from('sighting_lot_state_classifications').select('sighting_id, lot_state, classified_at').in('sighting_id', sightingIds.slice(i, i + 100));
+    if (error) throw new Error(`Failed to load lot-state classifications: ${error.message}`);
+    (data || []).forEach((c: any) => { if (!out.has(c.sighting_id)) out.set(c.sighting_id, []); out.get(c.sighting_id)!.push(c); });
+  }
+  return out;
+}

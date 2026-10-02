@@ -605,8 +605,8 @@ export async function renderReceiptPdf(lib: PdfLibLike, fontkit: unknown, fonts:
   let c2 = bandBottom - 36;
   const applied = model.appliedTo ?? [];
   if (applied.length === 0) {
-    c2 = bar('Applied To', 'ON ACCOUNT', c2);
-    c2 = kv('Status', 'Received on account - not yet applied to an invoice', c2);
+    c2 = bar('Applied To', 'CREDIT BALANCE', c2);
+    c2 = kv('Status', 'Held as credit balance - not yet applied to an invoice', c2);
   }
   for (const a of applied) {
     c2 = bar('Applied To', `${a.label.toUpperCase()} ${a.number}`, c2);

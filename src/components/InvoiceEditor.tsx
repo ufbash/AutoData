@@ -53,7 +53,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
   const [fxBasis, setFxBasis] = useState<'agreed' | 'live'>('agreed');
   const [fxRate, setFxRate] = useState('');
   const [fxSource, setFxSource] = useState('');
-  const [lines, setLines] = useState<EditorLine[]>([emptyLine(1)]);
+  const [lines, setLines] = useState<EditorLine[]>([docType === 'retainer' ? { ...emptyLine(1), description: 'Commitment fee' } : emptyLine(1)]);
   const [invDiscType, setInvDiscType] = useState<DiscountType>('none');
   const [invDiscValue, setInvDiscValue] = useState('');
   const [adjustment, setAdjustment] = useState('');
@@ -74,6 +74,10 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
   const [nextNumber, setNextNumber] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [issuing, setIssuing] = useState(false);
+  // issuing normally takes a few seconds but the platform's cold starts can stretch it to ~20s (Prompt 44 #109): after 6s say
+  // so, so nobody clicks again (a second click is safe - one document, one number - but looks like a hang)
+  const [issueSlow, setIssueSlow] = useState(false);
+  useEffect(() => { if (!issuing) { setIssueSlow(false); return; } const t = setTimeout(() => setIssueSlow(true), 6000); return () => clearTimeout(t); }, [issuing]);
   const [issueErr, setIssueErr] = useState<string | null>(null);
   const [idempotencyKey] = useState(uid());
 
@@ -346,7 +350,7 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
           {/* apply payments/credits */}
           {(availablePayments.length > 0 || availableRetainers.length > 0) && docType !== 'credit_note' && (
             <div className="border rounded-lg p-3">
-              <div className="text-xs font-semibold text-gray-600 mb-2">Apply existing payments or deposit credit</div>
+              <div className="text-xs font-semibold text-gray-600 mb-2">Apply existing payments or credit balance</div>
               {applyRows.map((r, i) => (
                 <div key={i} className="flex items-center gap-2 mb-1 text-sm">
                   <span className="flex-1">{r.label}</span>
@@ -393,10 +397,11 @@ const InvoiceEditor: React.FC<Props> = ({ orgId, clientId, clientName, wonVehicl
         <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
             <h3 className="font-bold text-[#403f4c] mb-2">Confirm issue</h3>
-            <p className="text-sm text-gray-600 mb-4">This will consume <span className="font-mono font-bold text-[#a58039]" data-testid="confirm-issue-number">{nextNumber}</span> and cannot be undone — the document can only be voided or reduced by a credit note afterward.</p>
+            <p className="text-sm text-gray-600 mb-4">This will issue <span className="font-mono font-bold text-[#a58039]" data-testid="confirm-issue-number">{nextNumber}</span> and cannot be undone — the document can only be voided or reduced by a credit note afterward.</p>
             <p className="text-sm font-semibold mb-4">Total: {preview ? money(Number(centsToDecimalSafe(preview.totalCents)), currency) : '—'}</p>
+            {issuing && issueSlow && <p data-testid="issue-slow-hint" className="text-xs text-amber-700 mb-3">Still working - this can take up to half a minute. Please don't click again; nothing will be issued twice.</p>}
             <div className="flex justify-end gap-2">
-              <button onClick={() => setConfirmOpen(false)} className="px-3 py-1.5 text-sm text-gray-600">Cancel</button>
+              <button onClick={() => setConfirmOpen(false)} disabled={issuing} className="px-3 py-1.5 text-sm text-gray-600 disabled:opacity-40">Cancel</button>
               <button onClick={doIssue} disabled={issuing} data-testid="confirm-issue-btn" className="px-3 py-1.5 text-sm font-semibold bg-[#a58039] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
                 {issuing && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Confirm, issue {nextNumber}
               </button>

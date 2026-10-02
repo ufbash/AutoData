@@ -124,12 +124,11 @@ export function countsTowardSoldAverage(listing: SoldGroupListing): boolean {
  * live mixed run, so unifying moved no figure.
  */
 export function isInSoldPopulation(listing: SoldGroupListing, runType: RunType): boolean {
+  // PROJECT_CHARTER 5.7 as extended, applied STRICTLY on every run type (Bashir 1 Oct 2026, Prompt 44 Stage 1a): an unknown
+  // lot state belongs to NO population, whatever the run's type. Shown and labelled, in no average and no count.
+  if (lotStateUnknown(listing)) return false;
   if (runType === 'sold_comps') return true;
   if (runType === 'active_listings') return false;
-  // PROMPT 43 Stage 3 (PROJECT_CHARTER 5.7, extended 1 Oct 2026): in a MIXED run lot state decides which population a
-  // listing belongs to, and an unknown lot state belongs to NEITHER. Before this a listing with no lot state and no
-  // bid satisfied this predicate (sold) AND the active-side filters (active) at the same time.
-  if (lotStateUnknown(listing)) return false;
   return listing.lot_state !== 'active' && listing.current_bid_usd === null;
 }
 
@@ -140,14 +139,16 @@ export function lotStateUnknown(listing: { lot_state: string | null }): boolean 
 
 /**
  * Is this listing in the ACTIVE (client-options) population for a run of this type?
- *  - active_listings run: every listing (the run type is the staff member's declaration at attach time; eligibility
- *    was checked then). Risk checks must not silently vanish for a listing the run was built to offer a client.
+ *  - active_listings run: every listing whose lot state is KNOWN (not 'finished' is enforced at attach time). A listing
+ *    with an unknown lot state is in no population - but the RULES module still risk-checks it as a precaution, because
+ *    'unknown' is not 'safe' (riskRules.ts).
  *  - sold_comps run: none.
  *  - mixed run: lot state decides, and ONLY a lot known to be 'active' is active - regardless of whether a bid
  *    exists (AGENTS.md 4.1: current_bid_usd is not a liveness test; the old live-group filter required a bid, so a
  *    live lot with no bids yet belonged to no group while the risk checks still treated it as active).
  */
 export function isInActivePopulation(listing: SoldGroupListing, runType: RunType): boolean {
+  if (lotStateUnknown(listing)) return false; // strict, as above
   if (runType === 'active_listings') return true;
   if (runType === 'sold_comps') return false;
   return listing.lot_state === 'active';
@@ -160,10 +161,65 @@ export type Population = 'sold' | 'active' | 'unknown' | 'none';
 export function populationOf(listing: SoldGroupListing, runType: RunType): Population {
   if (isInSoldPopulation(listing, runType)) return 'sold';
   if (isInActivePopulation(listing, runType)) return 'active';
-  return runType === 'mixed' && lotStateUnknown(listing) ? 'unknown' : 'none';
+  return lotStateUnknown(listing) ? 'unknown' : 'none';
 }
 
 /** Convenience: in the sold population AND its price counts. */
 export function countsInSoldAverageForRun(listing: SoldGroupListing, runType: RunType): boolean {
   return isInSoldPopulation(listing, runType) && listing.price_usd !== null && countsTowardSoldAverage(listing);
+}
+
+/**
+ * ATTACH-time eligibility: may this sighting be added to a run of this type? (PROMPT 44 Stage 1e - this used to be a
+ * separate copy inside researchService.addListingToRun, the last place outside this file that decided "sold" and "active".)
+ *
+ * An UNKNOWN lot state is allowed into ANY run: it lands labelled "Lot state unknown" and in no average/count (charter
+ * 5.7 as extended). Blocking it would hide a car staff need to classify (charter 5.2) - the rules below only refuse what is
+ * positively the wrong kind (a live lot for a market-research run; a finished lot for a client-options run).
+ */
+export interface AttachCandidate {
+  source_platform: string | null;
+  lot_state: string | null;
+  price_usd: number | null;
+  current_bid_usd: number | null;
+  sale_confirmed?: boolean | null;
+}
+export function attachEligibility(c: AttachCandidate, runType: RunType): { ok: true } | { ok: false; message: string } {
+  const has = (v: unknown) => v !== null && v !== undefined;
+  // An UNKNOWN lot state is allowed into ANY run, whatever else is missing (no price, a bid, a non-auction source): it lands
+  // labelled and in no average, never refused (the adversarial verifier found these refusals contradicting the doctrine).
+  if (lotStateUnknown(c)) return { ok: true };
+  if (runType === 'sold_comps') {
+    // a price, no live bid, a lot not known to be live, and a sale not known to have failed
+    const ok = has(c.price_usd) && !has(c.current_bid_usd) && c.lot_state !== 'active' && c.sale_confirmed !== false;
+    return ok ? { ok: true } : { ok: false, message: 'Only sold or settled listings can be added to a market-research run.' };
+  }
+  if (runType === 'active_listings') {
+    const ok = ['copart', 'bidcars', 'iaai'].includes((c.source_platform ?? '').toLowerCase()) && c.lot_state !== 'finished';
+    return ok ? { ok: true } : { ok: false, message: 'Only live auction listings can be added to a client-options run.' };
+  }
+  // mixed: a sold comp OR a live auction lot (what the Add Captures modal has always offered); anything else is neither
+  const sold = attachEligibility(c, 'sold_comps').ok;
+  const active = attachEligibility(c, 'active_listings').ok;
+  return sold || active ? { ok: true } : { ok: false, message: 'That listing is neither a sold comp nor a live auction lot.' };
+}
+
+
+
+/**
+ * PROMPT 44 / charter 5.8 - store what the source said, derive at read. A staff classification of a listing whose captured
+ * lot_state is unknown lives in its own attributed table (sighting_lot_state_classifications) and is NEVER written into
+ * sightings.lot_state. The effective state is the captured one when the source recorded it (active/finished), otherwise the
+ * latest staff classification, otherwise unknown. One function, so staff page, attach and public-run cannot disagree.
+ */
+export interface LotStateClassification { lot_state: string; classified_at: string }
+export function effectiveLotState(
+  captured: string | null | undefined,
+  classifications: LotStateClassification[] | undefined,
+): { lot_state: string | null; classified: boolean } {
+  if (captured === 'active' || captured === 'finished') return { lot_state: captured, classified: false };
+  const latest = (classifications ?? [])
+    .filter(c => c.lot_state === 'active' || c.lot_state === 'finished')
+    .sort((a, b) => (a.classified_at < b.classified_at ? 1 : a.classified_at > b.classified_at ? -1 : 0))[0];
+  return latest ? { lot_state: latest.lot_state, classified: true } : { lot_state: captured ?? null, classified: false };
 }

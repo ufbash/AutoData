@@ -11,7 +11,8 @@
     "typecheck:functions": "deno check supabase/functions/**/*.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "smoke": "playwright test -c playwright.smoke.config.ts"
+    "smoke": "playwright test -c playwright.smoke.config.ts",
+    "deploy:fn": "bash scripts/deployFunction.sh"
   },
   "dependencies": {
     "@google/genai": "^1.34.0",

@@ -4,11 +4,11 @@ import ClientAccountStatusSummary from './ClientAccountStatusSummary';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getMyClientRecord, listMyBriefs, listMySharedRuns, listMyWonVehicles, listMyStatusHistory, listMyDocuments,
-  getMyDocumentUrl, listMyBillingDocs, listMyBillingLines, getMyBalance, listMyReceipts, getMyBillingFileUrl,
+  getMyDocumentUrl, listMyBillingDocs, listMyBillingLines, getMyBalance, listMyReceipts, listMyPayments, getMyBillingFileUrl,
   STATUS_LABELS, STATUS_SEQUENCE,
 } from '../services/clientPortalService';
 import type {
-  MyClientRecord, MyBrief, MySharedRun, MyWonVehicle, MyStatusEvent, MyDocument, MyBillingDoc, MyBillingLine, MyBalance, MyReceipt,
+  MyClientRecord, MyBrief, MySharedRun, MyWonVehicle, MyStatusEvent, MyDocument, MyBillingDoc, MyBillingLine, MyBalance, MyReceipt, MyPayment,
 } from '../services/clientPortalService';
 
 // PROMPT 39 Stage 4 - the client's first (and only) view. Everything here reads through the client's own RLS policies
@@ -47,7 +47,10 @@ const StatusLadder: React.FC<{ vehicleId: string; history: MyStatusEvent[] }> = 
   );
 };
 
-const VehicleCard: React.FC<{ v: MyWonVehicle }> = ({ v }) => {
+const VehicleCard: React.FC<{ v: MyWonVehicle; highlight?: boolean }> = ({ v, highlight }) => {
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  // opened from a /vehicle/<id> link: bring THIS vehicle into view and mark it, instead of landing on an undifferentiated page
+  useEffect(() => { if (highlight) cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, [highlight]);
   const [history, setHistory] = useState<MyStatusEvent[]>([]);
   const [docs, setDocs] = useState<MyDocument[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -72,7 +75,8 @@ const VehicleCard: React.FC<{ v: MyWonVehicle }> = ({ v }) => {
   };
 
   return (
-    <div data-testid="portal-vehicle" className="border border-[#e8e2d0] rounded-lg p-4 mb-3">
+    <div ref={cardRef} data-testid="portal-vehicle" data-highlighted={highlight ? 'true' : undefined} className={`border rounded-lg p-4 mb-3 ${highlight ? 'border-[#a58039] ring-2 ring-[#a58039]/40 bg-[#fffdf6]' : 'border-[#e8e2d0]'}`}>
+      {highlight && <div data-testid="portal-vehicle-opened" className="text-[10px] font-bold uppercase tracking-wide text-[#a58039] mb-1">The vehicle from your link</div>}
       <div className="flex items-center gap-2 mb-1">
         <Car className="w-4 h-4 text-[#a58039]" />
         <span className="font-medium text-[#3d3a37]">{title}</span>
@@ -173,7 +177,7 @@ const InvoiceCard: React.FC<{ doc: MyBillingDoc }> = ({ doc }) => {
   );
 };
 
-const ReceiptRow: React.FC<{ r: MyReceipt }> = ({ r }) => {
+const ReceiptRow: React.FC<{ r: MyReceipt; amount?: string }> = ({ r, amount }) => {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const open = async (forceDownload: boolean) => {
@@ -185,7 +189,7 @@ const ReceiptRow: React.FC<{ r: MyReceipt }> = ({ r }) => {
   };
   return (
     <div className="flex items-center justify-between text-sm py-1.5 border-b border-[#f0ece0] last:border-0">
-      <span className="text-[#3d3a37]" data-testid="portal-receipt-number">{r.receipt_number}{r.voided_at ? ' (voided)' : ''}</span>
+      <span className="text-[#3d3a37]"><span data-testid="portal-receipt-number">{r.receipt_number}{r.voided_at ? ' (voided)' : ''}</span>{amount && <span data-testid="portal-receipt-amount" className="ml-3 font-semibold text-[#5c4a2f]">{amount}</span>}</span>
       <div className="flex items-center gap-2">
         <span className="text-xs text-[#9a9184]">{ddmmyyyy(r.issued_at)}</span>
         {r.file_id && (
@@ -210,6 +214,8 @@ const ClientDashboard: React.FC = () => {
   const [vehicles, setVehicles] = useState<MyWonVehicle[]>([]);
   const [docs, setDocs] = useState<MyBillingDoc[]>([]);
   const [receipts, setReceipts] = useState<MyReceipt[]>([]);
+  const [payments, setPayments] = useState<MyPayment[]>([]);
+  const [showVoided, setShowVoided] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dismissedNotice, setDismissedNotice] = useState(false);
@@ -217,17 +223,31 @@ const ClientDashboard: React.FC = () => {
   useEffect(() => {
     void (async () => {
       try {
-        const [rec, b, r, v, d, rec2] = await Promise.all([
-          getMyClientRecord(), listMyBriefs(), listMySharedRuns(), listMyWonVehicles(), listMyBillingDocs(), listMyReceipts(),
+        const [rec, b, r, v, d, rec2, pays] = await Promise.all([
+          getMyClientRecord(), listMyBriefs(), listMySharedRuns(), listMyWonVehicles(), listMyBillingDocs(), listMyReceipts(), listMyPayments(),
         ]);
-        setMe(rec); setBriefs(b); setRuns(r); setVehicles(v); setDocs(d); setReceipts(rec2);
+        setMe(rec); setBriefs(b); setRuns(r); setVehicles(v); setDocs(d); setReceipts(rec2); setPayments(pays);
       } catch (e) { setError((e as Error).message); }
       finally { setLoading(false); }
     })();
   }, []);
 
   if (loading) {
-    return <div className="min-h-screen bg-[#F0EDDE] flex items-center justify-center"><Loader2 className="w-8 h-8 text-[#a58039] animate-spin" /></div>;
+    // a skeleton of the page that is about to appear, with a plain sentence - not a bare spinner on an empty screen
+    return (
+      <div data-testid="portal-loading" className="min-h-screen bg-[#F0EDDE]">
+        <div className="bg-white border-b border-[#e8e2d0] px-6 py-4"><div className="h-5 w-48 bg-[#ece7d6] rounded animate-pulse" /><div className="h-3 w-32 bg-[#f0ece0] rounded mt-2 animate-pulse" /></div>
+        <div className="max-w-3xl mx-auto p-5">
+          <p className="text-sm text-[#9a9184] mb-4">Loading your account...</p>
+          {['Amount owed', 'Your vehicles', 'Invoices'].map(t => (
+            <div key={t} className="bg-white rounded-xl shadow-sm border border-[#e8e2d0] p-5 mb-5">
+              <div className="text-sm font-semibold text-[#5c4a2f] mb-3">{t}</div>
+              <div className="h-4 w-3/4 bg-[#f0ece0] rounded animate-pulse mb-2" /><div className="h-4 w-1/2 bg-[#f0ece0] rounded animate-pulse" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   // PROMPT 43 Stage 4 - a /vehicle/... address that is not one of THIS client's own vehicles (another client's, one that
@@ -245,6 +265,13 @@ const ClientDashboard: React.FC = () => {
       </div>
     );
   }
+
+  const liveDocs = docs.filter(d => !d.voided_at);
+  const voidedDocs = docs.filter(d => d.voided_at);
+  const liveInvoices = liveDocs.filter(d => d.doc_type === 'invoice');
+  const liveDeposits = liveDocs.filter(d => d.doc_type === 'retainer');
+  const liveCreditNotes = liveDocs.filter(d => d.doc_type === 'credit_note');
+  const paymentById = new Map<string, MyPayment>(payments.map(p => [p.id, p] as [string, MyPayment]));
 
   return (
     <div className="min-h-screen bg-[#F0EDDE]">
@@ -288,17 +315,38 @@ const ClientDashboard: React.FC = () => {
 
         <Section title="Your vehicles" icon={<Car className="w-4 h-4" />}>
           {vehicles.length === 0 && <p className="text-sm text-[#9a9184]">No vehicles yet.</p>}
-          {vehicles.map(v => <VehicleCard key={v.id} v={v} />)}
+          {vehicles.map(v => <VehicleCard key={v.id} v={v} highlight={requestedVehicle === v.id && !dismissedNotice} />)}
         </Section>
 
-        <Section title="Invoices" icon={<FileText className="w-4 h-4" />}>
-          {docs.length === 0 && <p className="text-sm text-[#9a9184]">No invoices yet.</p>}
-          {docs.map(d => <InvoiceCard key={d.id} doc={d} />)}
+        {/* Live documents under clear headings; voided ones are kept apart so they never read as something owed */}
+        <Section title={`Invoices (${liveInvoices.length})`} icon={<FileText className="w-4 h-4" />}>
+          {liveInvoices.length === 0 && <p className="text-sm text-[#9a9184]">No invoices yet.</p>}
+          {liveInvoices.map(d => <InvoiceCard key={d.id} doc={d} />)}
         </Section>
+
+        {liveDeposits.length > 0 && (
+          <Section title={`Deposit requests (${liveDeposits.length})`} icon={<FileText className="w-4 h-4" />}>
+            {liveDeposits.map(d => <InvoiceCard key={d.id} doc={d} />)}
+          </Section>
+        )}
+
+        {liveCreditNotes.length > 0 && (
+          <Section title={`Credit notes (${liveCreditNotes.length})`} icon={<FileText className="w-4 h-4" />}>
+            {liveCreditNotes.map(d => <InvoiceCard key={d.id} doc={d} />)}
+          </Section>
+        )}
 
         {receipts.length > 0 && (
-          <Section title="Receipts" icon={<ReceiptIcon className="w-4 h-4" />}>
-            {receipts.map(r => <ReceiptRow key={r.id} r={r} />)}
+          <Section title={`Receipts (${receipts.length})`} icon={<ReceiptIcon className="w-4 h-4" />}>
+            {receipts.map(r => { const p = paymentById.get(r.payment_id); return <ReceiptRow key={r.id} r={r} amount={p ? money(p.amount, p.currency) : undefined} />; })}
+          </Section>
+        )}
+
+        {voidedDocs.length > 0 && (
+          <Section title={`Voided documents (${voidedDocs.length})`}>
+            <p className="text-xs text-[#9a9184] mb-2">Documents that were cancelled. They carry no balance and are not part of what you owe.</p>
+            <button data-testid="portal-voided-toggle" onClick={() => setShowVoided(v => !v)} className="text-xs font-medium text-[#a58039] hover:underline mb-2">{showVoided ? 'Hide voided documents' : 'Show voided documents'}</button>
+            {showVoided && voidedDocs.map(d => <InvoiceCard key={d.id} doc={d} />)}
           </Section>
         )}
       </div>

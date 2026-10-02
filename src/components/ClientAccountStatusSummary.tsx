@@ -18,7 +18,7 @@ const STATUS_STYLE: Record<Row['status'], { label: string; cls: string }> = {
   settled: { label: 'Settled', cls: 'bg-gray-100 text-gray-600' },
   outstanding: { label: 'Outstanding', cls: 'bg-amber-100 text-amber-700' },
   overdue: { label: 'Overdue', cls: 'bg-red-100 text-red-700' },
-  in_credit: { label: 'In credit', cls: 'bg-green-100 text-green-700' },
+  in_credit: { label: 'Credit balance', cls: 'bg-green-100 text-green-700' },
 };
 
 const ClientAccountStatusSummary: React.FC<{ clientId?: string; mine?: boolean }> = ({ clientId, mine }) => {
@@ -50,8 +50,8 @@ const ClientAccountStatusSummary: React.FC<{ clientId?: string; mine?: boolean }
             </div>
             <div data-testid="acct-outstanding" className="text-lg font-bold text-[#403f4c]">{money(r.outstanding, r.currency)}</div>
             <div className="text-[10px] text-gray-400">outstanding{r.overdue > 0 && <span data-testid="acct-overdue" className="text-red-600 font-semibold"> · {money(r.overdue, r.currency)} overdue</span>}</div>
-            {r.unapplied_credit > 0 && <div data-testid="acct-credit" className="text-[10px] text-green-700 mt-0.5">{money(r.unapplied_credit, r.currency)} unapplied credit</div>}
-            <div className="text-[10px] text-gray-400 mt-1">Invoiced {money(r.total_invoiced, r.currency)} · Paid {money(r.total_paid, r.currency)} · Credited {money(r.total_credited, r.currency)}</div>
+            {r.unapplied_credit > 0 && <div data-testid="acct-credit" className="text-[10px] text-green-700 mt-0.5">{money(r.unapplied_credit, r.currency)} credit balance</div>}
+            <div className="text-[10px] text-gray-400 mt-1">Invoiced {money(r.total_invoiced, r.currency)} · Paid {money(r.total_paid, r.currency)} · Credit notes {money(r.total_credited, r.currency)}</div>
           </div>
         );
       })}

@@ -13,6 +13,7 @@ import {
   getSignedImageUrls,
   softDeleteRun,
   listAuctionHistoryForAssets,
+  classifyLotState,
   listVinDecodesForVins,
   DecodedVehicle,
   recordStaffApproval,
@@ -25,6 +26,7 @@ import {
   saveShareFlagSnapshot
 } from '../services/researchService';
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from '../utils/auctionHistoryFlags';
+import { platformLabel, loggedViaLabel } from '../utils/enumLabels';
 import { evaluateRun, listingBadges as moduleListingBadges, flagKeys, newlyFlagged, RuleItem } from '../../supabase/functions/_shared/riskRules.ts';
 // PROMPT 29 Stage 2 - the one definition of the sold population, imported literally (not
 // copied) by both this component and the public-run Edge Function. See that file's header for
@@ -104,7 +106,6 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
         listRunListings(runId)
       ]);
       setRun(r);
-      setListings(l);
 
       const assetIds = l.map(listing => listing.asset_id).filter((id): id is string => !!id);
       const historyByAsset = await listAuctionHistoryForAssets(assetIds);
@@ -119,6 +120,8 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       });
       setAuctionHistoryFlags(flagsMap);
       setAuctionHistoryRows(historyByAsset);
+      // Listings are set only AFTER their repeat-sale flags exist, so a repeat-sale car never counts in the sold average for a render.
+      setListings(l);
       try { setShareSnapshot(await getShareFlagSnapshot(runId)); } catch { setShareSnapshot(null); }
 
       if (r) {
@@ -358,6 +361,9 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       const p = l.price_usd;
       if (p !== null && includePrice) {
         tP += p; pC++;
+        // PROMPT 44 Stage 2 - the mileage average covers EXACTLY the listings the price average covers: a repeat-sale or
+        // unconfirmed comp (or a listing with no price) is out of both. Two numbers on one page, one sample.
+        if (l.mileage_miles !== null && l.mileage_miles > 0) { tM += l.mileage_miles; mC++; }
         if (p < minP) minP = p;
         if (p > maxP) maxP = p;
         if (rangeStated) {
@@ -370,9 +376,6 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
           }
         }
       }
-      if (l.mileage_miles !== null) {
-        tM += l.mileage_miles; mC++;
-      }
     });
     return {
       avgPrice: pC > 0 ? tP / pC : null,
@@ -380,6 +383,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
       maxPrice: pC > 0 ? maxP : null,
       priceCount: pC,
       avgMileage: mC > 0 ? tM / mC : null,
+      mileageCount: mC,
       count: list.length,
       rangeStated,
       rangeInCount,
@@ -401,7 +405,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
         { label: "Client Options (Live)", stats: getStats(includedListings.filter(l => populationOf(l, 'mixed') === 'active'), false), type: 'active' }
       ]
     : [
-        { label: "Run Listings", stats: getStats(includedListings, isSoldComps, run.client_brief), type: isSoldComps ? 'sold' : 'active' }
+        { label: isSoldComps ? "Market Research (Sold)" : "Client Options (Live)", stats: getStats(includedListings.filter(l => populationOf(l, run.run_type as any) !== 'unknown'), isSoldComps, run.client_brief), type: isSoldComps ? 'sold' : 'active' }
       ];
 
   // Pre-Share Checklist - PROMPT 43 Stage 2: every rule lives in ONE pure, unit-tested module
@@ -789,7 +793,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                   
                   {group.type === 'sold' && (
                     <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm min-w-[140px]">
-                      <div className="text-gray-500 text-xs mb-1">Avg sale price ({group.stats.priceCount} sales)</div>
+                      <div className="text-gray-500 text-xs mb-1">Avg sale price ({group.stats.priceCount} {group.stats.priceCount === 1 ? 'sale' : 'sales'})</div>
                       <div className="font-bold text-[#403f4c]">
                         {group.stats.avgPrice !== null ? `$${Math.round(group.stats.avgPrice).toLocaleString()}` : '—'}
                       </div>
@@ -831,7 +835,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                   </div>
                   
                   <div className="bg-white px-4 py-2 rounded-lg border border-gray-100 shadow-sm text-sm min-w-[140px]">
-                    <div className="text-gray-500 text-xs mb-1">Avg Mileage</div>
+                    <div className="text-gray-500 text-xs mb-1">Avg Mileage ({group.stats.mileageCount} {group.type === 'sold' ? (group.stats.mileageCount === 1 ? 'sale' : 'sales') : (group.stats.mileageCount === 1 ? 'listing' : 'listings')} with a price and mileage)</div>
                     <div className="font-bold text-[#403f4c]">
                       {group.stats.avgMileage !== null ? `${Math.round(group.stats.avgMileage).toLocaleString()} mi` : '—'}
                     </div>
@@ -997,7 +1001,7 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                         <div className="text-sm font-medium text-[#403f4c]">
                           <span className="text-gray-500 text-xs block mb-0.5">
                             {listing.price_usd !== null 
-                              ? (listing.current_bid_usd !== null ? 'Current bid' : 'Sale / Listed Price') 
+                              ? (listing.current_bid_usd !== null ? 'Current bid' : (isInSoldPopulation(listing, run.run_type as any) ? 'Sale price' : (listing.lot_state === 'active' ? 'Listed price (live, no bid yet)' : 'Listed price'))) 
                               : 'No Price'}
                           </span>
                           {listing.price_usd !== null 
@@ -1010,14 +1014,14 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                       <div className="space-y-1.5">
                         <div className="flex gap-2">
                           <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-100 rounded text-[10px] font-bold uppercase whitespace-nowrap">
-                            {listing.source_platform}
+                            {platformLabel(listing.source_platform)}
                           </span>
                           <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-100 rounded text-[10px] font-bold uppercase whitespace-nowrap">
-                            {listing.logged_via}
+                            {loggedViaLabel(listing.logged_via)}
                           </span>
                         </div>
                         <div className="text-xs text-gray-500">
-                          {listing.location || 'Unknown loc'}
+                          {listing.location || 'Location not recorded'}
                         </div>
                         {(run.run_type === 'active_listings' || run.run_type === 'mixed') && (
                           <div className="pt-1 border-t border-gray-100">
@@ -1028,7 +1032,26 @@ const ResearchRunDetail: React.FC<ResearchRunDetailProps> = ({ runId, onBack, on
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
-                        {!approvedListing && listing.included && listing.lot_state !== 'finished' && (
+                        {(listing.lot_state == null || listing.lot_state === 'unknown') && (
+                          <select
+                            data-testid={`classify-lot-state-${listing.id}`}
+                            defaultValue=""
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              const v = e.target.value;
+                              if (v !== 'active' && v !== 'finished') return;
+                              try { await classifyLotState(listing.sighting_id, v); await loadData(); }
+                              catch (err: any) { alert(err.message || 'Could not classify this listing'); }
+                            }}
+                            className="text-xs border border-gray-300 rounded px-1 py-1"
+                            title="This listing has no recorded lot state, so it is in no average. Say what it is."
+                          >
+                            <option value="">Classify...</option>
+                            <option value="active">Live auction</option>
+                            <option value="finished">Finished (sold)</option>
+                          </select>
+                        )}
+                        {!approvedListing && listing.included && run && populationOf(listing, run.run_type as any) === 'active' && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();

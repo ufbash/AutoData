@@ -3,7 +3,7 @@ import { signInAsStaff } from '../helpers/auth';
 import { openClientRelationship } from '../helpers/nav';
 
 // PROMPT 42 Stage 3, journey 6 - the account status on the client page, per currency: Overdue, Outstanding,
-// Settled, In credit, and two currencies side by side. Every record the test creates is paid or voided by the
+// Settled, Credit balance, and two currencies side by side. Every record the test creates is paid or voided by the
 // test itself, so the fixture ends in a known state and the test can be re-run (Debt #101).
 
 const COROLLA_VEHICLE_ID = 'd0000000-0000-4000-8000-0000000000a5';
@@ -105,7 +105,7 @@ test('overdue: a backdated unpaid invoice raises the USD overdue amount by its b
   await expect.poll(overdueOf, { timeout: 10000 }).toBe(before);
 });
 
-test('two currencies side by side; NGN goes Outstanding -> Settled -> In credit, then back to Settled', async ({ page }) => {
+test('two currencies side by side; NGN goes Outstanding -> Settled -> Credit balance, then back to Settled', async ({ page }) => {
   await signInAsStaff(page);
   const billing = await gotoVehicle(page);
   await voidLeftoverNgnInvoices(billing);
@@ -143,7 +143,7 @@ test('two currencies side by side; NGN goes Outstanding -> Settled -> In credit,
   let card = await statusCard(page, 'NGN');
   await expect(card.getByTestId('acct-status')).toHaveText('Settled', { timeout: 10000 });
 
-  // an UNAPPLIED NGN payment -> In credit, with the credit shown
+  // an UNAPPLIED NGN payment -> Credit balance, with the credit shown
   const b3 = await gotoVehicle(page);
   await b3.getByTestId('pay-toggle').click();
   await b3.getByTestId('pay-amount').fill('500');
@@ -153,7 +153,7 @@ test('two currencies side by side; NGN goes Outstanding -> Settled -> In credit,
   await expect(pay).toBeVisible({ timeout: 15000 });
 
   card = await statusCard(page, 'NGN');
-  await expect(card.getByTestId('acct-status')).toHaveText('In credit', { timeout: 10000 });
+  await expect(card.getByTestId('acct-status')).toHaveText('Credit balance', { timeout: 10000 });
   await expect(card.getByTestId('acct-credit')).toContainText('₦500.00');
 
   // reset: void the unapplied payment -> back to Settled

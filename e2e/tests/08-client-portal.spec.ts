@@ -93,9 +93,11 @@ test('8.2 client A: only A\'s data, retail shows one all-inclusive line, nothing
   expect(await page.content()).not.toContain(HIDDEN); // nor anywhere in the DOM, visible or not
 
   // no staff-only affordance leaks into the portal
-  for (const staffOnly of ['Record payment', 'Raise a credit note', 'New invoice', 'New deposit request', 'Computed', 'Void']) {
+  for (const staffOnly of ['Record payment', 'Raise a credit note', 'New invoice', 'New deposit request', 'Computed']) {
     expect(body, `portal must not show "${staffOnly}"`).not.toContain(staffOnly);
   }
+  // the staff 'Void' ACTION must not appear; the client-facing 'Voided documents' section (Prompt 44) is a different thing
+  expect(body, 'portal must not show the staff Void action').not.toMatch(/\bVoid\b/);
 
   // vocabulary: a deposit request is called that to the client, and "Retainer" is nowhere
   await expect(page.getByTestId('portal-invoice').filter({ hasText: 'Deposit request' }).first()).toBeVisible();

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { platformLabel, lotStateLabel } from '../utils/enumLabels';
 import { Loader2, AlertTriangle, GitMerge, Check, X } from 'lucide-react';
 import ReviewQueueShell from './ReviewQueueShell';
 import { supabase } from '../services/supabaseClient';
@@ -46,7 +47,7 @@ const AssetSidePanel: React.FC<{ label: string; side: AssetSide; highlight?: boo
         {side.sightings.length === 0 && <div className="text-xs text-gray-400">None</div>}
         {side.sightings.map((s: any) => (
           <div key={s.id} className="text-xs bg-gray-50 rounded p-2">
-            <div>{s.source_platform} · lot {s.lot_number} · {s.lot_state}</div>
+            <div>{platformLabel(s.source_platform)} · lot {s.lot_number} · {lotStateLabel(s.lot_state)}</div>
             <div className="text-gray-500">mileage {fmt(s.mileage_miles)} · price {fmt(s.price_usd)} · title {fmt(s.title_type)}</div>
           </div>
         ))}

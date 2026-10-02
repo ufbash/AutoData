@@ -22,6 +22,11 @@ const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 class Refuse extends Error { constructor(msg: string, public status = 400) { super(msg); } }
 
+// PROMPT 44 Stage 3 - diagnosing the occasional issuing stall (#109). Per-phase timing of the issue path, written to the
+// function's log and returned in the JSON reply (staff only, behind auth) - NEVER into a document. `cold` marks the first
+// request this isolate has served; `instanceAgeMs` how long the isolate had been alive.
+const INSTANCE_BOOT = Date.now();
+let REQUESTS_SERVED = 0;
 const BUCKET = 'won-vehicle-documents';
 const METHODS = ['bank_transfer', 'cash', 'card', 'cheque', 'other'];
 const b64 = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -38,6 +43,10 @@ const money = (c: number) => Number(centsToDecimal(c));
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const cold = REQUESTS_SERVED === 0; REQUESTS_SERVED++;
+  const t0 = performance.now(); let tLast = t0; const phases: Record<string, number> = {};
+  const mark = (name: string) => { const n = performance.now(); phases[name] = Math.round(n - tLast); tLast = n; };
+  const timings = () => ({ ...phases, total: Math.round(performance.now() - t0), cold, instanceAgeMs: Date.now() - INSTANCE_BOOT, requestsServed: REQUESTS_SERVED });
   try {
     if (req.method !== "POST") throw new Refuse("Method not allowed", 405);
     const authHeader = req.headers.get('Authorization');
@@ -62,6 +71,7 @@ serve(async (req: Request) => {
     const activeClientOrgs = new Set((memberships ?? []).filter((m: { role: string }) => m.role === 'client').map((m: { org_id: string }) => m.org_id));
     const { data: myClientRows } = await db.from('clients').select('id, org_id').eq('user_id', user.id);
     const myClientIds = new Set((myClientRows ?? []).filter((c: { org_id: string }) => activeClientOrgs.has(c.org_id)).map((c: { id: string }) => c.id));
+    mark('auth');
 
     const payload = await req.json().catch(() => null);
     const mode = payload?.mode;
@@ -125,6 +135,46 @@ serve(async (req: Request) => {
       const { data } = await db.from('document_numbers').select('status, ref_id').eq('id', numberId).maybeSingle();
       return data?.status === 'issued' ? (data.ref_id as string) : null;
     };
+    // ---- CLAIM-FIRST idempotency (migration 086). A double-click used to run N full issue requests in parallel; each allocated
+    // a number BEFORE the final commit decided a winner, so N-1 numbers were burned (gaps in the series) and N-1 users saw a
+    // raw constraint error. Now a request claims its key atomically before it allocates anything; losers wait for the
+    // winner's result and return the same document. Claims are in-flight locks: released when the request ends, either way.
+    // Claims are OWNER-SAFE (migration 087): each request carries a random token, releases only its own claim, and a stale
+    // claim is taken over by an atomic conditional delete - so two waiting requests can never release each other's fresh claim
+    // and run at once (found by the Prompt 44 adversarial verifier). A claim older than STALE_CLAIM_MS belongs to a request that
+    // was killed (the platform's wall-clock limit is below this), so it is safe to take over.
+    const STALE_CLAIM_MS = 160_000;
+    const ownerToken = crypto.randomUUID();
+    const claim = async (orgId: string, key: string, hash: string | null) => {
+      const { error } = await db.from('billing_issue_claims').insert({ org_id: orgId, claim_key: key, request_hash: hash, claimed_by: user.id, owner_token: ownerToken });
+      if (!error) return true;
+      if (error.code === '23505') return false;
+      throw error;
+    };
+    // never throws: a failed release must not mask the real error (the claim then expires by itself)
+    const releaseClaim = async (orgId: string, key: string) => {
+      try { await db.from('billing_issue_claims').delete().eq('org_id', orgId).eq('claim_key', key).eq('owner_token', ownerToken); }
+      catch (e) { console.error('billing: could not release claim', key, (e as Error).message); }
+    };
+    const claimExists = async (orgId: string, key: string) => {
+      const { data } = await db.from('billing_issue_claims').select('claimed_at, request_hash').eq('org_id', orgId).eq('claim_key', key).maybeSingle();
+      return data ? { ageMs: Date.now() - new Date(data.claimed_at as string).getTime(), requestHash: (data.request_hash as string | null) ?? null } : null;
+    };
+    // atomic: deletes the claim ONLY if it is still stale, so two takers cannot both succeed
+    const takeOverStale = async (orgId: string, key: string) => {
+      const cutoff = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
+      await db.from('billing_issue_claims').delete().eq('org_id', orgId).eq('claim_key', key).lt('claimed_at', cutoff);
+    };
+    // a loser waits for the winner's result: poll the lookup; stop early when the claim disappears (the winner finished or failed)
+    const waitForWinner = async <T>(orgId: string, key: string, lookup: () => Promise<T | null>, timeoutMs = 25000): Promise<T | null> => {
+      const end = Date.now() + timeoutMs;
+      while (Date.now() < end) {
+        const found = await lookup(); if (found) return found;
+        if (!(await claimExists(orgId, key))) return await lookup();
+        await new Promise(r => setTimeout(r, 300));
+      }
+      return null;
+    };
     const rpcError = (e: { message: string; code?: string }) => new Refuse(e.message, e.code && /^(P0001|23|22)/.test(e.code) ? 400 : 500);
 
     // ================================================================ issue_document
@@ -137,12 +187,16 @@ serve(async (req: Request) => {
       const idem = str(P.idempotencyKey, 100);
       if (!idem) throw new Refuse('An idempotency key is required (it stops a double click issuing two documents)');
       const requestHash = await sha256(canon({ ...P, idempotencyKey: undefined }));
-      const { data: existing } = await db.from('billing_documents').select('id, number_text, total, request_hash, file_id').eq('org_id', orgId).eq('idempotency_key', idem).maybeSingle();
-      if (existing) {
+      const findExisting = async () => (await db.from('billing_documents').select('id, number_text, total, request_hash, file_id').eq('org_id', orgId).eq('idempotency_key', idem).maybeSingle()).data as { id: string; number_text: string; total: string | number; request_hash: string | null; file_id: string | null } | null;
+      const replay = (existing: NonNullable<Awaited<ReturnType<typeof findExisting>>>) => {
         if (existing.request_hash && existing.request_hash !== requestHash) return json({ error: `The idempotency key was already used for a different document (${existing.number_text}). Nothing was issued.` }, 409);
-        return json({ success: true, alreadyIssued: true, documentId: existing.id, numberText: existing.number_text, total: Number(existing.total) });
-      }
-
+        mark('idempotent_replay');
+        console.log(JSON.stringify({ fn: 'billing', mode: 'issue_document', outcome: 'already_issued', timings: timings() }));
+        return json({ success: true, alreadyIssued: true, documentId: existing.id, numberText: existing.number_text, total: Number(existing.total), timings: timings() });
+      };
+      const existing = await findExisting();
+      if (existing) return replay(existing);
+      mark('prep_client_and_idempotency');
       const issueDate = str(P.issueDate, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate)) throw new Refuse('The issue date must be YYYY-MM-DD');
       const currency = P.currency as 'USD' | 'NGN'; const settle = (P.settlementCurrency ?? P.currency) as 'USD' | 'NGN';
@@ -234,6 +288,7 @@ serve(async (req: Request) => {
         lines.push(out);
       }
 
+      mark('vehicle_and_line_recompute');
       // ---- the figures: shared arithmetic, cross-checked against the database's own compute
       const taxRates = await taxRatesAsOf(orgId, issueDate);
       const invDisc = P.invoiceDiscount ?? { type: 'none', value: 0 };
@@ -254,6 +309,7 @@ serve(async (req: Request) => {
         || (dbCalc.lines as { net_amount: string | number }[]).some((x, i) => cents(x.net_amount) !== calc.lines[i].netCents);
       if (mismatch) throw new Error(`Internal error: the shared arithmetic and the database disagree (${centsToDecimal(calc.totalCents)} vs ${dbCalc.total}). Nothing was issued.`);
       if (calc.totalCents <= 0) throw new Refuse('The document total must be above zero');
+      mark('totals_and_db_cross_check');
 
       // ---- currency: same currency, or an AGREED / LIVE rate frozen at issue
       let fx: { rate: number; basis: 'agreed' | 'live'; date: string; source: string } | null = null;
@@ -308,10 +364,32 @@ serve(async (req: Request) => {
 
       // ---- the org's branding, the parties, the number, the PDF
       const { org, logoPath } = await loadProfile(orgId);
+      mark('profile_and_logo');
       const billTo = { name: client.full_name, lines: (Array.isArray(P.billToLines) ? P.billToLines : []).map((s: unknown) => str(s, 120)).filter(Boolean).slice(0, 6) };
       const printVehicle = vehicle ? { title: [snap.year, snap.make, snap.model, snap.trim].filter(Boolean).join(' ') || 'Vehicle', lotNo: sighting?.lot_number ?? null, vin: (snap.vin as string) ?? null, plate: null }
         : ext ? { title: str(ext.description, 120) || 'Vehicle', plate: str(ext.plate, 30) || null, vin: str(ext.vin, 30) || null, lotNo: null } : null;
-      const num = await allocate(orgId, docType);
+      // ---- claim the key BEFORE any number is allocated (see claim())
+      const claimKey = `issue:${idem}`;
+      let won = await claim(orgId, claimKey, requestHash);
+      if (!won) {
+        // the same key with DIFFERENT content is a client bug, not a double-click: refuse at once rather than wait for nothing
+        const held = await claimExists(orgId, claimKey);
+        if (held?.requestHash && held.requestHash !== requestHash) throw new Refuse('This idempotency key is already in use by a different request. Nothing was issued.', 409);
+        // another request with this key is mid-flight: wait for its result and return the SAME document
+        const winnerDoc = await waitForWinner(orgId, claimKey, findExisting);
+        if (winnerDoc) { console.log(JSON.stringify({ fn: 'billing', mode: 'issue_document', outcome: 'lost_claim_returned_winner', timings: timings() })); return replay(winnerDoc); }
+        // the winner finished without a document (it failed and released its claim) or never answered: take over if the claim is gone or stale
+        const c = await claimExists(orgId, claimKey);
+        if (c && c.ageMs > STALE_CLAIM_MS) await takeOverStale(orgId, claimKey);
+        if (!c || c.ageMs > STALE_CLAIM_MS) won = await claim(orgId, claimKey, requestHash);
+        if (!won) throw new Refuse('Another request for this document is still being processed. Check the documents list before trying again - nothing has been issued twice.', 409);
+      }
+      // a request that committed between our first look and our claim?
+      const racedIn = await findExisting();
+      if (racedIn) { await releaseClaim(orgId, claimKey); return replay(racedIn); }
+      let num!: { id: string; number_text: string; seq: number };
+      try { num = await allocate(orgId, docType); } catch (e) { await releaseClaim(orgId, claimKey); throw e; }
+      mark('allocate_number');
       let fileId: string | null = null;
       try {
         const balanceCents = calc.totalCents - appliedCents;
@@ -332,8 +410,11 @@ serve(async (req: Request) => {
           },
           lines: printLines, applications: appPrint, org, client: billTo, vehicle: printVehicle,
         });
+        mark('build_print_model');
         const pdf = await renderInvoicePdf(pdfLib as never, fontkit, FONTS, model);
+        mark('pdf_render');
         fileId = await storeFile(orgId, client.id, `${num.number_text}.pdf`, pdf);
+        mark('storage_upload_and_file_row');
         const { data: newId, error: issueErr } = await db.rpc('issue_billing_document', {
           p_doc: {
             org_id: orgId, doc_type: docType, invoice_kind: invoiceKind, number_id: num.id, client_id: client.id, won_vehicle_id: vehicle?.id ?? null,
@@ -347,13 +428,17 @@ serve(async (req: Request) => {
           p_lines: lines.map(({ __docLabel: _d, ...l }) => l), p_apply: apply, p_user: user.id,
         });
         if (issueErr) throw rpcError(issueErr);
-        return json({ success: true, documentId: newId, numberText: num.number_text, total: dec(calc.totalCents), balance: dec(balanceCents), fileId });
+        mark('db_commit');
+        await releaseClaim(orgId, claimKey);
+        console.log(JSON.stringify({ fn: 'billing', mode: 'issue_document', outcome: 'issued', number: num.number_text, timings: timings() }));
+        return json({ success: true, documentId: newId, numberText: num.number_text, total: dec(calc.totalCents), balance: dec(balanceCents), fileId, timings: timings() });
       } catch (e) {
         // never leave a burned number or a stray PDF: unless the document in fact committed and only the reply failed
         const committed = await numberIssued(num.id);
-        if (committed) return json({ success: true, documentId: committed, numberText: num.number_text, recovered: true });
+        if (committed) { await releaseClaim(orgId, claimKey); return json({ success: true, documentId: committed, numberText: num.number_text, recovered: true }); }
         await abandon(num.id, `issue failed: ${(e as Error).message}`.slice(0, 300));
         if (fileId) await retireFile(fileId);
+        await releaseClaim(orgId, claimKey);
         throw e;
       }
     }
@@ -427,11 +512,25 @@ serve(async (req: Request) => {
       const appliedTo = [];
       for (const a of (apps ?? []) as { document_id: string }[]) {
         const { data: bal } = await db.from('billing_document_balances').select('number_text, doc_type, currency, total, outstanding').eq('document_id', a.document_id).maybeSingle();
-        if (bal) appliedTo.push({ label: bal.doc_type === 'retainer' ? 'Retainer' : 'Invoice', number: bal.number_text, total: Number(bal.total), paidToDate: Number(bal.total) - Number(bal.outstanding), outstanding: Number(bal.outstanding), currency: bal.currency });
+        if (bal) appliedTo.push({ label: bal.doc_type === 'retainer' ? 'Deposit request' : 'Invoice', number: bal.number_text, total: Number(bal.total), paidToDate: Number(bal.total) - Number(bal.outstanding), outstanding: Number(bal.outstanding), currency: bal.currency });
       }
       let vehicleBlock = null;
       if (pay.won_vehicle_id) { const v = await loadVehicle(pay.won_vehicle_id, pay.org_id, client.id); const s = (v.won_snapshot ?? {}) as Record<string, unknown>; vehicleBlock = { title: [s.year, s.make, s.model, s.trim].filter(Boolean).join(' ') || 'Vehicle', vin: (s.vin as string) ?? null }; }
-      const num = await allocate(pay.org_id, 'receipt');
+      // claim-first for receipts too: clicking 'Issue receipt' twice used to burn a receipt number
+      const rKey = `receipt:${pay.id}`;
+      let rWon = await claim(pay.org_id, rKey, null);
+      if (!rWon) {
+        const winner = await waitForWinner(pay.org_id, rKey, async () => (await db.from('billing_receipts').select('id, receipt_number').eq('payment_id', pay.id).is('voided_at', null).maybeSingle()).data as { id: string; receipt_number: string } | null);
+        if (winner) return json({ success: true, alreadyIssued: true, receiptId: winner.id, receiptNumber: winner.receipt_number });
+        const c = await claimExists(pay.org_id, rKey);
+        if (c && c.ageMs > STALE_CLAIM_MS) await takeOverStale(pay.org_id, rKey);
+        if (!c || c.ageMs > STALE_CLAIM_MS) rWon = await claim(pay.org_id, rKey, null);
+        if (!rWon) throw new Refuse('This receipt is still being issued. Check the receipts list before trying again - nothing has been issued twice.', 409);
+      }
+      const rRaced = (await db.from('billing_receipts').select('id, receipt_number').eq('payment_id', pay.id).is('voided_at', null).maybeSingle()).data;
+      if (rRaced) { await releaseClaim(pay.org_id, rKey); return json({ success: true, alreadyIssued: true, receiptId: rRaced.id, receiptNumber: rRaced.receipt_number }); }
+      let num!: { id: string; number_text: string; seq: number };
+      try { num = await allocate(pay.org_id, 'receipt'); } catch (e) { await releaseClaim(pay.org_id, rKey); throw e; }
       let fileId: string | null = null;
       try {
         const today = new Date().toISOString().slice(0, 10);
@@ -441,14 +540,16 @@ serve(async (req: Request) => {
         fileId = await storeFile(pay.org_id, client.id, `${num.number_text}.pdf`, pdf);
         const { data: rid, error } = await db.rpc('issue_billing_receipt', { p_org: pay.org_id, p_payment: pay.id, p_number_id: num.id, p_file_id: fileId, p_snapshot: { appliedTo, amount: pay.amount, currency: pay.currency }, p_user: user.id, p_notes: null });
         if (error) throw rpcError(error);
+        await releaseClaim(pay.org_id, rKey);
         return json({ success: true, receiptId: rid, receiptNumber: num.number_text, fileId });
       } catch (e) {
         const committed = await numberIssued(num.id);
-        if (committed) return json({ success: true, receiptId: committed, receiptNumber: num.number_text, recovered: true });
+        if (committed) { await releaseClaim(pay.org_id, rKey); return json({ success: true, receiptId: committed, receiptNumber: num.number_text, recovered: true }); }
         // a race: another request receipted this payment first - return the winner instead of an error
         const { data: winner } = await db.from('billing_receipts').select('id, receipt_number').eq('payment_id', pay.id).is('voided_at', null).maybeSingle();
         await abandon(num.id, `receipt not issued: ${(e as Error).message}`.slice(0, 300));
         if (fileId) await retireFile(fileId);
+        await releaseClaim(pay.org_id, rKey);
         if (winner) return json({ success: true, alreadyIssued: true, receiptId: winner.id, receiptNumber: winner.receipt_number });
         throw e;
       }

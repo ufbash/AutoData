@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 // PROMPT 29 Stage 2 - the single definition of the sold population, shared literally with the
 // staff dashboard (src/components/ResearchRunDetail.tsx imports this same file). Closes the
 // divergence that caused the Prompt 25 client-facing bug: there is no second copy to drift.
-import { SoldGroupListing, RunType } from "../_shared/soldGroup.ts";
+import { SoldGroupListing, RunType, effectiveLotState } from "../_shared/soldGroup.ts";
 import { classifyListing } from "../_shared/riskRules.ts";
 import { deriveAuctionHistoryFlags, AuctionHistoryFlags } from "../_shared/auctionHistory.ts";
 
@@ -15,6 +15,18 @@ const corsHeaders = {
 // The nested sighting row this function selects, reduced to the shape the shared rules read.
 // Explicit rather than a cast, so a future select-list change that drops one of these fields
 // is a type error here instead of a silently-null rule (the AGENTS.md §4 failure mode).
+// Charter 5.8: a staff classification of an unknown-lot-state listing is its own attributed fact, never a write to
+// sightings.lot_state. Derive the effective state at read, in memory, for the rows this request is about to classify.
+const applyLotStateClassifications = async (db: any, rows: any[]) => {
+  const ids = Array.from(new Set(rows.map(r => r.sighting_id).filter(Boolean)));
+  if (ids.length === 0) return;
+  const { data, error } = await db.from('sighting_lot_state_classifications').select('sighting_id, lot_state, classified_at').in('sighting_id', ids);
+  if (error) throw error; // never silently drop a classification: a listing would fall back to "unknown" on the client page
+  const by = new Map<string, any[]>();
+  (data || []).forEach((c: any) => { if (!by.has(c.sighting_id)) by.set(c.sighting_id, []); by.get(c.sighting_id)!.push(c); });
+  rows.forEach(r => { if (r.sighting) r.sighting.lot_state = effectiveLotState(r.sighting.lot_state, by.get(r.sighting_id)).lot_state; });
+};
+
 const soldGroupShape = (sighting: any, assetId: string | null = null): any => ({
   id: sighting.id ?? 'x', asset_id: assetId, vin: null, year: null, make: null, model: null, trim: null, mileage_miles: null,
   damage_type: null, secondary_damage: null, title_type: null, runs_and_drives: null, seller_type: null,
@@ -123,6 +135,7 @@ serve(async (req) => {
         .from('research_run_listings')
         .select(`
           id,
+          sighting_id,
           sighting:sightings (
             current_bid_usd,
             listed_price,
@@ -131,7 +144,10 @@ serve(async (req) => {
             sale_date,
             source_platform,
             captured_at,
-            asset:assets ( year, make, model, trim, vin )
+            lot_state,
+            sale_confirmed,
+            logged_via,
+            asset:assets ( id, year, make, model, trim, vin )
           )
         `)
         .eq('id', listingId)
@@ -146,8 +162,18 @@ serve(async (req) => {
         });
       }
 
+      await applyLotStateClassifications(supabaseClient, [targetRow as any]);
       const targetSighting: any = (targetRow as any).sighting || {};
       const targetAsset = targetSighting.asset || {};
+      // Only a listing in the ACTIVE population is a vehicle a client can approve (Prompt 44 adversarial verifier): the POST
+      // used to accept ANY included listing id, so a client could approve a sold comp, or a car whose lot state is unknown,
+      // straight from the API. The same shared classification the page and the averages use decides.
+      if (classifyListing(soldGroupShape(targetSighting, targetAsset.id ?? null), run.run_type as RunType, new Map()).population !== 'active') {
+        return new Response(JSON.stringify({ error: "This vehicle is not available to approve. Contact Caplimo." }), {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
       const currentBid = typeof targetSighting.current_bid_usd === 'number' ? targetSighting.current_bid_usd : null;
       const listedPrice = typeof targetSighting.listed_price === 'number' ? targetSighting.listed_price : null;
       const displayPrice = targetSighting.price_usd !== null && targetSighting.price_usd !== undefined
@@ -211,6 +237,7 @@ serve(async (req) => {
         notes,
         position,
         approved_at,
+        sighting_id,
         sighting:sightings (
           mileage_miles,
           odometer_brand,
@@ -263,6 +290,8 @@ serve(async (req) => {
       throw listingsError;
     }
 
+    await applyLotStateClassifications(supabaseClient, (listingsData || []) as any[]);
+
     // 5b. PROMPT 43 Stage 2 - history flags for the run's assets, derived by the SAME shared function the staff page
     // uses (supabase/functions/_shared/auctionHistory.ts), and every listing is classified by the SAME shared module
     // (_shared/riskRules.ts classifyListing): which group it is in, whether its price counts, whether it is a repeat
@@ -273,12 +302,19 @@ serve(async (req) => {
       const assetIds = Array.from(new Set((listingsData || []).map((r: any) => r.sighting?.asset?.id).filter(Boolean))) as string[];
       const rowsByAsset = new Map<string, any[]>();
       for (let i = 0; i < assetIds.length; i += 100) {
-        const { data: hist, error: histError } = await supabaseClient
-          .from('auction_history')
-          .select('asset_id, auction_platform, lot_number, auction_date, bid_amount_usd, odometer_miles, status')
-          .in('asset_id', assetIds.slice(i, i + 100));
-        if (histError) throw histError;
-        (hist || []).forEach((h: any) => { if (!rowsByAsset.has(h.asset_id)) rowsByAsset.set(h.asset_id, []); rowsByAsset.get(h.asset_id)!.push(h); });
+        // PAGINATED (PostgREST caps a read at 1000 rows): a silently truncated history would turn the repeat-sale rule off for
+        // some listings on the client page while the staff page (which verifies completeness) still flagged them
+        for (let from = 0; ; from += 1000) {
+          const { data: hist, error: histError } = await supabaseClient
+            .from('auction_history')
+            .select('asset_id, auction_platform, lot_number, auction_date, bid_amount_usd, odometer_miles, status')
+            .in('asset_id', assetIds.slice(i, i + 100))
+            .order('id', { ascending: true })
+            .range(from, from + 999);
+          if (histError) throw histError;
+          (hist || []).forEach((h: any) => { if (!rowsByAsset.has(h.asset_id)) rowsByAsset.set(h.asset_id, []); rowsByAsset.get(h.asset_id)!.push(h); });
+          if (!hist || hist.length < 1000) break;
+        }
       }
       assetIds.forEach(id => historyFlags.set(id, deriveAuctionHistoryFlags(rowsByAsset.get(id))));
     }
@@ -411,6 +447,11 @@ serve(async (req) => {
           return !c.countsTowardAverage;
         })(),
 
+        // Which group the page puts this listing in: the SAME classification the staff page and the averages use (derived
+        // label only). The client page used to split sold from live by `current_bid_usd` alone - the AGENTS.md 4.1 mistake -
+        // so a live lot with no bid yet appeared under 'Market Research (Sold)'.
+        population: classify(row).population,
+
         // Derived boolean only. True => the page says why this price is not in the average.
         repeat_sale: classify(row).population === 'sold' && classify(row).repeatSale,
 
@@ -467,12 +508,13 @@ serve(async (req) => {
             else if (l.range_status === 'in_range') rangeInCount++;
             else rangeUnknownCount++;
           }
-        }
-        // a recorded mileage of 0 is treated as unknown, exactly as the staff page's listing mapper does (`|| null`) - the
-        // two sides disagreed here (found by the Prompt 43 adversarial verifier; 2 real sightings have mileage 0)
-        if (typeof l.mileage_miles === 'number' && l.mileage_miles > 0) {
-          tM += l.mileage_miles;
-          mC++;
+          // PROMPT 44 Stage 2 - the mileage average covers EXACTLY the listings the price average covers (a repeat-sale or
+          // unconfirmed comp, or a listing with no price, is out of both), exactly as the staff page does. A recorded
+          // mileage of 0 is treated as unknown, as the staff page's listing mapper does (`|| null`).
+          if (typeof l.mileage_miles === 'number' && l.mileage_miles > 0) {
+            tM += l.mileage_miles;
+            mC++;
+          }
         }
       });
 
@@ -483,6 +525,7 @@ serve(async (req) => {
         priced_count: pC,
         total_count: soldListings.length,
         avg_mileage: mC > 0 ? tM / mC : null,
+        mileage_count: mC,
         range_stated: rangeStated,
         range_in_count: rangeStated ? rangeInCount : null,
         range_out_count: rangeStated ? rangeOutCount : null,

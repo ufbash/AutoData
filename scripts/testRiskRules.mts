@@ -5,7 +5,7 @@
 import { flagKeys, newlyFlagged, evaluateRun, badgeFor, badgeOrUnlabelled, listingBadges, classifyListing, RULE_REGISTRY } from '../supabase/functions/_shared/riskRules.ts';
 import type { RuleKey, RuleListing, RunRuleInput, RuleItem } from '../supabase/functions/_shared/riskRules.ts';
 import { deriveAuctionHistoryFlags } from '../supabase/functions/_shared/auctionHistory.ts';
-import { populationOf } from '../supabase/functions/_shared/soldGroup.ts';
+import { populationOf, attachEligibility } from '../supabase/functions/_shared/soldGroup.ts';
 
 let failed = 0, n = 0;
 const fired = new Set<string>();
@@ -158,10 +158,19 @@ silent('manual entry null is structural, not unconfirmed', run('sold_comps', [SO
 check('mixed: a LIVE lot with NO bid yet is active (AGENTS 4.1 - the old live filter dropped it from every group)', populationOf(L({ lot_state: 'active', current_bid_usd: null }), 'mixed') === 'active');
 check('mixed: a finished lot is sold', populationOf(SOLD(), 'mixed') === 'sold');
 check('mixed: a finished lot that only carries a bid is in no group but is NOT "unknown"', populationOf(SOLD({ current_bid_usd: 4000 }), 'mixed') === 'none');
-check('active run: every listing is active (risk checks never vanish for a client option)', populationOf(L({ lot_state: null }), 'active_listings') === 'active');
-{ const items = run('active_listings', [L({ lot_state: null, damage_type: 'Water/Flood' })]);
-  fires('an active-run listing with unknown lot state IS still risk-checked, and labelled', items, 'critical_damage');
-  fires('...and told it needs classifying', items, 'lot_state_unknown'); }
+// STRICT on every run type (Prompt 44 Stage 1a): unknown lot state is in NO population - but is still risk-checked
+check('active run: a KNOWN-state listing is active', populationOf(L({ lot_state: 'active' }), 'active_listings') === 'active');
+check('active run: an UNKNOWN-state listing is in NO population (strict)', populationOf(L({ lot_state: null }), 'active_listings') === 'unknown');
+check('sold run: an UNKNOWN-state listing is in NO population and NOT in the average', populationOf(SOLD({ lot_state: null }), 'sold_comps') === 'unknown' && classifyListing(SOLD({ lot_state: null }), 'sold_comps', new Map()).countsInAverage === false);
+check('sold run: a known finished listing still counts', classifyListing(SOLD(), 'sold_comps', new Map()).countsInAverage === true);
+{ const u = L({ lot_state: null, damage_type: 'Water/Flood' });
+  const act = run('active_listings', [u]);
+  fires('active run: an unknown-state listing is still RISK-CHECKED (unknown is not safe) and labelled', act, 'critical_damage', [u.id]);
+  check('...and it is a WARN on every run type (sharing needs a reviewed tick)', [run('active_listings', [u]), run('mixed', [u, SOLD()]), run('sold_comps', [SOLD({ lot_state: null }), SOLD(), SOLD()])].every(items => items.some(i => i.rule === 'lot_state_unknown' && i.type === 'WARN' && !i.passed)));
+  const mixed = run('mixed', [L({ lot_state: null, damage_type: 'Water/Flood' }), SOLD()]);
+  fires('mixed run: the same precaution applies', mixed, 'critical_damage');
+  const soldRun = run('sold_comps', [SOLD({ lot_state: null, damage_type: 'Water/Flood', runs_and_drives: null }), SOLD(), SOLD()]);
+  silent('sold run: no risk checks, as ever (4.8)', soldRun, 'critical_damage'); }
 silent('known lot state raises nothing', run('mixed', [SOLD(), L()]), 'lot_state_unknown');
 
 // ---- an already-shared run warns when a rule NEWLY flags a listing
@@ -186,8 +195,8 @@ silent('known lot state raises nothing', run('mixed', [SOLD(), L()]), 'lot_state
   const after = run('active_listings', [sameId]);
   check('a SECOND critical reason on an already-flagged listing is reported as new (key carries the reason)', newlyFlagged(after, snap, true).some(f => /not confirmed run-and-drive/.test(f.item.message)), JSON.stringify(newlyFlagged(after, snap, true).map(f => f.key))); }
 { const u = L({ lot_state: null, current_bid_usd: null });
-  check('mixed run: an unknown-lot-state listing is a WARN (it can no longer reach a client on an INFO alone)', run('mixed', [u, SOLD()]).some(i => i.rule === 'lot_state_unknown' && i.type === 'WARN' && !i.passed));
-  check('typed run: it stays INFO (its run type still places it and its risk checks run)', run('active_listings', [L({ lot_state: null })]).some(i => i.rule === 'lot_state_unknown' && i.type === 'INFO')); }
+  check('mixed run: an unknown-lot-state listing is a WARN (it cannot reach a client on an INFO alone)', run('mixed', [u, SOLD()]).some(i => i.rule === 'lot_state_unknown' && i.type === 'WARN' && !i.passed));
+  }
 { const f = SOLD({ current_bid_usd: 9000 });
   fires('mixed run: a finished lot that only carries a bid is NAMED, not silent', run('mixed', [f, SOLD()]), 'bid_only_not_a_sale', [f.id]);
   silent('a normal finished sale is not', run('mixed', [SOLD(), SOLD()]), 'bid_only_not_a_sale'); }
@@ -197,6 +206,49 @@ silent('known lot state raises nothing', run('mixed', [SOLD(), L()]), 'lot_state
   check('repeat key: a relist at the SAME lot on a different date is a second sale', key([sold('7', '2025-01-01', 8000, 5000), sold('7', '2026-03-01', 6000, 12000)]) === 2);
   check('repeat key: two null-lot Sold rows on different dates are two sales', key([sold(null as any, '2025-01-01', 8000, 5000), sold(null as any, '2026-01-01', 7000, 9000)]) === 2);
   check('repeat key: the SAME scraped row stored twice is still ONE sale', key([sold('1', '2026-01-01', 9000, 10000), sold('1', '2026-01-01', 9000, 10000), sold('1', '2026-01-01', 9000, 10000)]) === 1); }
+
+// ---- 'No information' beside a recorded Sold = a POSSIBLE re-sale (unknown, not 'sold once')
+const noinfo = (lot: string, date: string) => ({ auction_platform: 'Copart', lot_number: lot, auction_date: date, bid_amount_usd: null, odometer_miles: null, status: 'No information' });
+{ const l = SOLD(); const rows = [sold('55526775', '2025-07-01', 9000, 20000), noinfo('60489396', '2026-06-01')];
+  fires('one recorded Sold + an unrecorded-outcome appearance -> possible re-sale', run('sold_comps', [l, SOLD(), SOLD()], withHist(l, rows)), 'possible_repeat_sale', [l.id]);
+  silent('...and it is NOT a confirmed repeat sale (still in the average)', run('sold_comps', [l, SOLD(), SOLD()], withHist(l, rows)), 'repeat_sale');
+  check('...so its price still counts (unknown is not exclusion)', classifyListing(l, 'sold_comps', withHist(l, rows).historyFlags).countsInAverage === true); }
+{ const l = SOLD(); silent('only a No-information row (nothing recorded as sold) -> no flag', run('sold_comps', [l, SOLD(), SOLD()], withHist(l, [noinfo('1', '2026-01-01')])), 'possible_repeat_sale'); }
+{ const l = SOLD(); silent('Sold + Not sold -> no flag (a known outcome)', run('sold_comps', [l, SOLD(), SOLD()], withHist(l, [sold('1', '2025-01-01', 8000, 5000), unsold('2', '2026-01-01')])), 'possible_repeat_sale'); }
+{ const l = SOLD(); silent('two recorded Sold is a CONFIRMED repeat sale, not merely possible', run('sold_comps', [l, SOLD(), SOLD()], withHist(l, [sold('1', '2025-01-01', 8000, 5000), sold('2', '2026-01-01', 9000, 9000), noinfo('3', '2026-06-01')])), 'possible_repeat_sale'); }
+check('flags: unknownOutcomeEventCount counts distinct unrecorded appearances', hist([sold('1', '2025-01-01', 8000, 5000), noinfo('2', '2026-01-01'), noinfo('2', '2026-01-01')]).unknownOutcomeEventCount === 1);
+
+// ---- ATTACH eligibility (the last copy of sold/active outside the module, Prompt 44 Stage 1e)
+{ const cand = (o: any = {}) => ({ source_platform: 'copart', lot_state: 'finished', price_usd: 9000, current_bid_usd: null, sale_confirmed: true, ...o });
+  check('attach: a finished priced sale -> a sold_comps run', attachEligibility(cand(), 'sold_comps').ok === true);
+  check('attach: a LIVE lot is refused by a sold_comps run', attachEligibility(cand({ lot_state: 'active' }), 'sold_comps').ok === false);
+  check('attach: an unconfirmed-NOT-sold sale (sale_confirmed=false) is refused', attachEligibility(cand({ sale_confirmed: false }), 'sold_comps').ok === false);
+  check('attach: a null sale_confirmed is allowed (absence is not violation)', attachEligibility(cand({ sale_confirmed: null }), 'sold_comps').ok === true);
+  check('attach: a lot carrying a live bid is refused by a sold_comps run', attachEligibility(cand({ current_bid_usd: 4000 }), 'sold_comps').ok === false);
+  check('attach: no price is refused by a sold_comps run', attachEligibility(cand({ price_usd: null }), 'sold_comps').ok === false);
+  check('attach: UNKNOWN lot state is ALLOWED into a sold_comps run (lands labelled, excluded)', attachEligibility(cand({ lot_state: null }), 'sold_comps').ok === true && attachEligibility(cand({ lot_state: 'unknown' }), 'sold_comps').ok === true);
+  check('attach: a live auction lot -> an active_listings run', attachEligibility(cand({ lot_state: 'active', price_usd: null }), 'active_listings').ok === true);
+  check('attach: a FINISHED lot is refused by an active_listings run', attachEligibility(cand({ lot_state: 'finished' }), 'active_listings').ok === false);
+  check('attach: a non-auction source is refused by an active_listings run', attachEligibility(cand({ lot_state: 'active', source_platform: 'manual' }), 'active_listings').ok === false);
+  check('attach: UNKNOWN lot state is ALLOWED into an active_listings run', attachEligibility(cand({ lot_state: null }), 'active_listings').ok === true);
+  check('attach: a mixed run takes a sold comp OR a live auction lot', attachEligibility(cand({ lot_state: 'active', price_usd: null }), 'mixed').ok === true && attachEligibility(cand(), 'mixed').ok === true);
+  check('attach: a mixed run refuses what is neither (a finished lot with only a bid, on a non-auction source)', attachEligibility(cand({ source_platform: 'manual', current_bid_usd: 4000 }), 'mixed').ok === false); }
+
+// ---- adversarial-verifier fixes, round 2 (Prompt 44 Stage 6)
+{ const cand = (o: any = {}) => ({ source_platform: 'copart', lot_state: null, price_usd: null, current_bid_usd: null, sale_confirmed: null, ...o });
+  check('attach: an UNKNOWN-state listing with NO price is allowed into a sold_comps run', attachEligibility(cand(), 'sold_comps').ok === true);
+  check('attach: an UNKNOWN-state listing carrying a bid is allowed into a sold_comps run', attachEligibility(cand({ current_bid_usd: 4000 }), 'sold_comps').ok === true);
+  check('attach: an UNKNOWN-state listing from a NON-auction source is allowed into an active_listings run', attachEligibility(cand({ source_platform: 'manual' }), 'active_listings').ok === true && attachEligibility(cand({ source_platform: null }), 'active_listings').ok === true);
+  check('attach: an UNKNOWN-state listing is allowed into a mixed run whatever else is missing', attachEligibility(cand({ source_platform: 'manual', current_bid_usd: 1 }), 'mixed').ok === true);
+  check("attach: but a KNOWN live lot is still refused by sold_comps, and a KNOWN finished lot by active_listings", attachEligibility(cand({ lot_state: 'active', price_usd: 5 }), 'sold_comps').ok === false && attachEligibility(cand({ lot_state: 'finished' }), 'active_listings').ok === false); }
+{ const a = SOLD(), b = SOLD({ sale_confirmed: false }), c = SOLD();
+  const items = run('sold_comps', [a, b, c, SOLD()]);
+  fires('a comp confirmed NOT sold (sale_confirmed=false) is NAMED, not silently excluded', items, 'unconfirmed_sale', [b.id]); }
+{ const key = (rows: any[]) => hist(rows).soldEventCount;
+  check('same sale stored twice, one copy with its date MISSING, is ONE sale', key([sold('1', '2026-01-01', 9000, 10000), { ...sold('1', '2026-01-01', 9000, 10000), auction_date: null }]) === 1);
+  check('same sale in two date FORMATS is ONE sale', key([sold('1', '2026-01-01', 9000, 10000), { ...sold('1', '2026-01-01', 9000, 10000), auction_date: '2026-01-01T00:00:00+00:00' }]) === 1);
+  check('a relist at the same lot on another DAY is still TWO sales', key([sold('1', '2026-01-01', 9000, 10000), sold('1', '2026-03-05', 7000, 14000)]) === 2);
+  check('no lot and no date: different bids are different sales, the same bid is one', key([sold(null as any, '' as any, 8000, 5000), sold(null as any, '' as any, 7000, 9000)]) === 2 && key([sold(null as any, '' as any, 8000, 5000), sold(null as any, '' as any, 8000, 5000)]) === 1); }
 
 // ---- the registry: unknown rules fail LOUDLY
 check('every rule the module EMITTED anywhere above is in the registry (a rule cannot ship unregistered)', [...emitted].every(k => k in RULE_REGISTRY), `emitted but unregistered: ${[...emitted].filter(k => !(k in RULE_REGISTRY)).join(', ')}`);

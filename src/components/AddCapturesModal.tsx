@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { platformLabel } from '../utils/enumLabels';
+import { attachEligibility } from '../../supabase/functions/_shared/soldGroup';
 import { AvailableSighting, listAvailableSightings, attachSightingToRun, deleteSighting } from '../services/researchService';
 import { Loader2, X, Search, Image as ImageIcon, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,23 +41,9 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
         const data = await listAvailableSightings(orgId, existingSightingIds, 60, offset);
         if (data.length < 60) setHasMore(false);
         
-        const isFinished = (l: any) => l.lot_state === 'finished';
-        const isAuctionSource = (l: any) => ['copart','bidcars','iaai'].includes(l.source_platform);
-        const hasValue = (v: any) => v !== null && v !== undefined;
-        const isUnconfirmed = (l: any) => l.sale_confirmed === false;
-
-        const eligibleActive = (l: any) => isAuctionSource(l) && !isFinished(l);
-        const eligibleSold = (l: any) => hasValue(l.price_usd) && !hasValue(l.current_bid_usd) && l.lot_state !== 'active' && !isUnconfirmed(l);
-        const eligibleMixed = (l: any) => eligibleActive(l) || eligibleSold(l);
-
-        const eligibleData = data.filter(s => {
-          if (runType === 'sold_comps') {
-            return eligibleSold(s);
-          } else if (runType === 'active_listings') {
-            return eligibleActive(s);
-          }
-          return eligibleMixed(s);
-        });
+        // PROMPT 44 Stage 1e - eligibility is the shared module's decision (soldGroup.attachEligibility), the same one the
+        // service enforces on attach; this modal used to carry its own copy of 'sold' and 'active'.
+        const eligibleData = data.filter(s => attachEligibility(s as any, runType as any).ok);
         
         setSightings(prev => offset === 0 ? eligibleData : [...prev, ...eligibleData]);
       } catch (err: any) {
@@ -259,7 +247,7 @@ const AddCapturesModal: React.FC<AddCapturesModalProps> = ({ runId, runType, org
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-medium uppercase">
-                          {s.source_platform}
+                          {platformLabel(s.source_platform)}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right text-gray-500 whitespace-nowrap">

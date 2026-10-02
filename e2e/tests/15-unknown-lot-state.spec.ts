@@ -6,7 +6,8 @@ import { signInAsStaff } from '../helpers/auth';
 // one listing with unknown lot state ($18,000, confirmed, would have been averaged as a sale before).
 //   - the sold average is $21,000 over 2 sales (the unknown listing is NOT in it: it would make $20,000 over 3);
 //   - the live lot with no bid is counted as active (the old filter needed a bid, so it was in neither group);
-//   - the unknown-lot listing is named and badged 'Lot state unknown - not in any average', and is not risk-checked.
+//   - the unknown-lot listing is named and badged 'Lot state unknown - not in any average', is a WARN, and (Prompt 44) is
+//     STILL risk-checked as a precaution - 'unknown' is not 'safe'.
 test.setTimeout(120000);
 
 const UNKNOWN = 'd0000000-0000-4000-8000-0000000000fa';
@@ -27,7 +28,7 @@ test('mixed run: unknown lot state is in no average, a live lot with no bid is a
 
   // the unknown-lot listing is named (a WARN in a mixed run: sharing needs a reviewed tick), says how to fix it, and is badged on its row
   await expect(page.locator('li', { hasText: 're-capture that lot from its auction page' })).toContainText('(WARN)');
-  await expect(page.locator('li', { hasText: 'unknown lot state - in NO average and NO risk check, so it cannot be vetted' })).toBeVisible();
+  await expect(page.locator('li', { hasText: 'unknown lot state - in NO average and NO count (risk checks still run on it)' })).toBeVisible();
   await expect(page.locator(`[id="listing-${UNKNOWN}"]`)).toContainText('Lot state unknown - not in any average');
   // ...and the live lot is NOT mislabelled
   await expect(page.locator(`[id="listing-${LIVE_NOBID}"]`)).not.toContainText('Lot state unknown');

@@ -22,6 +22,7 @@ interface PublicRunData {
     priced_count: number;
     total_count: number;
     avg_mileage: number | null;
+    mileage_count?: number;
     range_stated?: boolean;
     range_in_count?: number | null;
     range_out_count?: number | null;
@@ -228,9 +229,14 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
         <div className="p-5 flex-1 flex flex-col">
           <h3 className="text-lg font-bold text-[#403f4c] leading-tight mb-3 line-clamp-2">{title || 'Unknown Vehicle'}</h3>
           
+          {!isSold && listing.lot_state_unknown && (
+            <div className="mb-3 text-[11px] font-bold text-gray-600 bg-gray-100 border border-gray-200 rounded px-2 py-1">
+              Lot state unknown - not in any average
+            </div>
+          )}
           <div className="mb-4">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">
-              {isSold ? 'Final Sale Price' : (isBid ? 'Current Bid' : 'Listed Price')}
+              {listing.population === 'other' || listing.population === 'unknown' || listing.population === 'none' ? 'Recorded price' : (isSold ? 'Final Sale Price' : (isBid ? 'Current Bid' : 'Listed Price'))}
             </span>
             <span className="text-2xl font-bold text-[#a58039]">
               {displayPrice !== null ? `${currency}${Math.round(displayPrice).toLocaleString()}` : '—'}
@@ -282,7 +288,7 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
 
           {/* PROMPT 19 Phase 3 - client approval. Sold comps are historical reference
               data, not a vehicle to bid on, so the action only appears on live options. */}
-          {!isSold && (
+          {!isSold && !listing.lot_state_unknown && listing.population !== 'other' && (
             <div className="mt-4" onClick={(e) => e.stopPropagation()}>
               {listing.approved_at ? (
                 <div className="flex items-center gap-2 text-sm font-bold text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
@@ -329,8 +335,11 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
     );
   };
 
-  const soldListings = listings.filter(l => l.current_bid_usd === null);
-  const activeLivListings = listings.filter(l => l.current_bid_usd !== null);
+  // Grouped by the server's classification (the shared soldGroup rules), never by whether a bid exists (AGENTS.md 4.1).
+  // A listing in neither group (unknown lot state, or a finished lot that only carries a bid) is still SHOWN, labelled.
+  const soldListings = listings.filter(l => l.population === 'sold');
+  const activeLivListings = listings.filter(l => l.population === 'active');
+  const otherListings = listings.filter(l => l.population !== 'sold' && l.population !== 'active');
 
   return (
     <div className="min-h-screen bg-[#F0EDDE] text-[#403f4c] font-sans pb-20">
@@ -392,7 +401,7 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
                 </div>
               </div>
               <div>
-                <div className="text-xs text-gray-400 mb-1">Avg Mileage</div>
+                <div className="text-xs text-gray-400 mb-1">Avg Mileage{stats.mileage_count !== undefined ? ` (${stats.mileage_count} ${stats.mileage_count === 1 ? 'sale' : 'sales'})` : ''}</div>
                 <div className="text-lg font-bold">
                   {stats.avg_mileage !== null ? `${Math.round(stats.avg_mileage).toLocaleString()} mi` : '—'}
                 </div>
@@ -435,6 +444,19 @@ const PublicRunView: React.FC<PublicRunViewProps> = ({ token }) => {
               </div>
               {soldListings.length === 0 && <p className="text-gray-500 italic">No sold comps included.</p>}
             </div>
+
+            {otherListings.length > 0 && (
+              <div>
+                <h2 className="text-xl font-bold text-[#403f4c] mb-2 flex items-center gap-2 border-b border-gray-200 pb-2">
+                  Other listings
+                  <span className="text-xs font-bold bg-gray-500 text-white px-2 py-0.5 rounded-full">{otherListings.length}</span>
+                </h2>
+                <p className="text-sm text-gray-500 mb-6">These are not part of the live options or the sold average above.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6">
+                  {otherListings.map((l, i) => renderListing(l, i, true))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
