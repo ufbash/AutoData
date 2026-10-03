@@ -2341,3 +2341,10 @@ This was the first prompt run with subagents (parallel read-only pre-flight, an 
 
 **A grep keeps paying.** Re-searching for any definition of sold/active outside the shared module found two copies the Prompt 29 and 43 sweeps missed - one on the CLIENT page, deciding sold vs live by whether a bid existed (the AGENTS.md 4.1 mistake), so a live car with no bids could be listed as a sold comp. And a read-only mapping of the attack surface turned up an anonymously writable legacy table nothing uses. Both were invisible to every journey because no journey looked there.
 
+## 57. 3 Oct 2026 (Prompt 45): signup could attach a stranger to a client's record
+
+**Symptom (found by reading, not by an incident):** the account-linking trigger matched a new auth user to a client record by email and gave it a client membership - without checking the email was confirmed. An auth user exists from the moment of signup, so typing a client's address into a signup form was enough.
+**Cause:** the trigger was written for Google sign-in (which arrives confirmed) and the same function was later used for staff provisioning, where an email/password account exists unconfirmed. Three paths, none checked.
+**Fix:** migration 089 - one linking function that requires a confirmed identity, a new on-confirmation trigger, both provisioning functions routed through it, never re-link. **Proof that can fail:** the same rolled-back proof run against the old trigger body linked the unconfirmed account (linked=true, memberships=1); against the new one: 0 and 0.
+**Lesson:** a flow designed for one identity provider silently inherits a weaker guarantee when a second provider uses the same code. Ask what the trigger assumes about the row it fires on.
+

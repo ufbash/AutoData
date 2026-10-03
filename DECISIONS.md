@@ -816,3 +816,11 @@ Bashir delegated these; they are hard to change later, so they are settled and r
 
 **25.11 A deploy is never separate from its smoke.** `npm run deploy:fn -- <function>` (scripts/deployFunction.sh) deploys, then runs `npm run smoke`, and fails loudly if either step fails. It is the only sanctioned way to deploy an Edge Function; the guarantee is in the tooling, not a rule to remember. Confirmation with Bashir before running it still applies (AGENTS.md section 3).
 
+## 26. Account linking (Prompt 45, 3 Oct 2026)
+
+**26.1 An account links to a client record only on a confirmed identity.** `email_confirmed_at` for an email match, `phone_confirmed_at` for a phone match; Google arrives confirmed. An unconfirmed account is never linked by any path (signup trigger, provisioning by email, provisioning by account id); the client record keeps the staff-entered email and a confirmation trigger links the account when its owner confirms. Closes M0 / debt #134. LOCKED.
+
+**26.2 An existing link is never changed automatically.** A record with a `user_id` is never overwritten by any path; changing a link is a deliberate staff action (not offered today). Reactivating a revoked membership of the SAME account on a staff-initiated path is not a re-link. LOCKED.
+
+**26.3 One linking function.** All paths call `link_confirmed_auth_user_to_client`; the rule is written once.
+
