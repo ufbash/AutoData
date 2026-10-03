@@ -65,7 +65,8 @@ serve(async (req: Request) => {
 
       const { data: membershipId, error: provErr } = await db.rpc('provision_client_account', { p_client_id: clientId, p_user_id: targetUserId, p_actor: user.id });
       if (provErr) throw new Refuse(provErr.message, 400);
-      return json({ success: true, clientId, userId: targetUserId, membershipId, invited: !already });
+      // membershipId is NULL while the account's email is unconfirmed: it is then NOT linked and links itself on confirmation (migration 089)
+      return json({ success: true, clientId, userId: targetUserId, membershipId, invited: !already, awaitingConfirmation: membershipId == null });
     }
 
     if (mode === 'revoke') {

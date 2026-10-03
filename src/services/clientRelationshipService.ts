@@ -222,6 +222,13 @@ export const getClientMembershipStatus = async (userId: string, orgId: string): 
   return { active: !data.revoked_at, revokedAt: data.revoked_at, revokeReason: data.revoke_reason };
 };
 
+export type ClientAccountState = 'linked' | 'awaiting_confirmation' | 'not_provisioned';
+export const getClientAccountState = async (clientId: string): Promise<ClientAccountState> => {
+  const { data, error } = await supabase.rpc('client_account_state', { p_client_id: clientId });
+  if (error) throw new Error(`Failed to load account state: ${error.message}`);
+  return (data as ClientAccountState) ?? 'not_provisioned';
+};
+
 export const provisionClientByEmail = async (clientId: string, email: string, actorUserId: string): Promise<{ linked: boolean; reason?: string }> => {
   const { data, error } = await supabase.rpc('provision_client_account_by_email', { p_client_id: clientId, p_email: email, p_actor: actorUserId });
   if (error) throw new Error(error.message);
